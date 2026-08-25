@@ -39,6 +39,29 @@ class Product(Base):
     )
 
 
+class VideoProject(Base):
+    """Independent talking-video workspace; existing creative flows never depend on it."""
+
+    __tablename__ = "video_projects"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    tenant_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    product_id: Mapped[int] = mapped_column(ForeignKey("products.id"), nullable=False, index=True)
+    name: Mapped[str] = mapped_column(String(256), nullable=False)
+    platform: Mapped[str] = mapped_column(String(64), nullable=False, default="小红书")
+    duration_seconds: Mapped[int] = mapped_column(Integer, nullable=False, default=20)
+    style: Mapped[str] = mapped_column(String(64), nullable=False, default="真人种草")
+    presenter_mode: Mapped[str] = mapped_column(String(64), nullable=False, default="数字人口播")
+    voice: Mapped[str] = mapped_column(String(64), nullable=False, default="自然女声")
+    selling_points: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    extra_requirements: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="draft")
+    plan: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    output_url: Mapped[str] = mapped_column(String(1024), nullable=False, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
 class BrandVisualProfile(Base):
     __tablename__ = "brand_visual_profiles"
     __table_args__ = (UniqueConstraint("tenant_id", "brand_name", name="uq_tenant_brand_visual"),)

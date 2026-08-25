@@ -101,6 +101,16 @@ export const productApi = {
   uploadMask:async(productId:number,assetId:number,file:File)=>{const form=new FormData();form.append('file',file);return api.post<ProductAsset>(`/products/${productId}/assets/${assetId}/mask`,form).then(r=>r.data)},
 };
 
+export const videoApi = {
+  list: () => api.get<import('../types').VideoProject[]>('/video-projects').then(r => r.data),
+  get: (id: number) => api.get<import('../types').VideoProject>(`/video-projects/${id}`).then(r => r.data),
+  create: (data: { product_id:number; duration_seconds:number; platform:string; video_type:string; voice:string; selling_points:string; extra_requirements:string }) => api.post<import('../types').VideoProject>('/video-projects', data).then(r => r.data),
+  generatePlan: (id: number) => api.post<import('../types').VideoProject>(`/video-projects/${id}/plan`, undefined, { timeout: 180000 }).then(r => r.data),
+  updatePlan: (id: number, plan: Record<string, unknown>) => api.put<import('../types').VideoProject>(`/video-projects/${id}/plan`, { plan }).then(r => r.data),
+  generate: (id: number) => api.post<import('../types').VideoProject>(`/video-projects/${id}/generate`).then(r => r.data),
+  regenerateShot: (id: number, shotId: string) => api.post<import('../types').VideoProject>(`/video-projects/${id}/shots/${encodeURIComponent(shotId)}/regenerate`).then(r => r.data),
+};
+
 export const knowledgeApi = {
   list: (productId?: number) =>
     api

@@ -18,6 +18,8 @@ const TaskCenterPage = lazy(() => import('./pages/TaskCenter'));
 const DetailTemplatesPage = lazy(() => import('./pages/DetailTemplates'));
 const ProductionHubPage = lazy(() => import('./pages/ProductionHub'));
 const QualityWorkbenchPage = lazy(() => import('./pages/QualityWorkbench'));
+const VideoProjectsPage = lazy(() => import('./pages/VideoProjects'));
+const VideoEditorPage = lazy(() => import('./pages/VideoEditor'));
 
 function PageLoading() {
   return <div className="min-h-screen grid place-items-center bg-[var(--bg)] text-[var(--muted)]"><div className="flex items-center gap-2 text-sm"><Loader2 size={18} className="animate-spin text-[var(--accent)]" />页面加载中…</div></div>;
@@ -44,6 +46,8 @@ export default function App() {
             <Route path="creative-projects" element={<CreativeProjectsPage />} />
             <Route path="creative-projects/:id" element={<CreativeCanvasPage />} />
             <Route path="creative-projects/:id/storyboard" element={<StoryboardPage />} />
+            <Route path="video-projects" element={<VideoProjectsPage />} />
+            <Route path="video-projects/:id" element={<VideoEditorPage />} />
             <Route path="*" element={<Navigate to="/" replace />} />
           </Route>
         </Routes>

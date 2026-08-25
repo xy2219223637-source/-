@@ -9,6 +9,7 @@ import {
   LayoutTemplate,
   Factory,
   ShieldCheck,
+  Video,
 } from 'lucide-react';
 
 const nav = [
@@ -18,6 +19,7 @@ const nav = [
   { to: '/brand-visuals', label: '品牌视觉', icon: Palette },
   { to: '/design-skills', label: '设计 Skill', icon: Palette },
   { to: '/creative-projects', label: 'AI 创作工作台', icon: PanelsTopLeft },
+  { to: '/video-projects', label: 'AI 口播视频', icon: Video },
   { to: '/task-center', label: '任务与费用', icon: Activity },
 ];
 

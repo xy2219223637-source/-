@@ -8,6 +8,7 @@ import {
   Sparkles,
   Upload,
   FileText,
+  Video,
   Pencil,
   Save,
   X,
@@ -181,6 +182,7 @@ export default function ProductDetail() {
         <div className="flex flex-wrap gap-2">
           <button className="btn-secondary" onClick={beginEdit}><Pencil size={15} />编辑基本资料</button>
           <Link to="/creative-projects" className="btn-primary inline-flex items-center gap-2"><Sparkles size={16} />开始创作</Link>
+          <Link to={`/video-projects?product=${product.id}`} className="btn-secondary inline-flex items-center gap-2"><Video size={16} />生成口播视频</Link>
           <button className="btn-secondary" onClick={toggleLearnedProfile}>
             自动学习画像：{product.learned_profile_enabled ? '已启用' : '已关闭'}
           </button>

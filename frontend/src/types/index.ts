@@ -31,6 +31,20 @@ export interface ProductCreate {
   learned_profile_enabled?: boolean;
 }
 
+export interface VideoShot {
+  id: string; duration: number; type: string; title: string;
+  visual: string; voiceover: string; status: 'planned' | 'generating' | 'ready' | 'failed';
+}
+
+export interface VideoProject {
+  id: number; product_id: number; name: string; platform: string; duration_seconds: number;
+  style: string; video_type: string; content_focus: string; presenter_mode: string; voice: string; selling_points: string;
+  extra_requirements: string; status: string; output_url: string;
+  plan: { title?: string; concept?: string; script?: string; compliance_note?: string; demo_notice?: string; shots?: VideoShot[] };
+  product: { name: string; brand_name: string; category: string; image_urls: string[] };
+  created_at: string; updated_at: string;
+}
+
 export interface StoryboardModule {
   id: number;
   project_id: number;
