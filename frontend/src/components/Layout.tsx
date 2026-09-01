@@ -11,6 +11,7 @@ import {
   ShieldCheck,
   Video,
 } from 'lucide-react';
+import IcpFiling from './IcpFiling';
 
 const nav = [
   { to: '/', label: '工作台', icon: LayoutDashboard, end: true },
@@ -91,8 +92,9 @@ export default function Layout() {
             ))}
           </div>
         </nav>
-        <div className="p-4 border-t border-[var(--border)] text-xs text-[var(--muted)]">
-          多模态 Agent · RAG · 电商详情页
+        <div className="p-4 border-t border-[var(--border)] text-xs text-[var(--muted)] space-y-2">
+          <div>多模态 Agent · RAG · 电商详情页</div>
+          <IcpFiling className="block" />
         </div>
       </aside>
       <main className="flex-1 overflow-auto">
