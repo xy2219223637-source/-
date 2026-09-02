@@ -3,8 +3,9 @@
 ## 一、已知前提
 
 - 服务器：`121.199.52.72`
+- 生产域名：`waynepartners.xyz`、`www.waynepartners.xyz`
 - 系统要求：Ubuntu 22.04+，root 权限
-- 阿里云安全组放行 TCP `80`
+- 阿里云安全组放行 TCP `80`、`443`
 - PostgreSQL 数据库 `enrui_ai_commerce_agent` 与 37 张业务表已经初始化
 - 不需要建库、建表、执行 SQL、迁移或处理本地业务数据
 - 生产配置只保存在服务器 `/opt/enrui-ai-commerce-agent/shared/.env`
@@ -16,7 +17,8 @@
 - 前端 React 生产构建及 Nginx 托管。
 - FastAPI 后端 Docker 镜像。
 - Docker Compose 前后端编排及自动重启。
-- Nginx `/api` 反向代理和前端 SPA 路由。
+- 前端容器仅监听宿主机 `127.0.0.1:8080`，不直接暴露公网端口。
+- 宿主机 Nginx 负责域名、TLS 终止和 HTTP 跳转 HTTPS；容器 Nginx 负责 `/api` 代理和前端 SPA 路由。
 - PostgreSQL 线上业务库连接及 37 张业务表自动初始化。
 - Redis 队列唤醒、分布式任务锁和并发协调。
 - 阿里云 OSS 主存储、签名访问和临时处理缓存。
@@ -38,24 +40,35 @@
 /opt/enrui-ai-commerce-agent/shared/.env
 ```
 
+宿主机站点与证书位置：
+
+```text
+/www/server/panel/vhost/nginx/waynepartners.xyz.conf
+/etc/letsencrypt/live/waynepartners.xyz/
+/opt/enrui-ai-commerce-agent/shared/certbot-www/
+```
+
 ## 三、同事需要完成的工作
 
 ### 1. 检查服务器
 
-使用 root 登录服务器，确认 80 端口没有被其他项目占用：
+使用 root 登录服务器，确认宿主机 Nginx 监听公网 `80/443`，前端容器仅监听本机 `8080`：
 
 ```bash
-ss -ltnp | grep ':80 ' || true
+ss -ltnp | grep -E ':(80|443|8080) ' || true
+nginx -t
+systemctl status nginx --no-pager
 df -h /
 free -h
 ```
 
-如果 80 端口已有服务，先确认它属于哪个项目，不要直接停止或删除，联系项目负责人决定端口或 Nginx 合并方案。
+预期 `80/443` 由宿主机 Nginx 监听，`127.0.0.1:8080` 由 Docker 监听。不要让前端容器重新直接绑定公网 `80/443`。
 
 阿里云安全组至少需要开放：
 
 ```text
 TCP 80：网页访问
+TCP 443：HTTPS 网页访问
 TCP 22：运维 SSH，建议只允许办公网络固定 IP
 ```
 
@@ -104,12 +117,19 @@ bash /opt/enrui-ai-commerce-agent/repository/deploy.sh
 
 脚本会依次执行：拉取最新代码、构建镜像、幂等检查现有数据库表及线上服务连接、启动容器、执行健康检查。无需额外执行建库、建表或数据迁移命令。部署日志保存在 `/opt/enrui-ai-commerce-agent/shared/logs/`。
 
+前端默认监听 `127.0.0.1:8080`，部署脚本也通过该地址执行健康检查。如需调整，可在执行脚本时通过 `FRONTEND_BIND`、`FRONTEND_PORT` 和 `HEALTHCHECK_URL` 覆盖；生产环境不要把前端端口直接暴露到公网。
+
 ### 5. 验收
 
 ```bash
 cd /opt/enrui-ai-commerce-agent/repository
 docker compose ps || docker-compose ps
-curl -fsS http://127.0.0.1/api/health
+curl -fsS http://127.0.0.1:8080/api/health
+curl -fsSI http://waynepartners.xyz/
+curl -fsSI https://waynepartners.xyz/
+nginx -t
+systemctl is-active nginx
+systemctl is-active certbot.timer
 ```
 
 健康接口应至少满足：
@@ -124,12 +144,12 @@ storage=aliyun_oss
 浏览器访问：
 
 ```text
-http://121.199.52.72
+https://waynepartners.xyz
 ```
 
 完成基础部署验收：
 
-1. 公网打开登录页面，静态资源加载正常。
+1. HTTP 自动跳转 HTTPS，两个生产域名均可打开登录页面，静态资源加载正常。
 2. 调用 `/api/health`，确认 PostgreSQL、Redis 和 OSS 状态正常。
 3. 登录一个已有账号；如果线上还没有账号，再注册首个企业 Owner。
 4. 页面刷新和前端路由跳转不出现 404。
@@ -146,6 +166,8 @@ bash /opt/enrui-ai-commerce-agent/repository/deploy.sh
 
 不要删除 `/opt/enrui-ai-commerce-agent/shared/.env`。它独立于仓库，不会被 `git pull` 覆盖。
 
+宿主机 Nginx、Let's Encrypt 证书和 Certbot webroot 独立于应用仓库，应用部署或镜像回退不应修改这些文件。证书续期后由 `/etc/letsencrypt/renewal-hooks/deploy/reload-waynepartners-nginx` 校验并重载宿主机 Nginx。
+
 ## 五、失败时回传信息
 
 请不要只回复“部署失败”。回传以下脱敏结果，禁止包含 `.env`、密码、AccessKey 和 API Key：
@@ -154,15 +176,17 @@ bash /opt/enrui-ai-commerce-agent/repository/deploy.sh
 cd /opt/enrui-ai-commerce-agent/repository
 docker compose ps || docker-compose ps
 docker compose logs --tail=200 backend frontend 2>&1 || docker-compose logs --tail=200 backend frontend 2>&1
-curl -i http://127.0.0.1/api/health
+curl -i http://127.0.0.1:8080/api/health
+nginx -t
+systemctl status nginx certbot.timer --no-pager
 ```
 
 同时说明：
 
 - 执行到哪一步失败。
 - 完整错误时间。
-- 80 端口是否已被占用。
-- 阿里云安全组是否已开放 80 端口。
+- `80/443` 是否由宿主机 Nginx 监听，`8080` 是否仅监听 `127.0.0.1`。
+- 阿里云安全组是否已开放 `80/443`。
 - 最近一次部署对应的 Git 提交 ID：`git rev-parse HEAD`。
 
 ## 六、完成标准
@@ -170,7 +194,9 @@ curl -i http://127.0.0.1/api/health
 满足以下全部条件才算完成：
 
 - 前后端容器状态正常且设置自动重启。
-- 公网可以打开登录页面。
+- 宿主机 Nginx 状态正常，HTTP 自动跳转 HTTPS，两个生产域名均可打开登录页面。
+- 前端容器仅监听 `127.0.0.1:8080`，没有直接暴露公网端口。
+- Certbot 定时器启用，模拟续期验证成功。
 - 健康接口显示 PostgreSQL、Redis、OSS 均正常。
 - 上传文件实际进入 OSS，而不是服务器持久目录。
 - 线上 PostgreSQL 连接正常，部署过程没有修改或迁移既有业务数据。
@@ -181,9 +207,9 @@ curl -i http://127.0.0.1/api/health
 
 部署完成后请回复：
 
-1. 公网访问地址（通常为 `http://121.199.52.72`）。
+1. 公网访问地址：`https://waynepartners.xyz`。
 2. 部署的 Git 提交 ID。
-3. `curl http://127.0.0.1/api/health` 的完整结果（应包含 `database=postgresql`、`redis=ok`、`storage=aliyun_oss`）。
+3. `curl http://127.0.0.1:8080/api/health` 的完整结果（应包含 `database=postgresql`、`redis=ok`、`storage=aliyun_oss`）。
 4. `docker compose ps` 中前后端容器均为 `Up`/健康。
 
 生产密码、Aliyun AccessKey、LLM/API Key 只写入服务器 `.env`，不要发群聊或提交 Git。
