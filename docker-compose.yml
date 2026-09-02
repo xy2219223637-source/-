@@ -25,4 +25,4 @@ services:
         condition: service_healthy
     restart: unless-stopped
     ports:
-      - "80:80"
+      - "${FRONTEND_BIND:-127.0.0.1}:${FRONTEND_PORT:-8080}:80"

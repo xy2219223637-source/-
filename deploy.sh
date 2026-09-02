@@ -9,6 +9,11 @@ ENV_FILE="$SHARED_DIR/.env"
 LOCK_DIR="$SHARED_DIR/.deploy.lock"
 REPO_URL="https://github.com/Dreamsmama/enrui-ai-commerce-agent.git"
 BRANCH="${DEPLOY_BRANCH:-main}"
+FRONTEND_BIND="${FRONTEND_BIND:-127.0.0.1}"
+FRONTEND_PORT="${FRONTEND_PORT:-8080}"
+HEALTHCHECK_URL="${HEALTHCHECK_URL:-http://127.0.0.1:${FRONTEND_PORT}/api/health}"
+
+export FRONTEND_BIND FRONTEND_PORT
 
 if [[ "$(id -u)" -ne 0 ]]; then
   echo "请使用 root 执行：sudo bash deploy.sh"
@@ -50,7 +55,7 @@ compose() {
 wait_for_health() {
   local health
   for _ in $(seq 1 45); do
-    if health="$(curl -fsS --max-time 5 http://127.0.0.1/api/health 2>/dev/null)" \
+    if health="$(curl -fsS --max-time 5 "$HEALTHCHECK_URL" 2>/dev/null)" \
       && [[ "$health" == *'"status":"ok"'* ]] \
       && [[ "$health" == *'"database":"postgresql"'* ]] \
       && [[ "$health" == *'"redis":"ok"'* ]] \

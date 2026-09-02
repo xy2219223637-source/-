@@ -11,7 +11,7 @@
 
 完整服务器交接和验收清单见 [`deploy/DEPLOY_HANDOFF.md`](deploy/DEPLOY_HANDOFF.md)。
 
-服务器要求：Ubuntu 22.04+、root 权限，安全组开放 TCP 80。首次部署在服务器执行：
+服务器要求：Ubuntu 22.04+、root 权限，并由宿主机反向代理监听公网 80/443。应用前端默认仅监听 `127.0.0.1:8080`，宿主机反向代理应将域名流量转发到该地址。首次部署在服务器执行：
 
 ```bash
 git clone https://github.com/Dreamsmama/enrui-ai-commerce-agent.git /opt/enrui-ai-commerce-agent/repository
@@ -27,6 +27,7 @@ bash /opt/enrui-ai-commerce-agent/repository/deploy.sh
 ```
 
 生产配置独立保存在服务器 `shared/.env`，不会被 `git pull` 覆盖，也不会提交到仓库。
+可通过 `FRONTEND_BIND`、`FRONTEND_PORT` 和 `HEALTHCHECK_URL` 覆盖默认监听地址、端口与部署健康检查地址。
 
 ## 商品知识库与详情页 Demo 闭环
 
