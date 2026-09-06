@@ -31,14 +31,39 @@ def redis_key(name: str) -> str:
 def notify_queue() -> None:
     client = get_redis()
     if client is not None:
-        client.lpush(redis_key("production-queue:wake"), "1")
-        client.ltrim(redis_key("production-queue:wake"), 0, 999)
+        try:
+            client.lpush(redis_key("production-queue:wake"), "1")
+            client.ltrim(redis_key("production-queue:wake"), 0, 999)
+        except Exception:
+            pass
 
 
 def wait_for_queue(timeout: int = 1) -> None:
     client = get_redis()
     if client is not None:
-        client.brpop(redis_key("production-queue:wake"), timeout=timeout)
+        try:
+            client.brpop(redis_key("production-queue:wake"), timeout=timeout)
+        except Exception:
+            pass
+
+
+def notify_video_analysis_queue() -> None:
+    client = get_redis()
+    if client is not None:
+        try:
+            client.lpush(redis_key("video-analysis:wake"), "1")
+            client.ltrim(redis_key("video-analysis:wake"), 0, 999)
+        except Exception:
+            pass
+
+
+def wait_for_video_analysis_queue(timeout: int = 1) -> None:
+    client = get_redis()
+    if client is not None:
+        try:
+            client.brpop(redis_key("video-analysis:wake"), timeout=timeout)
+        except Exception:
+            pass
 
 
 def task_lock(task_id: str):

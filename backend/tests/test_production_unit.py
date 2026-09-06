@@ -10,6 +10,7 @@ from app.services.image_postprocess import hamming_distance, product_foreground_
 from app.services.generation_diagnostics import diagnose_generation_error
 from PIL import Image, ImageDraw
 from app.api.quality import _rules
+from app.api.videos import _investment_extensions
 
 
 class ProductionUnitTests(unittest.TestCase):
@@ -67,6 +68,19 @@ class ProductionUnitTests(unittest.TestCase):
         mask=product_foreground_mask(image)
         self.assertLess(mask.getpixel((5,5)),10)
         self.assertGreater(mask.getpixel((50,50)),240)
+
+    def test_performance_video_plan_is_additive_and_actionable(self):
+        row = SimpleNamespace(
+            plan={"campaign_brief": {"goal": "提升转化", "audience": "油皮通勤女性", "pain_point": "下午斑驳", "version_count": 5}},
+            selling_points="轻薄服帖,持妆", duration_seconds=20,
+        )
+        product = SimpleNamespace(target_users="", description="")
+        assets = [SimpleNamespace(name="气垫包装正面.jpg", description="商品开盖", tags=["产品"])]
+        result = _investment_extensions(row, product, assets)
+        self.assertEqual(result["production_mode"], "performance")
+        self.assertEqual(len(result["creative_matrix"]), 5)
+        self.assertTrue(any(item["status"] == "reshoot" for item in result["material_audit"]))
+        self.assertTrue(result["reshoot_list"])
 
     def test_category_quality_rules_extend_general_rules(self):
         rules=_rules("气垫")

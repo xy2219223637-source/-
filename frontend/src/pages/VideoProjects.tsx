@@ -19,7 +19,7 @@ export default function VideoProjectsPage() {
   const [platform, setPlatform] = useState('小红书'); const [videoType, setVideoType] = useState('博主种草');
   const [voice, setVoice] = useState('自然分享女声');
   const [points, setPoints] = useState(''); const [extra, setExtra] = useState(''); const [saving, setSaving] = useState(false);
-  useEffect(() => { Promise.all([productApi.list(), videoApi.list()]).then(([ps, vs]) => { setProducts(ps); setProjects(vs); const wanted=params.get('product'); setProductId(wanted && ps.some(p=>String(p.id)===wanted) ? wanted : String(ps[0]?.id || '')); }); }, []);
+  useEffect(() => { Promise.all([productApi.list(), videoApi.list()]).then(([ps, vs]) => { setProducts(ps); setProjects(vs.filter(v => v.production_mode !== 'performance')); const wanted=params.get('product'); setProductId(wanted && ps.some(p=>String(p.id)===wanted) ? wanted : String(ps[0]?.id || '')); }); }, []);
   const product = useMemo(() => products.find(p => String(p.id) === productId), [products, productId]);
   async function create() { if (!product) return; setSaving(true); try { const row = await videoApi.create({product_id:product.id,duration_seconds:duration,platform,video_type:videoType,voice,selling_points:points,extra_requirements:extra}); navigate(`/video-projects/${row.id}?new=1`); } finally { setSaving(false); } }
   return <div className="space-y-8 animate-fade-in max-w-7xl mx-auto">

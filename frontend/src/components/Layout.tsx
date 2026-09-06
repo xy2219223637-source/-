@@ -10,6 +10,10 @@ import {
   Factory,
   ShieldCheck,
   Video,
+  Clapperboard,
+  Film,
+  Library,
+  Layers,
 } from 'lucide-react';
 import IcpFiling from './IcpFiling';
 
@@ -20,6 +24,11 @@ const nav = [
   { to: '/brand-visuals', label: '品牌视觉', icon: Palette },
   { to: '/design-skills', label: '设计 Skill', icon: Palette },
   { to: '/creative-projects', label: 'AI 创作工作台', icon: PanelsTopLeft },
+  { to: '/semi-finished-assets', label: '半成品素材库', icon: Layers },
+  { to: '/finished-video-assets', label: '成品素材库', icon: Film },
+  { to: '/final-videos', label: '成片库', icon: Library },
+  { to: '/smart-video-compose', label: '智能成片', icon: Clapperboard },
+  { to: '/finished-video-remix', label: '成品混剪', icon: Video },
   { to: '/video-projects', label: 'AI 口播视频', icon: Video },
   { to: '/task-center', label: '任务与费用', icon: Activity },
 ];
