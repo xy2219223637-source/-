@@ -108,11 +108,50 @@ export const productApi = {
 export const videoApi = {
   list: () => api.get<import('../types').VideoProject[]>('/video-projects').then(r => r.data),
   get: (id: number) => api.get<import('../types').VideoProject>(`/video-projects/${id}`).then(r => r.data),
-  create: (data: { product_id:number; duration_seconds:number; platform:string; video_type:string; voice:string; selling_points:string; extra_requirements:string }) => api.post<import('../types').VideoProject>('/video-projects', data).then(r => r.data),
+  create: (data: { product_id:number; duration_seconds:number; platform:string; video_type:string; voice:string; selling_points:string; extra_requirements:string; production_mode?:'quick'|'performance'; campaign_brief?:import('../types').CampaignBrief }) => api.post<import('../types').VideoProject>('/video-projects', data).then(r => r.data),
   generatePlan: (id: number) => api.post<import('../types').VideoProject>(`/video-projects/${id}/plan`, undefined, { timeout: 180000 }).then(r => r.data),
   updatePlan: (id: number, plan: Record<string, unknown>) => api.put<import('../types').VideoProject>(`/video-projects/${id}/plan`, { plan }).then(r => r.data),
   generate: (id: number) => api.post<import('../types').VideoProject>(`/video-projects/${id}/generate`).then(r => r.data),
   regenerateShot: (id: number, shotId: string) => api.post<import('../types').VideoProject>(`/video-projects/${id}/shots/${encodeURIComponent(shotId)}/regenerate`).then(r => r.data),
+  batchGenerate: (id: number) => api.post<import('../types').VideoProject>(`/video-projects/${id}/batch-generate`).then(r => r.data),
+  reviewVariant: (id:number, variantId:string, data:{status:'draft'|'approved'|'rejected';note?:string}) => api.put<import('../types').VideoProject>(`/video-projects/${id}/variants/${encodeURIComponent(variantId)}/review`, data).then(r=>r.data),
+  updatePerformance: (id:number, variantId:string, data:{impressions:number;spend:number;three_second_rate:number;completion_rate:number;ctr:number;cvr:number}) => api.put<import('../types').VideoProject>(`/video-projects/${id}/variants/${encodeURIComponent(variantId)}/performance`, data).then(r=>r.data),
+  uploadReference: async (id:number,file:File) => { const form=new FormData(); form.append('file',file); return api.post<import('../types').VideoProject>(`/video-projects/${id}/reference-video`,form,{timeout:180000}).then(r=>r.data); },
+};
+
+export const autoEditApi = {
+  list: (editMode?:'smart_compose'|'finished_remix') => api.get<import('../types').AutoEditProject[]>('/auto-edit-projects',{params:editMode?{edit_mode:editMode}:undefined}).then(r=>r.data),
+  get: (id:number) => api.get<import('../types').AutoEditProject>(`/auto-edit-projects/${id}`).then(r=>r.data),
+  create: (data:{product_id:number;name?:string;target_duration_seconds:number;variant_count:number;aspect_ratio:string;objective:string;edit_mode:'smart_compose'|'finished_remix';constraints?:string[]}) =>
+    api.post<import('../types').AutoEditProject>('/auto-edit-projects',data).then(r=>r.data),
+  updateDuration: (id:number,target_duration_seconds:number) =>
+    api.patch<import('../types').AutoEditProject>(`/auto-edit-projects/${id}/duration`,{target_duration_seconds}).then(r=>r.data),
+  uploadAssets: async (id:number,files:File[]) => { const form=new FormData(); files.forEach(file=>form.append('files',file)); return api.post<import('../types').AutoEditProject>(`/auto-edit-projects/${id}/assets`,form,{timeout:600000}).then(r=>r.data); },
+  generatePlan: (id:number) => api.post<import('../types').AutoEditProject>(`/auto-edit-projects/${id}/plan`,undefined,{timeout:180000}).then(r=>r.data),
+  render: (id:number) => api.post<import('../types').AutoEditProject>(`/auto-edit-projects/${id}/render`,undefined,{timeout:1200000}).then(r=>r.data),
+};
+
+export const videoLibraryApi = {
+  list: (productId?:number,libraryType?:'semi_finished'|'finished',assetKind:'material'|'final_output'='material') => api.get<import('../types').VideoLibraryAsset[]>('/video-assets',{params:{...(productId?{product_id:productId}:{}),...(libraryType?{library_type:libraryType}:{}),asset_kind:assetKind}}).then(r=>r.data),
+  upload: async (productId:number,files:File[],source='manual_upload',onProgress?:(loaded:number,total:number,percent:number)=>void,libraryType:'semi_finished'|'finished'='semi_finished') => {
+    const total=files.reduce((sum,file)=>sum+file.size,0);let completedBytes=0;const results:import('../types').VideoLibraryAsset[]=[];
+    for(const file of files){
+      const start=await api.post<{session_id:string;part_size:number;part_count:number;part_urls:string[]}>('/video-assets/multipart/start',{product_id:productId,filename:file.name,content_type:file.type||'application/octet-stream',size_bytes:file.size,source,library_type:libraryType}).then(r=>r.data);
+      const progress=new Map<number,number>();
+      const uploadPart=async(index:number)=>{const begin=index*start.part_size;const blob=file.slice(begin,Math.min(file.size,begin+start.part_size));let lastError:unknown;
+        for(let attempt=0;attempt<3;attempt++)try{await axios.put(start.part_urls[index],blob,{timeout:180000,headers:{'Content-Type':'application/octet-stream'},onUploadProgress:event=>{progress.set(index,Math.min(event.loaded,blob.size));const loaded=completedBytes+Array.from(progress.values()).reduce((n,value)=>n+value,0);onProgress?.(loaded,total,total?Math.round(loaded/total*100):0)}});progress.set(index,blob.size);return}catch(error){lastError=error;progress.set(index,0)}
+        throw lastError};
+      for(let offset=0;offset<start.part_count;offset+=4)await Promise.all(Array.from({length:Math.min(4,start.part_count-offset)},(_,i)=>uploadPart(offset+i)));
+      completedBytes+=file.size;onProgress?.(completedBytes,total,total?Math.round(completedBytes/total*100):0);
+      results.push(await api.post<import('../types').VideoLibraryAsset>('/video-assets/multipart/complete',{session_id:start.session_id},{timeout:180000}).then(r=>r.data));
+    }
+    return results;
+  },
+  exclude: (id:number,excluded:boolean) => api.put<import('../types').VideoLibraryAsset>(`/video-assets/${id}/excluded`,{excluded}).then(r=>r.data),
+  updateReusableStatus: (id:number,reusable_status:import('../types').VideoReusableStatus) =>
+    api.put<import('../types').VideoLibraryAsset>(`/video-assets/${id}/reusable-status`,{reusable_status}).then(r=>r.data),
+  updateTags: (id:number,data:{manual_tags:string[];removed_ai_tags:string[]}) => api.put<import('../types').VideoLibraryAsset>(`/video-assets/${id}/tags`,data).then(r=>r.data),
+  reanalyze: (id:number) => api.post<import('../types').VideoLibraryAsset>(`/video-assets/${id}/reanalyze`).then(r=>r.data),
 };
 
 function directorProjectRows(payload: unknown): DirectorProject[] {

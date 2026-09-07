@@ -65,6 +65,24 @@ class Settings(BaseSettings):
     director_asr_poll_timeout_seconds: float = 180.0
     director_asr_local_device: str = "auto"
     director_asr_local_compute_type: str = "int8"
+    video_library_max_duration_seconds: float = 600.0
+    ark_api_key: str = ""
+    ark_base_url: str = "https://ark.cn-beijing.volces.com/api/v3"
+    ark_llm_model: str = ""
+    ark_video_model: str = "doubao-seedance-1-0-pro-250528"
+    ark_video_resolution: str = "720p"
+    video_model_provider: str = "volcengine-ark"
+    doubao_tts_app_id: str = ""
+    doubao_tts_access_token: str = ""
+    doubao_tts_api_key: str = ""
+    doubao_tts_resource_id: str = "seed-tts-2.0"
+    doubao_tts_speaker: str = "zh_female_shuangkuaisisi_uranus_bigtts"
+    doubao_tts_speaker_male: str = "zh_male_m191_uranus_bigtts"
+    auto_edit_audio_mode: str = "smart_mix"
+    whisper_enabled: bool = True
+    whisper_model: str = "small"
+    whisper_device: str = "auto"
+    whisper_compute_type: str = "int8"
     auth_secret: str = "change-this-secret-in-production"
     access_token_hours: int = 24
 
@@ -89,6 +107,9 @@ class Settings(BaseSettings):
     aliyun_oss_access_key_secret: str = ""
     aliyun_oss_bucket_name: str = ""
     aliyun_oss_prefix: str = "enrui-ai-commerce-agent/"
+    storage_cache_dir: str = ""
+    storage_cache_max_gb: float = 20.0
+    storage_cache_ttl_hours: float = 24.0
 
 @lru_cache
 def get_settings() -> Settings:

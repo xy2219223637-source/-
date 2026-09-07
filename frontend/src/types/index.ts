@@ -36,13 +36,69 @@ export interface VideoShot {
   visual: string; voiceover: string; status: 'planned' | 'generating' | 'ready' | 'failed';
 }
 
+export interface CampaignBrief {
+  goal?: string; audience?: string; pain_point?: string; test_dimensions?: string[];
+  fixed_variables?: string; version_count?: number; reference_name?: string; reference_notes?: string;
+}
+
+export interface MaterialAuditItem {
+  segment: string; requirement: string; status: 'available' | 'reshoot'; matched_assets: string[];
+}
+
+export interface VideoVariant {
+  id: string; hook: string; selling_point: string; evidence: string; duration: number;
+  status: 'draft' | 'preview_ready' | 'approved' | 'rejected'; review_note: string;
+  metrics: { impressions?: number; spend?: number; three_second_rate?: number; completion_rate?: number; ctr?: number; cvr?: number };
+}
+
 export interface VideoProject {
   id: number; product_id: number; name: string; platform: string; duration_seconds: number;
   style: string; video_type: string; content_focus: string; presenter_mode: string; voice: string; selling_points: string;
-  extra_requirements: string; status: string; output_url: string;
-  plan: { title?: string; concept?: string; script?: string; compliance_note?: string; demo_notice?: string; shots?: VideoShot[] };
+  extra_requirements: string; status: string; output_url: string; production_mode: 'quick' | 'performance'; campaign_brief: CampaignBrief;
+  plan: { title?: string; concept?: string; script?: string; compliance_note?: string; demo_notice?: string; shots?: VideoShot[];
+    production_mode?: 'quick' | 'performance'; campaign_brief?: CampaignBrief;
+    reference_analysis?: { source: string; summary: string; structure: string[] };
+    material_audit?: MaterialAuditItem[];
+    reshoot_list?: Array<{ title:string; segment:string; shot:string; duration:string; proof_goal:string }>;
+    creative_matrix?: VideoVariant[];
+    quality_checks?: Array<{ label:string; status:'passed'|'review'|'blocked' }>;
+    next_round_advice?: string[];
+  };
   product: { name: string; brand_name: string; category: string; image_urls: string[] };
   created_at: string; updated_at: string;
+}
+
+export interface AutoEditClip {
+  clip_id:string; order:number; asset_id:string; highlight_id:string;
+  source_range:{start:number;end:number}; timeline_range:{start:number;end:number};
+  duration_seconds:number; role:string; reason:string; audio_mode:'source'|'mute'; transition:'cut'|'fade';
+}
+export type VideoReusableStatus = 'review_required'|'reusable'|'excluded'|'blocked';
+export interface AutoEditVariant {
+  variant_id:string; name:string; target_duration_seconds:number; actual_duration_seconds:number; edit_mode?:'smart_compose'|'finished_remix';
+  strategy:{hook_approach:string;selection_principle:string;pace:string;average_shot_duration_seconds:number;difference_from_other_versions:string};
+  speaker_count:number;
+  narrative_segments:Array<{segment_id:string;order:number;asset_id:string;highlight_id:string;speaker_id:string;source_range:{start:number;end:number};timeline_range:{start:number;end:number};duration_seconds:number;content_role:string;speech_text:string;reason:string;audio_strategy:'keep_original'|'ai_voiceover';quality_score?:number;role_match_score?:number;previous_transition_score?:number;next_transition_score?:number;voice_continuity_score?:number;transition_reason?:string}>;
+  video_track:Array<{clip_id:string;asset_id:string;highlight_id:string;source_range:{start:number;end:number};timeline_range:{start:number;end:number};duration_seconds:number;visual_type:'speaker'|'b_roll'|'source_sync';audio_strategy:'mute'|'keep_original';content_role:string}>;
+}
+export interface AutoEditAsset {
+  id:number; asset_id:string; filename:string; object_url:string; duration_seconds:number; width:number;height:number;fps:number;has_audio:boolean;status:string;
+  analysis:{summary:string;analysis_source:string;usability?:{score:number;summary:string;issues:string[]};burned_subtitles?:boolean;has_background_music?:boolean}|null;
+  highlights:Array<{highlight_id:string;start:number;end:number;description:string;reason:string;recommended_roles:string[];content_role:string;track_role:string;speech_text:string;speaker_id:string;audio_strategy:string;shot_type:string;score:number}>;
+}
+export interface VideoLibraryAsset {
+  id:number;asset_id:string;product_id:number;filename:string;source:string;library_type:'semi_finished'|'finished';asset_kind:'material'|'final_output';generation_depth:number;origin_asset_ids:string[];reusable_status:VideoReusableStatus;burned_subtitles:boolean;has_background_music:boolean;object_url:string;duration_seconds:number;width:number;height:number;fps:number;has_audio:boolean;status:string;excluded:boolean;duplicate?:boolean;
+  ai_tags:string[];manual_tags:string[];removed_ai_tags:string[];effective_tags:string[];
+  analysis:null|{id:number;status:string;summary:string;model:string;prompt_version:string;analysis_json:Record<string,unknown>;request_count:number;retry_count:number;error_message:string};
+  highlights:Array<{highlight_id:string;start:number;end:number;description:string;reason:string;recommended_roles:string[];content_role?:string;track_role?:string;speech_text?:string;speaker_id?:string;score:number}>;
+}
+export interface AutoEditProject {
+  id:number;product_id:number;name:string;target_duration_seconds:number;variant_count:number;aspect_ratio:string;objective:string;edit_mode:'smart_compose'|'finished_remix';
+  structure:Array<{role:string;objective:string;required:boolean}>;constraints:string[];status:string;error_message:string;
+  product:{name:string;image_urls:string[]};assets:AutoEditAsset[];plan_version_id:number|null;
+  material_readiness:{original_speech_segments:number;supporting_visual_segments:number;original_speech_seconds:number;speaker_count:number;ready:boolean;missing:string[]};
+  plan:{schema_version:string;material_selection?:{a_roll_count:number;b_roll_count:number;a_roll_seconds:number;notes:string};variants:AutoEditVariant[]}|null;
+  outputs:Array<{variant_id:string;status:string;output_url:string;duration_seconds:number;error_message:string}>;
 }
 
 export interface DirectorAsset {
