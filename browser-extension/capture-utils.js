@@ -1,4 +1,23 @@
 (() => {
+  const DEFAULT_APP_BASE = 'https://waynepartners.xyz';
+  const TRUSTED_APP_ORIGINS = new Set([
+    DEFAULT_APP_BASE,
+    'https://www.waynepartners.xyz',
+    'http://127.0.0.1:8080',
+    'http://localhost:8080',
+    'http://127.0.0.1:5173',
+    'http://localhost:5173',
+  ]);
+
+  function trustedAppOrigin(value) {
+    try {
+      const origin = new URL(value).origin;
+      return TRUSTED_APP_ORIGINS.has(origin) ? origin : '';
+    } catch {
+      return '';
+    }
+  }
+
   function platformNameForUrl(value) {
     try {
       const host = new URL(value).hostname.toLowerCase();
@@ -99,10 +118,12 @@
   }
 
   const captureUtils = Object.freeze({
+    DEFAULT_APP_BASE,
     capturePageUrl,
     looksLikeVideo,
     normalizedMediaUrl,
     platformNameForUrl,
+    trustedAppOrigin,
     videoMimeFromBytes,
   });
 

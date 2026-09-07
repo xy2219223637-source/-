@@ -1,23 +1,6 @@
 (() => {
   const CHANNEL = 'enrui-video-capture-v1';
-  const { looksLikeVideo, normalizedMediaUrl, platformNameForUrl } = globalThis.EnruiCaptureUtils;
-  const LOCAL_APP_ORIGINS = new Set([
-    'http://127.0.0.1:8080',
-    'http://localhost:8080',
-    'http://127.0.0.1:5173',
-    'http://localhost:5173',
-  ]);
-
-  async function isTrustedAppOrigin(origin) {
-    if (LOCAL_APP_ORIGINS.has(origin)) return true;
-    const { appBase = '' } = await chrome.storage.sync.get('appBase');
-    if (!appBase) return false;
-    try {
-      return new URL(appBase).origin === origin;
-    } catch {
-      return false;
-    }
-  }
+  const { looksLikeVideo, normalizedMediaUrl, platformNameForUrl, trustedAppOrigin } = globalThis.EnruiCaptureUtils;
 
   function postBridge(type, requestId, payload) {
     window.postMessage({ channel: CHANNEL, type, requestId, payload }, window.location.origin);
@@ -27,7 +10,9 @@
     if (event.source !== window || event.origin !== window.location.origin) return;
     const message = event.data;
     if (!message || message.channel !== CHANNEL || !['PING', 'START_CAPTURE'].includes(message.type)) return;
-    if (!await isTrustedAppOrigin(event.origin)) return;
+    const appOrigin = trustedAppOrigin(event.origin);
+    if (!appOrigin) return;
+    void chrome.storage.sync.set({ appBase: appOrigin }).catch(() => undefined);
 
     if (message.type === 'PING') {
       postBridge('PING_RESULT', message.requestId, { ok: true, version: chrome.runtime.getManifest().version });

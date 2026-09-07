@@ -1,10 +1,16 @@
 importScripts('capture-utils.js');
 
-const DEFAULT_APP_BASE = 'http://127.0.0.1:8080';
 const activeCaptures = new Set();
 const trackedCaptureTabs = new Set();
 const mediaRequestsByTab = new Map();
-const { capturePageUrl, looksLikeVideo, platformNameForUrl, videoMimeFromBytes } = globalThis.EnruiCaptureUtils;
+const {
+  DEFAULT_APP_BASE,
+  capturePageUrl,
+  looksLikeVideo,
+  platformNameForUrl,
+  trustedAppOrigin,
+  videoMimeFromBytes,
+} = globalThis.EnruiCaptureUtils;
 
 const delay = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds));
 
@@ -277,11 +283,7 @@ async function runCapture(task) {
 
 async function appBase() {
   const stored = await chrome.storage.sync.get('appBase');
-  try {
-    return new URL(stored.appBase || DEFAULT_APP_BASE).origin;
-  } catch {
-    return DEFAULT_APP_BASE;
-  }
+  return trustedAppOrigin(stored.appBase) || DEFAULT_APP_BASE;
 }
 
 async function openCurrentInApp(sourcePageUrl, sourceTabId) {
