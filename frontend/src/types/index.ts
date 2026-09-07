@@ -45,6 +45,152 @@ export interface VideoProject {
   created_at: string; updated_at: string;
 }
 
+export interface DirectorAsset {
+  id: number;
+  section_id: number;
+  role: 'reference' | 'material';
+  media_kind: 'image' | 'video';
+  source: 'uploaded' | 'generated' | 'extracted' | 'collected';
+  url: string;
+  thumbnail_url: string;
+  description: string;
+  duration_seconds: number;
+  sort_order: number;
+}
+
+export interface DirectorScriptLine {
+  id: string;
+  text: string;
+}
+
+export interface DirectorShot {
+  id: number;
+  section_id: number;
+  sort_order: number;
+  start_ms: number;
+  end_ms: number;
+  transcript: string;
+  story_role: string;
+  subject: string;
+  action: string;
+  scene: string;
+  shot_size: string;
+  camera: string;
+  product: string;
+  props: string;
+  emotion: string;
+  director_intent: string;
+  description: string;
+  clip_url: string;
+  thumbnail_url: string;
+  confidence: number;
+  analysis: { evidence?: string[]; product?: string; props?: string; emotion?: string; director_intent?: string; keyframe_count?: number };
+}
+
+export interface DirectorSection {
+  id: number;
+  sort_order: number;
+  title: string;
+  start_ms: number;
+  end_ms: number;
+  source_text: string;
+  script_lines: DirectorScriptLine[];
+  description: string;
+  shooting_notes: string;
+  assets: DirectorAsset[];
+  shots: DirectorShot[];
+}
+
+export interface DirectorProject {
+  id: number;
+  product_id: number | null;
+  name: string;
+  mode: 'reference' | 'original';
+  source_kind: 'upload' | 'url' | 'prompt' | 'browser_extension';
+  source_url: string;
+  source_filename: string;
+  source_duration_seconds: number;
+  language: string;
+  product_service: string;
+  selling_points: string;
+  status: string;
+  progress_stage: string;
+  analysis: {
+    summary?: string;
+    tags?: string[];
+    product_name?: string;
+    target_audience?: string | string[];
+    target_audience_detail?: string | string[];
+    target_pain_points?: string | string[];
+    selling_points?: string[];
+    selling_points_detail?: string | string[];
+    language?: string;
+    frame_count?: number;
+    shot_count?: number;
+    section_count?: number;
+    audio_analyzed?: boolean;
+    media?: {
+      probe_provider?: string;
+      width?: number;
+      height?: number;
+      fps?: number;
+      video_codec?: string;
+      has_audio?: boolean | null;
+      audio_track_count?: number;
+      audio_codec?: string;
+    };
+    asr?: { provider?: string; model?: string; status?: string; segment_count?: number };
+    warnings?: string[];
+    hook?: { content?: string; shot_indexes?: number[] };
+    selling_point_chain?: Array<{ stage?: string; content?: string; shot_indexes?: number[] }>;
+    rhythm?: { summary?: string; average_shot_seconds?: number; fast_sections?: string[]; slow_sections?: string[] };
+    cta?: { type?: string; content?: string; shot_indexes?: number[] };
+    analysis_engine?: string;
+    capture?: {
+      source_page_url?: string;
+      source_platform?: string;
+      content_type?: string;
+      filename?: string;
+      size_bytes?: number;
+    };
+  };
+  output_url: string;
+  error_message: string;
+  product: { id: number; name: string; brand_name: string; category: string; image_urls: string[] } | null;
+  sections: DirectorSection[];
+  created_at: string;
+  updated_at: string;
+  collected_count?: number;
+}
+
+export interface ShootingDirectory {
+  id: string;
+  name: string;
+  departments: Array<{
+    id: string;
+    name: string;
+    members: Array<{ id: string; name: string }>;
+  }>;
+}
+
+export interface ShootingTask {
+  id: number;
+  project_id: number;
+  project_name: string;
+  project_mode: 'reference' | 'original';
+  section_count: number;
+  channel_id: string;
+  channel_name: string;
+  department_id: string;
+  department_name: string;
+  assignee_id: string;
+  assignee_name: string;
+  note: string;
+  status: 'pending' | 'in_progress' | 'completed';
+  created_at: string;
+  updated_at: string;
+}
+
 export interface StoryboardModule {
   id: number;
   project_id: number;

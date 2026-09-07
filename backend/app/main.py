@@ -7,7 +7,7 @@ from datetime import datetime, timedelta
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api import auth, brands, creative, dashboard, knowledge, products, quality, skills, templates, operations, production, storage, videos
+from app.api import auth, brands, creative, dashboard, director, knowledge, products, quality, skills, templates, operations, production, storage, videos
 from app.config import get_settings
 from app.database import SessionLocal, engine, init_db
 from app.models import AuditLog, CreativeBatchJob, CreativeGeneration
@@ -60,6 +60,7 @@ app.include_router(production.router, prefix="/api")
 app.include_router(quality.router, prefix="/api")
 app.include_router(storage.router, prefix="/api")
 app.include_router(videos.router, prefix="/api")
+app.include_router(director.router, prefix="/api")
 
 @app.on_event("startup")
 def on_startup() -> None:

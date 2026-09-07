@@ -45,6 +45,26 @@ class Settings(BaseSettings):
     tenant_max_concurrent_generations: int = 2
     generation_max_attempts: int = 3
     max_upload_mb: int = 25
+    director_video_max_upload_mb: int = 300
+    director_capture_session_minutes: int = 10
+    director_scene_threshold: float = 0.36
+    director_min_shot_seconds: float = 0.65
+    director_vision_batch_size: int = 4
+    director_ffmpeg_path: str = ""
+    director_ffprobe_path: str = ""
+    director_keyframe_min_count: int = 3
+    director_keyframe_max_count: int = 5
+    director_asr_provider: str = "auto"
+    director_asr_required: bool = False
+    director_asr_api_base: str = ""
+    director_asr_api_key: str = ""
+    director_asr_model: str = "whisper-1"
+    director_asr_language: str = "zh"
+    director_asr_resource_id: str = "volc.seedasr.auc"
+    director_asr_poll_interval_seconds: float = 1.5
+    director_asr_poll_timeout_seconds: float = 180.0
+    director_asr_local_device: str = "auto"
+    director_asr_local_compute_type: str = "int8"
     auth_secret: str = "change-this-secret-in-production"
     access_token_hours: int = 24
 

@@ -18,6 +18,10 @@ import type {
   ComplianceReport,
   SkillCandidate,
   DetailPageTemplate,
+  DirectorProject,
+  DirectorSection,
+  ShootingDirectory,
+  ShootingTask,
 } from '../types';
 
 const api = axios.create({
@@ -109,6 +113,86 @@ export const videoApi = {
   updatePlan: (id: number, plan: Record<string, unknown>) => api.put<import('../types').VideoProject>(`/video-projects/${id}/plan`, { plan }).then(r => r.data),
   generate: (id: number) => api.post<import('../types').VideoProject>(`/video-projects/${id}/generate`).then(r => r.data),
   regenerateShot: (id: number, shotId: string) => api.post<import('../types').VideoProject>(`/video-projects/${id}/shots/${encodeURIComponent(shotId)}/regenerate`).then(r => r.data),
+};
+
+function directorProjectRows(payload: unknown): DirectorProject[] {
+  if (Array.isArray(payload)) return payload as DirectorProject[];
+  if (payload && typeof payload === 'object') {
+    const record = payload as Record<string, unknown>;
+    for (const key of ['items', 'projects', 'data']) {
+      if (Array.isArray(record[key])) return record[key] as DirectorProject[];
+    }
+  }
+  throw new TypeError('编导项目列表响应格式错误');
+}
+
+export const directorApi = {
+  list: () => api.get<unknown>('/director-projects').then((r) => directorProjectRows(r.data)),
+  get: (id: number) => api.get<DirectorProject>(`/director-projects/${id}`).then((r) => r.data),
+  remove: (id: number) => api.delete<{ ok: boolean }>(`/director-projects/${id}`).then((r) => r.data),
+  shootingDirectory: () => api.get<ShootingDirectory[]>('/director-projects/shooting-directory').then((r) => r.data),
+  shootingTasks: () => api.get<ShootingTask[]>('/director-projects/shooting-tasks').then((r) => r.data),
+  createShootingTask: (id: number, data: { channel_id: string; department_id: string; assignee_id: string; note: string }) =>
+    api.post<ShootingTask>(`/director-projects/${id}/shooting-tasks`, data).then((r) => r.data),
+  upload: async (file: File, name = '') => {
+    const form = new FormData();
+    form.append('file', file);
+    form.append('name', name);
+    return api.post<DirectorProject>('/director-projects/upload', form, { timeout: 360000 }).then((r) => r.data);
+  },
+  fromUrl: (url: string, name = '') => api.post<DirectorProject>('/director-projects/from-url', { url, name }).then((r) => r.data),
+  createCapture: (url: string, name = '') => api.post<{
+    project: DirectorProject;
+    capture: { id: string; token: string; expires_at: string; source_page_url: string; source_platform: string };
+  }>('/director-projects/capture-sessions', { url, name }).then((r) => r.data),
+  failCapture: (captureId: string, token: string, message: string) => api.post(
+    `/director-projects/capture-sessions/${captureId}/fail`,
+    { message },
+    { headers: { 'X-Capture-Token': token } },
+  ).then((r) => r.data),
+  original: (data: { name?: string; brief: string; language: string }) =>
+    api.post<DirectorProject>('/director-projects/original', data, { timeout: 180000 }).then((r) => r.data),
+  reanalyze: (id: number) => api.post<DirectorProject>(`/director-projects/${id}/reanalyze`).then((r) => r.data),
+  updateAnalysis: (id: number, data: { product_name: string; selling_points: string[]; target_audience: string[]; target_pain_points: string }) =>
+    api.put<DirectorProject>(`/director-projects/${id}/analysis`, data).then((r) => r.data),
+  rewrite: (id: number, data: { product_service: string; selling_points: string; language: string }) =>
+    api.post<DirectorProject>(`/director-projects/${id}/rewrite`, data, { timeout: 180000 }).then((r) => r.data),
+  saveSections: (id: number, sections: DirectorSection[]) => api.put<DirectorProject>(`/director-projects/${id}/sections`, sections.map((section, index) => ({
+    id: section.id,
+    sort_order: index,
+    title: section.title,
+    start_ms: section.start_ms,
+    end_ms: section.end_ms,
+    script_lines: section.script_lines,
+    description: section.description,
+    shooting_notes: section.shooting_notes,
+  }))).then((r) => r.data),
+  saveShots: (id: number, shots: import('../types').DirectorShot[]) => api.put<DirectorProject>(`/director-projects/${id}/shots`, shots.map((shot) => ({
+    id: shot.id,
+    transcript: shot.transcript,
+    subject: shot.subject,
+    action: shot.action,
+    scene: shot.scene,
+    shot_size: shot.shot_size,
+    camera: shot.camera,
+    product: shot.product,
+    director_intent: shot.director_intent,
+    description: shot.description,
+  }))).then((r) => r.data),
+  rewriteSection: (id: number, sectionId: number, instruction = '') =>
+    api.post<DirectorProject>(`/director-projects/${id}/sections/${sectionId}/rewrite`, { instruction }, { timeout: 180000 }).then((r) => r.data),
+  uploadAsset: async (id: number, sectionId: number, file: File, role: 'reference' | 'material') => {
+    const form = new FormData();
+    form.append('file', file);
+    form.append('role', role);
+    return api.post<DirectorProject>(`/director-projects/${id}/sections/${sectionId}/assets`, form, { timeout: 360000 }).then((r) => r.data);
+  },
+  generateAsset: (id: number, sectionId: number, prompt = '') =>
+    api.post<DirectorProject>(`/director-projects/${id}/sections/${sectionId}/assets/generate`, { prompt }, { timeout: 600000 }).then((r) => r.data),
+  removeAsset: (id: number, assetId: number) => api.delete(`/director-projects/${id}/assets/${assetId}`).then((r) => r.data),
+  collectMaterials: (id: number) => api.post<DirectorProject>(`/director-projects/${id}/collect-materials`).then((r) => r.data),
+  compliance: (id: number) => api.get<{ status: 'passed' | 'review'; issue_count: number; issues: Array<{ section_id: number; section_title: string; phrase: string; message: string }> }>(`/director-projects/${id}/compliance`).then((r) => r.data),
+  mix: (id: number) => api.post<DirectorProject>(`/director-projects/${id}/mix`).then((r) => r.data),
 };
 
 export const knowledgeApi = {

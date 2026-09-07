@@ -1,4 +1,5 @@
-import { NavLink, Outlet } from 'react-router-dom';
+import { useState } from 'react';
+import { NavLink, Outlet, useLocation } from 'react-router-dom';
 import {
   LayoutDashboard,
   PackagePlus,
@@ -10,6 +11,10 @@ import {
   Factory,
   ShieldCheck,
   Video,
+  Clapperboard,
+  ClipboardList,
+  Menu,
+  X,
 } from 'lucide-react';
 import IcpFiling from './IcpFiling';
 
@@ -21,6 +26,8 @@ const nav = [
   { to: '/design-skills', label: '设计 Skill', icon: Palette },
   { to: '/creative-projects', label: 'AI 创作工作台', icon: PanelsTopLeft },
   { to: '/video-projects', label: 'AI 口播视频', icon: Video },
+  { to: '/director-inspiration', label: '编导灵感', icon: Clapperboard },
+  { to: '/shooting-tasks', label: '拍摄任务', icon: ClipboardList },
   { to: '/task-center', label: '任务与费用', icon: Activity },
 ];
 
@@ -43,16 +50,20 @@ const plannedFeatures = [
 ];
 
 export default function Layout() {
+  const location = useLocation();
+  const [mobileNavOpen, setMobileNavOpen] = useState(false);
+  const isDirectorWorkspace = /^\/director-inspiration\/\d+\/workspace/.test(location.pathname);
   if (!localStorage.getItem('access_token')) {
     window.location.href = '/login';
     return null;
   }
   return (
     <div className="min-h-screen flex bg-[var(--bg)] text-[var(--text)]">
-      <aside className="w-60 shrink-0 border-r border-[var(--border)] bg-[var(--panel)] flex flex-col">
-        <div className="px-5 py-6 border-b border-[var(--border)]">
-          <div className="font-display text-3xl leading-none">Dirovo哈</div>
-          <div className="mt-1 font-display text-base leading-none tracking-[0.08em]">蒂洛薇</div>
+      {mobileNavOpen && <button className="fixed inset-0 z-40 bg-black/35 lg:hidden" onClick={() => setMobileNavOpen(false)} aria-label="关闭导航遮罩" />}
+      <aside className={`${mobileNavOpen ? 'fixed inset-y-0 left-0 z-50 flex' : 'hidden'} lg:static lg:flex w-60 shrink-0 border-r border-[var(--border)] bg-[var(--panel)] flex-col`}>
+        <div className="px-5 py-6 border-b border-[var(--border)] flex items-start justify-between">
+          <div><div className="font-display text-3xl leading-none">Dirovo哈</div><div className="mt-1 font-display text-base leading-none tracking-[0.08em]">蒂洛薇</div></div>
+          <button className="lg:hidden w-8 h-8 grid place-items-center" onClick={() => setMobileNavOpen(false)} aria-label="关闭导航"><X size={18} /></button>
         </div>
         <nav className="flex-1 p-3 space-y-1">
           {nav.map((item) => (
@@ -60,6 +71,7 @@ export default function Layout() {
               key={item.to}
               to={item.to}
               end={item.end}
+              onClick={() => setMobileNavOpen(false)}
               className={({ isActive }) =>
                 `flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm transition-colors ${
                   isActive
@@ -97,8 +109,9 @@ export default function Layout() {
           <IcpFiling className="block" />
         </div>
       </aside>
-      <main className="flex-1 overflow-auto">
-        <div className="max-w-6xl mx-auto px-8 py-8">
+      <main className="flex-1 min-w-0 overflow-auto">
+        <div className="lg:hidden sticky top-0 z-30 h-14 border-b border-[var(--border)] bg-[var(--panel)] flex items-center px-4 gap-3"><button className="w-9 h-9 grid place-items-center" onClick={() => setMobileNavOpen(true)} aria-label="打开导航"><Menu size={20} /></button><div className="font-display text-xl">Dirovo哈</div></div>
+        <div className={isDirectorWorkspace ? 'max-w-[1800px] mx-auto px-5 py-5' : 'max-w-6xl mx-auto px-8 py-8'}>
           <Outlet />
         </div>
       </main>

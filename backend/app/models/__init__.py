@@ -62,6 +62,152 @@ class VideoProject(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
 
+class DirectorProject(Base):
+    """Reference-led scripting and shot-planning workspace."""
+
+    __tablename__ = "director_projects"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    tenant_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    product_id: Mapped[Optional[int]] = mapped_column(ForeignKey("products.id"), nullable=True, index=True)
+    name: Mapped[str] = mapped_column(String(256), nullable=False)
+    mode: Mapped[str] = mapped_column(String(32), nullable=False, default="reference")
+    source_kind: Mapped[str] = mapped_column(String(32), nullable=False, default="upload")
+    source_url: Mapped[str] = mapped_column(String(1024), nullable=False, default="")
+    source_filename: Mapped[str] = mapped_column(String(512), nullable=False, default="")
+    source_duration_seconds: Mapped[float] = mapped_column(Float, nullable=False, default=0)
+    language: Mapped[str] = mapped_column(String(32), nullable=False, default="中文")
+    product_service: Mapped[str] = mapped_column(String(256), nullable=False, default="")
+    selling_points: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="draft", index=True)
+    progress_stage: Mapped[str] = mapped_column(String(64), nullable=False, default="created")
+    analysis: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    output_url: Mapped[str] = mapped_column(String(1024), nullable=False, default="")
+    error_message: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    sections: Mapped[list["DirectorSection"]] = relationship(
+        "DirectorSection", back_populates="project", cascade="all, delete-orphan"
+    )
+
+
+class DirectorCaptureSession(Base):
+    """Short-lived authority for a browser extension to upload one source video."""
+
+    __tablename__ = "director_capture_sessions"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    tenant_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    user_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    project_id: Mapped[int] = mapped_column(ForeignKey("director_projects.id"), nullable=False, index=True)
+    token_hash: Mapped[str] = mapped_column(String(64), nullable=False, unique=True, index=True)
+    source_page_url: Mapped[str] = mapped_column(String(2048), nullable=False)
+    source_platform: Mapped[str] = mapped_column(String(32), nullable=False, default="generic")
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="waiting", index=True)
+    details: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    expires_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class ShootingTask(Base):
+    """A script assignment sent to an external shooting team."""
+
+    __tablename__ = "shooting_tasks"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    tenant_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    project_id: Mapped[int] = mapped_column(ForeignKey("director_projects.id"), nullable=False, index=True)
+    channel_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    channel_name: Mapped[str] = mapped_column(String(128), nullable=False)
+    department_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    department_name: Mapped[str] = mapped_column(String(128), nullable=False)
+    assignee_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    assignee_name: Mapped[str] = mapped_column(String(128), nullable=False)
+    note: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="pending", index=True)
+    created_by: Mapped[str] = mapped_column(String(64), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class DirectorSection(Base):
+    __tablename__ = "director_sections"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    tenant_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    project_id: Mapped[int] = mapped_column(ForeignKey("director_projects.id"), nullable=False, index=True)
+    sort_order: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    title: Mapped[str] = mapped_column(String(128), nullable=False)
+    start_ms: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    end_ms: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    source_text: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    script_lines: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
+    description: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    shooting_notes: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    project: Mapped["DirectorProject"] = relationship("DirectorProject", back_populates="sections")
+    assets: Mapped[list["DirectorAsset"]] = relationship(
+        "DirectorAsset", back_populates="section", cascade="all, delete-orphan"
+    )
+    shots: Mapped[list["DirectorShot"]] = relationship(
+        "DirectorShot", back_populates="section", cascade="all, delete-orphan"
+    )
+
+
+class DirectorShot(Base):
+    """A scene-detected sub-shot enriched by ASR and multimodal analysis."""
+
+    __tablename__ = "director_shots"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    tenant_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    project_id: Mapped[int] = mapped_column(ForeignKey("director_projects.id"), nullable=False, index=True)
+    section_id: Mapped[int] = mapped_column(ForeignKey("director_sections.id"), nullable=False, index=True)
+    sort_order: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    start_ms: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    end_ms: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    transcript: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    story_role: Mapped[str] = mapped_column(String(64), nullable=False, default="")
+    subject: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    action: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    scene: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    shot_size: Mapped[str] = mapped_column(String(64), nullable=False, default="")
+    camera: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    description: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    clip_url: Mapped[str] = mapped_column(String(1024), nullable=False, default="")
+    thumbnail_url: Mapped[str] = mapped_column(String(1024), nullable=False, default="")
+    confidence: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
+    analysis: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    section: Mapped["DirectorSection"] = relationship("DirectorSection", back_populates="shots")
+
+
+class DirectorAsset(Base):
+    __tablename__ = "director_assets"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    tenant_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    project_id: Mapped[int] = mapped_column(ForeignKey("director_projects.id"), nullable=False, index=True)
+    section_id: Mapped[int] = mapped_column(ForeignKey("director_sections.id"), nullable=False, index=True)
+    role: Mapped[str] = mapped_column(String(32), nullable=False, default="reference")
+    media_kind: Mapped[str] = mapped_column(String(32), nullable=False, default="image")
+    source: Mapped[str] = mapped_column(String(32), nullable=False, default="uploaded")
+    url: Mapped[str] = mapped_column(String(1024), nullable=False)
+    thumbnail_url: Mapped[str] = mapped_column(String(1024), nullable=False, default="")
+    description: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    duration_seconds: Mapped[float] = mapped_column(Float, nullable=False, default=0)
+    sort_order: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+    section: Mapped["DirectorSection"] = relationship("DirectorSection", back_populates="assets")
+
+
 class BrandVisualProfile(Base):
     __tablename__ = "brand_visual_profiles"
     __table_args__ = (UniqueConstraint("tenant_id", "brand_name", name="uq_tenant_brand_visual"),)
