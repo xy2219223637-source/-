@@ -70,7 +70,7 @@ export default function Layout() {
       {mobileNavOpen && <button className="fixed inset-0 z-40 bg-black/35 lg:hidden" onClick={() => setMobileNavOpen(false)} aria-label="关闭导航遮罩" />}
       <aside className={`${mobileNavOpen ? 'fixed inset-y-0 left-0 z-50 flex' : 'hidden'} lg:static lg:flex w-60 shrink-0 border-r border-[var(--border)] bg-[var(--panel)] flex-col`}>
         <div className="px-5 py-6 border-b border-[var(--border)] flex items-start justify-between">
-          <div><div className="font-display text-3xl leading-none">Dirovo哈</div><div className="mt-1 font-display text-base leading-none tracking-[0.08em]">蒂洛薇</div></div>
+          <div><div className="font-display text-3xl leading-none">Dirovo</div><div className="mt-1 font-display text-base leading-none tracking-[0.08em]">蒂洛薇</div></div>
           <button className="lg:hidden w-8 h-8 grid place-items-center" onClick={() => setMobileNavOpen(false)} aria-label="关闭导航"><X size={18} /></button>
         </div>
         <nav className="flex-1 p-3 space-y-1">
@@ -118,7 +118,7 @@ export default function Layout() {
         </div>
       </aside>
       <main className="flex-1 min-w-0 overflow-auto">
-        <div className="lg:hidden sticky top-0 z-30 h-14 border-b border-[var(--border)] bg-[var(--panel)] flex items-center px-4 gap-3"><button className="w-9 h-9 grid place-items-center" onClick={() => setMobileNavOpen(true)} aria-label="打开导航"><Menu size={20} /></button><div className="font-display text-xl">Dirovo哈</div></div>
+        <div className="lg:hidden sticky top-0 z-30 h-14 border-b border-[var(--border)] bg-[var(--panel)] flex items-center px-4 gap-3"><button className="w-9 h-9 grid place-items-center" onClick={() => setMobileNavOpen(true)} aria-label="打开导航"><Menu size={20} /></button><div className="font-display text-xl">Dirovo</div></div>
         <div className={isDirectorWorkspace ? 'max-w-[1800px] mx-auto px-5 py-5' : 'max-w-6xl mx-auto px-8 py-8'}>
           <Outlet />
         </div>
