@@ -177,6 +177,14 @@ npm run dev
 
 前端已通过 Vite proxy 将 `/api`、`/uploads` 转发到后端 `:8000`。
 
+### 4. 安装视频采集插件
+
+启动 Docker 前端后, 在编导灵感页面提交抖音, 小红书, 快手或 TikTok 链接. 页面未检测到插件时会提供 `enrui-video-capture-extension.zip`下载入口.
+
+解压后打开 `chrome://extensions`, 开启开发者模式, 选择"加载已解压的扩展程序", 然后选中解压目录. 本地 Docker 环境的应用地址为 `http://127.0.0.1:8080`, Vite 开发环境使用 `http://127.0.0.1:5173`.
+
+插件支持在编导灵感页面粘贴链接自动采集, 也支持在原视频页面点击插件图标后选择"采集当前视频". 平台登录状态只保留在用户浏览器中, 不上传 Cookie.
+
 ## 使用流程
 
 1. **知识库**（可选）：上传产品说明书 / 品牌资料，自动切片并 Embedding
@@ -219,6 +227,8 @@ npm run dev
 | GET/POST | `/api/knowledge` | 知识库文档 |
 | POST | `/api/knowledge/upload` | 上传文本文件入库 |
 | GET | `/api/dashboard/stats` | Dashboard 统计 |
+| POST | `/api/director-projects/capture-sessions` | 创建浏览器视频采集会话 |
+| POST | `/api/director-projects/capture-sessions/{id}/upload` | 上传插件采集的视频 |
 
 ## License
 

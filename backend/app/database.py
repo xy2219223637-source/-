@@ -1,13 +1,16 @@
 from __future__ import annotations
 
 from collections.abc import Generator
+import logging
 
 from sqlalchemy import create_engine, inspect, text
+from sqlalchemy.engine import Engine
 from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
 
 from app.config import get_settings
 
 settings = get_settings()
+logger = logging.getLogger(__name__)
 
 if settings.require_postgres and not settings.database_url.startswith("postgresql"):
     raise RuntimeError("REQUIRE_POSTGRES=true，但 DATABASE_URL 不是 PostgreSQL，拒绝启动")
@@ -24,6 +27,21 @@ SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
 class Base(DeclarativeBase):
     pass
+
+
+def migrate_legacy_schema(bind: Engine) -> None:
+    """Apply idempotent schema removals for deployments created before migrations existed."""
+    inspector = inspect(bind)
+    if "director_shots" not in inspector.get_table_names():
+        return
+    columns = {column["name"] for column in inspector.get_columns("director_shots")}
+    if "onscreen_text" not in columns:
+        return
+    if bind.dialect.name not in {"postgresql", "sqlite"}:
+        raise RuntimeError(f"不支持自动迁移的数据库类型: {bind.dialect.name}")
+    with bind.begin() as connection:
+        connection.execute(text("ALTER TABLE director_shots DROP COLUMN onscreen_text"))
+    logger.info("Removed legacy director_shots.onscreen_text column")
 
 
 def get_db() -> Generator[Session, None, None]:
@@ -132,3 +150,4 @@ def init_db() -> None:
                 WHERE project_id IS NOT NULL AND NOT EXISTS (
                     SELECT 1 FROM video_edit_project_assets link
                     WHERE link.project_id = video_assets.project_id AND link.asset_id = video_assets.id)"""))
+    migrate_legacy_schema(engine)
