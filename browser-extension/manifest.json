@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "恩睿视频采集助手",
   "description": "从已登录的抖音, 小红书, 快手和 TikTok 页面采集视频并提交到编导灵感.",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "permissions": ["storage", "tabs", "webRequest"],
   "host_permissions": ["<all_urls>"],
   "background": {

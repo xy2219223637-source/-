@@ -2,12 +2,22 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 
 const {
+  DEFAULT_APP_BASE,
   capturePageUrl,
   looksLikeVideo,
   normalizedMediaUrl,
   platformNameForUrl,
+  trustedAppOrigin,
   videoMimeFromBytes,
 } = require('../capture-utils.js');
+
+test('uses production as the default app and accepts only configured app origins', () => {
+  assert.equal(DEFAULT_APP_BASE, 'https://waynepartners.xyz');
+  assert.equal(trustedAppOrigin('https://waynepartners.xyz/director-inspiration'), 'https://waynepartners.xyz');
+  assert.equal(trustedAppOrigin('https://www.waynepartners.xyz/director-inspiration'), 'https://www.waynepartners.xyz');
+  assert.equal(trustedAppOrigin('http://127.0.0.1:5173/director-inspiration'), 'http://127.0.0.1:5173');
+  assert.equal(trustedAppOrigin('https://untrusted.example/director-inspiration'), '');
+});
 
 test('converts a Douyin jingxuan modal link to its canonical video page', () => {
   const source = 'https://www.douyin.com/jingxuan/search/test?aid=abc&modal_id=7621469168370856306&type=general';
