@@ -4,7 +4,7 @@ const DEFAULT_APP_BASE = 'http://127.0.0.1:8080';
 const activeCaptures = new Set();
 const trackedCaptureTabs = new Set();
 const mediaRequestsByTab = new Map();
-const { capturePageUrl, looksLikeVideo, platformNameForUrl } = globalThis.EnruiCaptureUtils;
+const { capturePageUrl, looksLikeVideo, platformNameForUrl, videoMimeFromBytes } = globalThis.EnruiCaptureUtils;
 
 const delay = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds));
 
@@ -61,21 +61,22 @@ function comparableUrl(value) {
 
 async function sourceTab(sourcePageUrl) {
   const { pendingSource } = await chrome.storage.session.get('pendingSource');
-  if (pendingSource?.tabId && pendingSource.sourcePageUrl === sourcePageUrl && pendingSource.expiresAt > Date.now()) {
+  const normalizedSourceUrl = capturePageUrl(sourcePageUrl);
+  if (pendingSource?.tabId
+    && pendingSource.sourcePageUrl === sourcePageUrl
+    && comparableUrl(normalizedSourceUrl) === comparableUrl(sourcePageUrl)
+    && pendingSource.expiresAt > Date.now()) {
     try {
       const tab = await chrome.tabs.get(pendingSource.tabId);
       await chrome.storage.session.remove('pendingSource');
-      return { tab, created: false };
+      return { tab, created: false, navigateTo: '' };
     } catch {
       await chrome.storage.session.remove('pendingSource');
     }
   }
-  const normalizedSourceUrl = capturePageUrl(sourcePageUrl);
-  const expected = comparableUrl(normalizedSourceUrl);
-  const tabs = await chrome.tabs.query({});
-  const existing = tabs.find((tab) => tab.id && tab.url && comparableUrl(tab.url) === expected);
-  if (existing) return { tab: existing, created: false };
-  return { tab: await chrome.tabs.create({ url: normalizedSourceUrl, active: false }), created: true };
+  if (pendingSource) await chrome.storage.session.remove('pendingSource');
+  const tab = await chrome.tabs.create({ url: 'about:blank', active: false });
+  return { tab, created: true, navigateTo: normalizedSourceUrl };
 }
 
 function responseHeader(headers, name) {
@@ -100,7 +101,7 @@ function networkCandidate(details) {
   if (contentType.startsWith('video/')) score = 320;
   else if (details.type === 'media' && (urlMatch || contentType === 'application/octet-stream')) score = 285;
   else if (urlMatch && contentType === 'application/octet-stream') score = 260;
-  else if (urlMatch && ['media', 'xmlhttprequest', 'other'].includes(details.type)) score = 220;
+  else if (details.type === 'media' && urlMatch && !contentType) score = 240;
   if (!score) return null;
 
   const sizeBytes = responseSize(details.responseHeaders);
@@ -202,12 +203,12 @@ async function downloadVideo(task, extraction) {
         referrer: extraction.pageUrl || task.sourcePageUrl,
       });
       if (!response.ok) throw new Error(`视频下载失败 (${response.status})`);
-      const contentType = (response.headers.get('content-type') || candidate.contentType || 'video/mp4').split(';', 1)[0];
-      if (!contentType.startsWith('video/') && contentType !== 'application/octet-stream') {
-        throw new Error('识别到的资源不是视频文件');
-      }
       const blob = await response.blob();
       if (!blob.size) throw new Error('下载到的视频文件为空');
+      const responseType = (response.headers.get('content-type') || '').split(';', 1)[0].toLowerCase();
+      const detectedType = videoMimeFromBytes(await blob.slice(0, 16).arrayBuffer());
+      if (!responseType.startsWith('video/') && !detectedType) throw new Error('识别到的资源不是视频文件');
+      const contentType = responseType.startsWith('video/') ? responseType : detectedType;
       return { blob, contentType, filename: videoFilename(response.url || mediaUrl, extraction.platform) };
     } catch (error) {
       lastError = error;
@@ -241,11 +242,13 @@ async function runCapture(task) {
     if (!tabId) throw new Error('无法创建视频页面');
     trackedCaptureTabs.add(tabId);
     mediaRequestsByTab.delete(tabId);
+    if (source.navigateTo) await chrome.tabs.update(tabId, { url: source.navigateTo, active: false });
 
     await updateStage(task, 'locating_video');
     let extraction = await waitForVideo(tabId, 25_000);
-    if (!extraction) {
-      await chrome.tabs.update(tabId, { active: true });
+    if (!extraction && createdTab) {
+      mediaRequestsByTab.delete(tabId);
+      await chrome.tabs.reload(tabId);
       extraction = await waitForVideo(tabId, 60_000);
     }
     if (!extraction?.best?.url) throw new Error('未识别到可下载的视频, 请确认平台已登录并打开视频详情页');
@@ -256,8 +259,6 @@ async function runCapture(task) {
     await uploadVideo(task, video, extraction);
     await chrome.action.setBadgeText({ text: '' });
 
-    const { autoClose = true } = await chrome.storage.sync.get('autoClose');
-    if (createdTab && autoClose && tabId) await chrome.tabs.remove(tabId).catch(() => undefined);
   } catch (error) {
     const message = error?.message || '视频采集失败';
     await chrome.action.setBadgeBackgroundColor({ color: '#b42318' });
@@ -267,6 +268,8 @@ async function runCapture(task) {
     if (tabId) {
       trackedCaptureTabs.delete(tabId);
       mediaRequestsByTab.delete(tabId);
+      const { autoClose = true } = await chrome.storage.sync.get('autoClose');
+      if (createdTab && autoClose) await chrome.tabs.remove(tabId).catch(() => undefined);
     }
     activeCaptures.delete(task.captureId);
   }

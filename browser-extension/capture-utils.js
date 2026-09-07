@@ -83,11 +83,27 @@
       || (lower.includes('video') && lower.includes('play'));
   }
 
+  function videoMimeFromBytes(value) {
+    const bytes = value instanceof Uint8Array ? value : new Uint8Array(value || []);
+    if (bytes.length >= 12
+      && bytes[4] === 0x66
+      && bytes[5] === 0x74
+      && bytes[6] === 0x79
+      && bytes[7] === 0x70) return 'video/mp4';
+    if (bytes.length >= 4
+      && bytes[0] === 0x1a
+      && bytes[1] === 0x45
+      && bytes[2] === 0xdf
+      && bytes[3] === 0xa3) return 'video/webm';
+    return '';
+  }
+
   const captureUtils = Object.freeze({
     capturePageUrl,
     looksLikeVideo,
     normalizedMediaUrl,
     platformNameForUrl,
+    videoMimeFromBytes,
   });
 
   globalThis.EnruiCaptureUtils = captureUtils;

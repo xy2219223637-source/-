@@ -6,6 +6,7 @@ const {
   looksLikeVideo,
   normalizedMediaUrl,
   platformNameForUrl,
+  videoMimeFromBytes,
 } = require('../capture-utils.js');
 
 test('converts a Douyin jingxuan modal link to its canonical video page', () => {
@@ -35,4 +36,10 @@ test('normalizes escaped media URLs', () => {
 test('detects supported platforms', () => {
   assert.equal(platformNameForUrl('https://www.douyin.com/video/1'), 'douyin');
   assert.equal(platformNameForUrl('https://example.com/video.mp4'), 'generic');
+});
+
+test('detects MP4 and WebM file signatures', () => {
+  assert.equal(videoMimeFromBytes(Uint8Array.from([0, 0, 0, 24, 0x66, 0x74, 0x79, 0x70, 0x69, 0x73, 0x6f, 0x6d])), 'video/mp4');
+  assert.equal(videoMimeFromBytes(Uint8Array.from([0x1a, 0x45, 0xdf, 0xa3, 0x9f])), 'video/webm');
+  assert.equal(videoMimeFromBytes(Uint8Array.from([0x7b, 0x22, 0x64, 0x61, 0x74, 0x61, 0x22, 0x3a])), '');
 });
