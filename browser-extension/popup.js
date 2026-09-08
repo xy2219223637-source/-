@@ -1,41 +1,17 @@
-const { platformNameForUrl } = globalThis.EnruiCaptureUtils;
-const platformLabels = {
-  douyin: '抖音视频',
-  xiaohongshu: '小红书视频',
-  kuaishou: '快手视频',
-  tiktok: 'TikTok 视频',
-  generic: '网页视频',
-};
-
 async function initialize() {
-  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-  const controls = {
-    autoClose: document.querySelector('#auto-close'),
-    collect: document.querySelector('#collect'),
-    pageTitle: document.querySelector('#page-title'),
-    pageUrl: document.querySelector('#page-url'),
-    platform: document.querySelector('#platform'),
-    status: document.querySelector('#status'),
-  };
-  const settings = await chrome.storage.sync.get('autoClose');
-  controls.autoClose.checked = settings.autoClose !== false;
-  controls.pageTitle.textContent = tab?.title || '当前页面';
-  controls.pageUrl.textContent = tab?.url || '';
-  controls.platform.textContent = platformLabels[platformNameForUrl(tab?.url || '')];
-  controls.collect.disabled = !tab?.url || !/^https?:\/\//i.test(tab.url);
-
-  controls.collect.addEventListener('click', async () => {
-    controls.status.textContent = '';
-    controls.collect.disabled = true;
+  const settings = await chrome.storage.sync.get(['autoClose', 'appBase']);
+  const autoClose = document.querySelector('#auto-close');
+  autoClose.checked = settings.autoClose !== false;
+  document.querySelector('#page-title').textContent = `版本 ${chrome.runtime.getManifest().version}`;
+  document.querySelector('#page-url').textContent = `构建 ${globalThis.EnruiCaptureBuild.build}`;
+  document.querySelector('#platform').textContent = globalThis.EnruiCaptureUtils.trustedAppOrigin(settings.appBase) || globalThis.EnruiCaptureUtils.DEFAULT_APP_BASE;
+  autoClose.addEventListener('change', () => { void chrome.storage.sync.set({ autoClose: autoClose.checked }); });
+  document.querySelector('#collect').addEventListener('click', async () => {
     try {
-      await chrome.storage.sync.set({ autoClose: controls.autoClose.checked });
-      const response = await chrome.runtime.sendMessage({ type: 'OPEN_CURRENT_IN_APP', sourcePageUrl: tab.url, sourceTabId: tab.id });
+      const response = await chrome.runtime.sendMessage({ type: 'OPEN_APP' });
       if (!response?.ok) throw new Error(response?.error || '无法打开编导灵感');
       window.close();
-    } catch (error) {
-      controls.status.textContent = error?.message || '无法启动视频采集';
-      controls.collect.disabled = false;
-    }
+    } catch (error) { document.querySelector('#status').textContent = error.message; }
   });
 }
 

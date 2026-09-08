@@ -6,6 +6,7 @@ WORKDIR /app
 COPY frontend/package.json frontend/package-lock.json ./
 RUN npm ci
 COPY frontend/ .
+COPY browser-extension/ /browser-extension/
 RUN npm run build
 
 FROM ${NGINX_BASE_IMAGE}

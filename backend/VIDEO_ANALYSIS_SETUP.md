@@ -4,14 +4,20 @@
 
 ## 浏览器插件采集
 
-抖音, 小红书, 快手和 TikTok 页面链接通过 `browser-extension`中的 Chrome Manifest V3 插件采集. 前端创建 10 分钟有效的一次性采集会话, 插件在用户已经登录的平台页面中识别视频, 再把视频上传到后端. 后端写入 OSS 后继续执行现有 `analyze_reference_project`流程.
+平台页面链接通过 `browser-extension`中的 Chrome Manifest V3 插件采集. 用户在编导灵感粘贴链接并提交解析, 插件自动在后台打开目标页面, 使用当前浏览器会话获取视频并上传. 后端先探测视频轨道, 尺寸和时长, 通过后写入 OSS 并执行 `analyze_reference_project`. 不需要点击插件采集.
 
 ```env
 DIRECTOR_VIDEO_MAX_UPLOAD_MB=300
 DIRECTOR_CAPTURE_SESSION_MINUTES=10
 ```
 
-本地插件安装包由 `browser-extension`目录生成, 前端下载地址为 `/downloads/enrui-video-capture-extension.zip`. 插件面板中的本地应用地址默认为 `http://127.0.0.1:8080`.
+在 `frontend`目录运行 `npm run build:extension`生成安装包和构建标识. `npm run dev`与 `npm run build`也自动执行此步骤. 下载地址为 `/downloads/enrui-video-capture-extension.zip`. 默认应用地址为 `https://waynepartners.xyz`, 从受信任的本地页面使用时自动同步应用地址.
+
+同步发布后端, 前端和下载包. 安装包版本为 `0.5.0`, 前端同时核对版本和源码构建标识; 更新后在扩展管理页重新加载并刷新应用页面. 参照 `browser-extension/README.md`执行安装和验收.
+
+采集失败且没有源文件时使用"重新采集", 在原项目创建新会话并撤销旧凭证. 已有源文件的分析失败使用"重新解析". 过期采集在读取项目状态时转为失败. 需要平台登录或验证时保留原页面, 用户可从失败提示打开页面处理后重试.
+
+从 `DirectorCaptureSession.details.diagnostics`或 `Capture failed`日志查看插件版本, 构建标识, 视频 ID, 下载上下文, 资源域名, HTTP 状态, MIME 和响应类型. 日志不记录 Cookie, 带签名的媒体地址或响应正文. 用同一视频链接分别在不同电脑验证, 根据诊断区分未识别资源, 平台验证, 网络失败和非视频响应.
 
 插件不会读取或上传平台 Cookie. 采集令牌仅允许向对应项目上传一个视频, 完成后不能重复使用. 生产发布前需要把插件 `manifest.json`中的 `<all_urls>`权限收窄到正式应用域名和支持的平台域名.
 

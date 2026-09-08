@@ -1,22 +1,29 @@
 {
   "manifest_version": 3,
   "name": "恩睿视频采集助手",
-  "description": "从已登录的抖音, 小红书, 快手和 TikTok 页面采集视频并提交到编导灵感.",
-  "version": "0.4.0",
+  "description": "在编导灵感粘贴链接, 自动获取视频并提交解析.",
+  "version": "0.5.0",
+  "minimum_chrome_version": "111",
   "permissions": ["storage", "tabs", "webRequest"],
   "host_permissions": ["<all_urls>"],
   "background": {
     "service_worker": "background.js"
   },
   "action": {
-    "default_title": "采集当前视频",
+    "default_title": "视频解析助手",
     "default_popup": "popup.html"
   },
   "content_scripts": [
     {
+      "matches": ["https://*.douyin.com/*"],
+      "js": ["page-capture-main.js"],
+      "world": "MAIN",
+      "run_at": "document_start"
+    },
+    {
       "matches": ["<all_urls>"],
-      "js": ["capture-utils.js", "content.js"],
-      "run_at": "document_idle",
+      "js": ["build-info.js", "capture-utils.js", "capture-download.js", "content.js"],
+      "run_at": "document_start",
       "all_frames": false
     }
   ]

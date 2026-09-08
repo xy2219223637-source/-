@@ -8,6 +8,7 @@ import {
   ChevronRight,
   Copy,
   Download,
+  ExternalLink,
   FileSearch,
   FileVideo2,
   Loader2,
@@ -21,11 +22,13 @@ import {
   X,
 } from 'lucide-react';
 import { directorApi, mediaUrl } from '../api/client';
+import { CaptureExtensionError, createVideoCapture, openCaptureSource } from '../lib/videoCaptureExtension';
 import type { DirectorProject, DirectorShot } from '../types';
 
 const stageLabel: Record<string, string> = {
   waiting_extension: '等待视频采集插件', opening_source: '正在后台打开原视频',
   locating_video: '正在识别视频资源', downloading: '正在下载源视频', uploading: '正在上传源视频',
+  validating_media: '正在验证视频文件',
   queued: '等待解析',
   probing_media: '正在读取视频媒体信息', detecting_shots: '正在检测镜头切换',
   extracting_shots: '正在生成子分镜', extracting_keyframes: '正在提取关键帧和子分镜',
@@ -165,6 +168,8 @@ export default function DirectorAnalysisPage() {
   const [copiedShot, setCopiedShot] = useState<number | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
+  const [retrying, setRetrying] = useState(false);
+  const [extensionMissing, setExtensionMissing] = useState(false);
 
   async function load() {
     const row = await directorApi.get(projectId);
@@ -203,6 +208,8 @@ export default function DirectorAnalysisPage() {
 
   const allShots = useMemo(() => project?.sections.flatMap((section) => section.shots || []) || [], [project]);
   const isRunning = !!project && ['capturing', 'queued', 'analyzing'].includes(project.status);
+  const needsCapture = project?.source_kind === 'browser_extension' && !project.source_url;
+  const captureSourceUrl = project?.analysis.capture?.source_page_url || '';
 
   function playShot(shot: DirectorShot) {
     const player = videoRef.current;
@@ -263,13 +270,27 @@ export default function DirectorAnalysisPage() {
   }
 
   async function reanalyze() {
+    if (retrying || isRunning) return;
+    setRetrying(true);
     setError('');
+    setExtensionMissing(false);
     try {
-      const row = await directorApi.reanalyze(projectId);
+      if (needsCapture && !captureSourceUrl) throw new Error('原视频链接缺失, 请返回编导灵感重新提交链接');
+      const row = needsCapture ? await createVideoCapture(captureSourceUrl, projectId) : await directorApi.reanalyze(projectId);
       setProject(row);
       setEditingAnalysis(false);
     } catch (requestError: any) {
-      setError(requestError?.response?.data?.detail || '重新解析失败');
+      if (requestError instanceof CaptureExtensionError) setExtensionMissing(true);
+      setError(requestError?.response?.data?.detail || requestError?.message || '重新解析失败');
+    } finally { setRetrying(false); }
+  }
+
+  async function openSource() {
+    setError('');
+    try { await openCaptureSource(captureSourceUrl); }
+    catch (requestError) {
+      if (requestError instanceof CaptureExtensionError) setExtensionMissing(true);
+      setError(requestError instanceof Error ? requestError.message : '无法打开原视频');
     }
   }
 
@@ -287,15 +308,16 @@ export default function DirectorAnalysisPage() {
           <h1 className="text-xl font-semibold mt-2 truncate">{project.name}</h1>
         </div>
         <div className="flex flex-wrap gap-2">
-          <button className="btn-secondary" onClick={reanalyze} disabled={isRunning}><RefreshCw size={15} />重新解析</button>
+          <button className="btn-secondary" onClick={reanalyze} disabled={isRunning || retrying}>{retrying ? <Loader2 size={15} className="animate-spin" /> : <RefreshCw size={15} />}{needsCapture ? '重新采集' : '重新解析'}</button>
           <button className="btn-secondary" onClick={() => navigate(`/director-inspiration/${projectId}/workspace`)} disabled={isRunning || !project.sections.length}><Video size={15} />进入工作台</button>
           <button className="h-10 px-4 rounded-md bg-[#4f46e5] text-white text-sm font-medium inline-flex items-center gap-2 disabled:opacity-50" onClick={() => setShowRewrite(true)} disabled={isRunning || project.status === 'failed'}><Sparkles size={15} />仿写脚本</button>
         </div>
       </header>
 
       {error && <div className="border border-red-200 bg-red-50 rounded-md px-4 py-3 text-sm text-red-700">{error}</div>}
+      {extensionMissing && <a className="inline-flex items-center gap-2 text-sm underline" href="/downloads/enrui-video-capture-extension.zip" download><Download size={15} />下载新版插件</a>}
       {isRunning && <div className="border border-[#c7d2fe] bg-[#eef2ff] rounded-md px-5 py-4 flex items-center gap-3 text-sm"><Loader2 size={18} className="animate-spin text-[#4f46e5]" /><div><div className="font-medium">{stageLabel[project.progress_stage] || '正在解析参考视频'}</div><div className="text-xs text-[var(--muted)] mt-1">{project.status === 'capturing' ? '视频采集完成后将自动开始拆解' : '正在生成视频解析结果'}</div></div></div>}
-      {project.status === 'failed' && <div className="border border-red-200 bg-red-50 rounded-md p-4 text-sm text-red-700">{project.error_message || '视频解析失败, 请检查文件后重试'}</div>}
+      {project.status === 'failed' && <div className="flex flex-wrap items-center justify-between gap-3 border border-red-200 bg-red-50 rounded-md p-4 text-sm text-red-700"><span className="min-w-0 break-words">{project.error_message || '视频解析失败, 请检查文件后重试'}</span>{needsCapture && captureSourceUrl && <button className="btn-secondary shrink-0" onClick={openSource}><ExternalLink size={15} />打开原视频</button>}</div>}
 
       <section className="border border-[var(--border)] bg-white rounded-lg p-4 grid lg:grid-cols-[220px_minmax(0,1fr)] gap-5">
         <div className="aspect-[9/16] w-full max-w-[220px] max-h-80 lg:max-h-none bg-black rounded-md grid place-items-center overflow-hidden mx-auto lg:mx-0">

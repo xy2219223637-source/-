@@ -23,7 +23,7 @@ import {
   X,
 } from 'lucide-react';
 import { directorApi, mediaUrl } from '../api/client';
-import { extractSharedVideoUrl, hasVideoCaptureExtension, isDirectVideoUrl, startVideoCapture } from '../lib/videoCaptureExtension';
+import { CaptureExtensionError, createVideoCapture, extractSharedVideoUrl, isDirectVideoUrl } from '../lib/videoCaptureExtension';
 import type { DirectorProject, ShootingDirectory } from '../types';
 
 const statusLabel: Record<string, string> = {
@@ -135,28 +135,11 @@ export default function DirectorProjectsPage() {
         navigate(`/director-inspiration/${project.id}`);
         return;
       }
-      if (!await hasVideoCaptureExtension()) {
-        setExtensionMissing(true);
-        throw new Error('未检测到视频采集插件, 请安装并启用后重试');
-      }
       setExtensionMissing(false);
-      const session = await directorApi.createCapture(sourcePageUrl);
-      try {
-        await startVideoCapture({
-          captureId: session.capture.id,
-          captureToken: session.capture.token,
-          projectId: session.project.id,
-          sourcePageUrl,
-          apiBase: window.location.origin,
-        });
-      } catch (captureError: any) {
-        const message = captureError?.message || '视频采集插件启动失败';
-        await directorApi.failCapture(session.capture.id, session.capture.token, message).catch(() => undefined);
-        throw captureError;
-      }
-      const project = session.project;
+      const project = await createVideoCapture(sourcePageUrl);
       navigate(`/director-inspiration/${project.id}`);
     } catch (requestError: any) {
+      if (requestError instanceof CaptureExtensionError) setExtensionMissing(true);
       setError(requestError?.response?.data?.detail || requestError?.message || '参考视频提交失败');
     } finally {
       setBusy(false);

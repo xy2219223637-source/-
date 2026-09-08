@@ -1,325 +1,286 @@
-importScripts('capture-utils.js');
+importScripts('build-info.js', 'capture-utils.js', 'capture-download.js');
 
+const { DEFAULT_APP_BASE, capturePageUrl, douyinVideoId, looksLikeVideo, platformNameForUrl, trustedAppOrigin } = globalThis.EnruiCaptureUtils;
+const { MAX_VIDEO_BYTES, readVideoResponse } = globalThis.EnruiCaptureDownload;
 const activeCaptures = new Set();
-const trackedCaptureTabs = new Set();
-const mediaRequestsByTab = new Map();
-const {
-  DEFAULT_APP_BASE,
-  capturePageUrl,
-  looksLikeVideo,
-  platformNameForUrl,
-  trustedAppOrigin,
-  videoMimeFromBytes,
-} = globalThis.EnruiCaptureUtils;
+const mediaByTab = new Map();
+const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+const MESSAGES = {
+  login_required: '平台需要登录, 请点击原视频完成登录后重新采集',
+  verification_required: '平台需要验证, 请点击原视频完成验证后重新采集',
+  not_video: '平台返回了非视频内容, 请检查原视频页面后重新采集',
+  network_error: '视频下载请求失败, 请检查浏览器站点权限和网络后重新采集',
+  download_timeout: '视频下载超时, 请稍后重新采集',
+  http_error: '平台拒绝了视频下载请求, 请检查原视频页面后重新采集',
+  partial_video: '平台返回的视频文件不完整, 请重新采集',
+  too_large: '视频超过当前上传大小限制',
+  empty_video: '平台返回了空视频文件, 请重新采集',
+  no_target_video: '未取得指定视频的有效资源, 请检查原视频是否可播放后重新采集',
+  interrupted: '浏览器后台任务已中断, 请重新采集',
+};
 
-const delay = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds));
+async function withTimeout(pending, ms) {
+  let timer;
+  try {
+    return await Promise.race([pending, new Promise((_, reject) => {
+      timer = setTimeout(() => reject(Object.assign(new Error('download_timeout'), { code: 'download_timeout' })), ms);
+    })]);
+  } finally { clearTimeout(timer); }
+}
+
+async function tabRequest(tabId, message, timeout = 5000) {
+  const response = await withTimeout(chrome.tabs.sendMessage(tabId, message), timeout);
+  if (!response?.ok) throw Object.assign(new Error(response?.code || 'network_error'), response, { code: response?.code || 'network_error' });
+  return response.result;
+}
 
 async function apiRequest(task, path, options = {}) {
-  const response = await fetch(`${task.apiBase}/api/director-projects/capture-sessions/${task.captureId}${path}`, {
-    ...options,
-    headers: {
-      'X-Capture-Token': task.captureToken,
-      ...(options.headers || {}),
-    },
-  });
-  if (!response.ok) {
-    let message = `采集服务请求失败 (${response.status})`;
-    try {
-      const payload = await response.json();
-      message = payload.detail || message;
-    } catch {
-      // Keep the status-based message when the response is not JSON.
-    }
-    throw new Error(message);
-  }
-  return response;
-}
-
-async function updateStage(task, stage) {
-  await apiRequest(task, '', {
-    method: 'PATCH',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ stage }),
-  });
-}
-
-async function failCapture(task, message) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), path === '/upload' ? 180_000 : 15_000);
   try {
-    await apiRequest(task, '/fail', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ message }),
+    const response = await fetch(`${task.apiBase}/api/director-projects/capture-sessions/${task.captureId}${path}`, {
+      ...options, signal: controller.signal,
+      headers: { 'X-Capture-Token': task.captureToken, ...(options.headers || {}) },
     });
-  } catch {
-    // The original error is more useful than a secondary reporting failure.
-  }
+    if (!response.ok) {
+      const payload = await response.json().catch(() => ({}));
+      throw Object.assign(new Error(typeof payload.detail === 'string' ? payload.detail : `采集服务请求失败 (${response.status})`), { apiError: true });
+    }
+    return await response.json();
+  } finally { clearTimeout(timeout); }
 }
 
-function comparableUrl(value) {
-  try {
-    const url = new URL(value);
-    url.hash = '';
-    return `${url.origin}${url.pathname}${url.search}`;
-  } catch {
-    return value;
-  }
+async function updateStage(task, stage, diagnostics) {
+  await apiRequest(task, '', { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ stage, diagnostics }) });
 }
+
+async function failCapture(task, message, diagnostics) {
+  await apiRequest(task, '/fail', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ message: message.slice(0, 500), diagnostics }),
+  }).catch(() => undefined);
+}
+
+function sourceKey(url) { return `source:${capturePageUrl(url)}`; }
 
 async function sourceTab(sourcePageUrl) {
-  const { pendingSource } = await chrome.storage.session.get('pendingSource');
-  const normalizedSourceUrl = capturePageUrl(sourcePageUrl);
-  if (pendingSource?.tabId
-    && pendingSource.sourcePageUrl === sourcePageUrl
-    && comparableUrl(normalizedSourceUrl) === comparableUrl(sourcePageUrl)
-    && pendingSource.expiresAt > Date.now()) {
-    try {
-      const tab = await chrome.tabs.get(pendingSource.tabId);
-      await chrome.storage.session.remove('pendingSource');
-      return { tab, created: false, navigateTo: '' };
-    } catch {
-      await chrome.storage.session.remove('pendingSource');
+  const key = sourceKey(sourcePageUrl);
+  const saved = (await chrome.storage.session.get(key))[key];
+  if (saved?.expiresAt > Date.now()) {
+    const tab = await chrome.tabs.get(saved.tabId).catch(() => null);
+    if (tab && (capturePageUrl(tab.url) === capturePageUrl(sourcePageUrl)
+      || (douyinVideoId(sourcePageUrl) && douyinVideoId(tab.url) === douyinVideoId(sourcePageUrl)))) {
+      return { tab, created: saved.created, navigateTo: '' };
     }
   }
-  if (pendingSource) await chrome.storage.session.remove('pendingSource');
-  const tab = await chrome.tabs.create({ url: 'about:blank', active: false });
-  return { tab, created: true, navigateTo: normalizedSourceUrl };
+  const tab = await chrome.tabs.create({ url: capturePageUrl(sourcePageUrl), active: false });
+  await chrome.storage.session.set({ [key]: { tabId: tab.id, created: true, expiresAt: Date.now() + 30 * 60_000 } });
+  return { tab, created: true, navigateTo: '' };
 }
 
-function responseHeader(headers, name) {
-  const header = (headers || []).find((item) => item.name?.toLowerCase() === name);
-  return header?.value || '';
+function header(headers, name) {
+  return (headers || []).find((item) => item.name?.toLowerCase() === name)?.value || '';
 }
 
-function responseSize(headers) {
-  const contentRange = responseHeader(headers, 'content-range');
-  const rangeTotal = Number(contentRange.match(/\/(\d+)$/)?.[1] || 0);
-  return rangeTotal || Number(responseHeader(headers, 'content-length')) || 0;
-}
+chrome.webRequest.onHeadersReceived.addListener((details) => {
+  const candidates = mediaByTab.get(details.tabId);
+  if (!candidates || details.statusCode < 200 || details.statusCode >= 300) return;
+  const type = header(details.responseHeaders, 'content-type').split(';')[0];
+  if (/\.(m3u8|mpd|m4s|ts)(?:$|[?#])/i.test(details.url)) return;
+  if (!type.startsWith('video/') && !(type === 'application/octet-stream' && looksLikeVideo(details.url))) return;
+  candidates.set(details.url, { url: details.url, source: 'network.media', score: 200 });
+  while (candidates.size > 30) candidates.delete(candidates.keys().next().value);
+}, { urls: ['<all_urls>'], types: ['media', 'xmlhttprequest', 'other'] }, ['responseHeaders']);
 
-function networkCandidate(details) {
-  if (details.tabId < 0 || !trackedCaptureTabs.has(details.tabId)) return null;
-  if (details.statusCode < 200 || details.statusCode >= 400) return null;
-  if (/\.m3u8(?:$|[?#])/i.test(details.url)) return null;
-
-  const contentType = responseHeader(details.responseHeaders, 'content-type').split(';', 1)[0].toLowerCase();
-  const urlMatch = looksLikeVideo(details.url);
-  let score = 0;
-  if (contentType.startsWith('video/')) score = 320;
-  else if (details.type === 'media' && (urlMatch || contentType === 'application/octet-stream')) score = 285;
-  else if (urlMatch && contentType === 'application/octet-stream') score = 260;
-  else if (details.type === 'media' && urlMatch && !contentType) score = 240;
-  if (!score) return null;
-
-  const sizeBytes = responseSize(details.responseHeaders);
-  if (sizeBytes >= 1_000_000) score += Math.min(60, Math.floor(Math.log10(sizeBytes) * 8));
-  return {
-    url: details.url,
-    score,
-    source: `webRequest.${details.type}`,
-    contentType,
-    sizeBytes,
-    capturedAt: Date.now(),
-  };
-}
-
-function rememberNetworkCandidate(details) {
-  const candidate = networkCandidate(details);
-  if (!candidate) return;
-  const candidates = mediaRequestsByTab.get(details.tabId) || new Map();
-  const existing = candidates.get(candidate.url);
-  if (!existing || candidate.score > existing.score) candidates.set(candidate.url, candidate);
-  const sorted = [...candidates.values()].sort((left, right) => right.score - left.score).slice(0, 30);
-  mediaRequestsByTab.set(details.tabId, new Map(sorted.map((item) => [item.url, item])));
-}
-
-chrome.webRequest.onHeadersReceived.addListener(
-  rememberNetworkCandidate,
-  { urls: ['<all_urls>'], types: ['media', 'xmlhttprequest', 'other'] },
-  ['responseHeaders'],
-);
-
-chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
-  if (trackedCaptureTabs.has(tabId) && changeInfo.status === 'loading') mediaRequestsByTab.delete(tabId);
+chrome.tabs.onUpdated.addListener((tabId, change) => {
+  if (change.status === 'loading') mediaByTab.get(tabId)?.clear();
 });
+chrome.tabs.onRemoved.addListener((tabId) => mediaByTab.delete(tabId));
 
-chrome.tabs.onRemoved.addListener((tabId) => {
-  trackedCaptureTabs.delete(tabId);
-  mediaRequestsByTab.delete(tabId);
-});
+async function extractionFromTab(tabId, targetId) {
+  const tab = await chrome.tabs.get(tabId);
+  const resolvedId = targetId || douyinVideoId(tab.url);
+  const page = await tabRequest(tabId, { type: 'EXTRACT_VIDEO', videoId: resolvedId }).catch(() => null);
+  const platform = page?.platform || platformNameForUrl(tab.url);
+  const combined = new Map((page?.candidates || []).map((item) => [item.url, item]));
+  // Unbound network responses on Douyin may be ads or prefetched recommendations.
+  if (platform !== 'douyin') {
+    for (const item of mediaByTab.get(tabId)?.values() || []) {
+      if (!combined.has(item.url)) combined.set(item.url, item);
+    }
+  }
+  const candidates = [...combined.values()].filter((item) => platform !== 'douyin' || (resolvedId && item.videoId === resolvedId));
+  return { platform, videoId: resolvedId, pageUrl: page?.pageUrl || tab.url, title: page?.title || tab.title || '', interaction: page?.interaction || '', candidates: candidates.sort((a, b) => b.score - a.score) };
+}
 
-async function extractFromTab(tabId) {
-  let pageResult = null;
+async function downloadInPage(tabId, candidate, task, maxBytes) {
+  const id = `${task.captureId}:${crypto.randomUUID()}`;
   try {
-    const response = await chrome.tabs.sendMessage(tabId, { type: 'EXTRACT_VIDEO' });
-    pageResult = response?.ok ? response.result : null;
-  } catch {
-    // Network-level capture can still succeed when a content script is unavailable.
+    const meta = await tabRequest(tabId, { type: 'DOWNLOAD_VIDEO', id, url: candidate.url, maxBytes }, 65_000);
+    if (!Number.isInteger(meta.size) || meta.size <= 0 || meta.size > maxBytes) throw Object.assign(new Error('too_large'), { code: 'too_large' });
+    const parts = [];
+    for (let offset = 0; offset < meta.size; offset += 512 * 1024) {
+      const result = await tabRequest(tabId, { type: 'VIDEO_CHUNK', id, offset });
+      const bytes = Uint8Array.from(atob(result.data), (char) => char.charCodeAt(0));
+      if (bytes.length !== Math.min(512 * 1024, meta.size - offset)) throw Object.assign(new Error('partial_video'), { code: 'partial_video' });
+      parts.push(bytes);
+    }
+    return { blob: new Blob(parts, { type: meta.contentType }), contentType: meta.contentType };
+  } finally {
+    await tabRequest(tabId, { type: 'RELEASE_VIDEO', id }).catch(() => undefined);
   }
-  const tab = await chrome.tabs.get(tabId).catch(() => null);
-  const combined = new Map();
-  for (const candidate of pageResult?.candidates || []) combined.set(candidate.url, candidate);
-  for (const candidate of mediaRequestsByTab.get(tabId)?.values() || []) {
-    const existing = combined.get(candidate.url);
-    if (!existing || candidate.score > existing.score) combined.set(candidate.url, candidate);
-  }
-  const candidates = [...combined.values()].sort((left, right) => right.score - left.score).slice(0, 30);
-  return {
-    platform: pageResult?.platform || platformNameForUrl(tab?.url || ''),
-    title: pageResult?.title || tab?.title || '',
-    pageUrl: pageResult?.pageUrl || tab?.url || '',
-    canonicalUrl: pageResult?.canonicalUrl || tab?.url || '',
-    candidates,
-    best: candidates[0] || null,
-  };
 }
 
-async function waitForVideo(tabId, timeoutMs) {
-  const deadline = Date.now() + timeoutMs;
+async function downloadInBackground(candidate, maxBytes) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 60_000);
+  try {
+    const response = await fetch(candidate.url, { credentials: 'include', cache: 'no-store', signal: controller.signal });
+    return await readVideoResponse(response, maxBytes);
+  } finally { clearTimeout(timeout); }
+}
+
+async function recordAttempt(diagnostics, candidate, context, error, video) {
+  const hash = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(candidate.url));
+  const urlKey = [...new Uint8Array(hash)].slice(0, 8).map((byte) => byte.toString(16).padStart(2, '0')).join('');
+  const code = video ? 'downloaded' : error?.code || (error?.name === 'AbortError' ? 'download_timeout' : 'network_error');
+  diagnostics.attempts.push({
+    source: candidate.source, context, resource_host: new URL(candidate.url).hostname,
+    url_key: urlKey, code, status: error?.status || 0, mime: error?.mime || video?.contentType || '',
+    size: error?.size || video?.blob.size || 0, body_kind: error?.kind || '',
+  });
+  diagnostics.attempts = diagnostics.attempts.slice(-24);
+  diagnostics.last_code = code;
+}
+
+async function locateAndDownload(task, tabId, diagnostics) {
+  const deadline = Date.now() + 240_000;
+  const attempts = new Map();
+  const started = Date.now();
+  let reloaded = false;
+  let stage = 'locating_video';
+  let targetId = douyinVideoId(task.sourcePageUrl);
+  let lastCode = 'no_target_video';
+  await updateStage(task, stage, diagnostics);
   while (Date.now() < deadline) {
-    const result = await extractFromTab(tabId);
-    if (result?.best?.url) {
-      await delay(750);
-      return await extractFromTab(tabId) || result;
+    const extraction = await extractionFromTab(tabId, targetId);
+    targetId ||= extraction.videoId;
+    diagnostics.target_video_id = targetId;
+    diagnostics.candidate_count = extraction.candidates.length;
+    if (extraction.interaction) throw Object.assign(new Error(extraction.interaction), { code: extraction.interaction });
+    const candidates = extraction.candidates.filter((item) => {
+      const tried = attempts.get(item.url);
+      return !tried || (tried.count < 2 && Date.now() - tried.at > 30_000);
+    }).slice(0, 2);
+    for (const candidate of candidates) {
+      if (stage !== 'downloading') { stage = 'downloading'; await updateStage(task, stage, diagnostics); }
+      attempts.set(candidate.url, { count: (attempts.get(candidate.url)?.count || 0) + 1, at: Date.now() });
+      for (const context of ['page', 'extension']) {
+        if (Date.now() >= deadline) break;
+        let video;
+        try {
+          const maxBytes = Math.min(task.maxBytes || MAX_VIDEO_BYTES, MAX_VIDEO_BYTES);
+          video = context === 'page' ? await downloadInPage(tabId, candidate, task, maxBytes) : await downloadInBackground(candidate, maxBytes);
+        } catch (error) {
+          await recordAttempt(diagnostics, candidate, context, error);
+          lastCode = diagnostics.last_code;
+          await updateStage(task, stage, diagnostics);
+          if (lastCode === 'too_large') throw Object.assign(new Error(lastCode), { code: lastCode });
+          continue;
+        }
+        await recordAttempt(diagnostics, candidate, context, null, video);
+        return { video, extraction };
+      }
     }
+    if (stage !== 'locating_video') { stage = 'locating_video'; await updateStage(task, stage, diagnostics); }
+    if (!reloaded && Date.now() - started > 30_000) {
+      reloaded = true;
+      await chrome.tabs.reload(tabId);
+    }
+    if (Date.now() - started > 90_000 && !candidates.length) break;
     await delay(1000);
   }
-  return null;
+  throw Object.assign(new Error(lastCode), { code: lastCode });
 }
 
-function videoFilename(mediaUrl, platform) {
-  try {
-    const name = decodeURIComponent(new URL(mediaUrl).pathname.split('/').pop() || '');
-    if (/\.(mp4|mov|m4v|webm)$/i.test(name)) return name.slice(-120);
-  } catch {
-    // Use the platform fallback below.
+const recovery = chrome.storage.session.get(null).then(async (stored) => {
+  for (const [key, value] of Object.entries(stored)) {
+    if (!key.startsWith('capture-live:')) continue;
+    await failCapture(value.task, MESSAGES.interrupted, { version: chrome.runtime.getManifest().version, last_code: 'interrupted' });
+    await chrome.storage.session.remove(key);
   }
-  return `${platform || 'captured'}-${Date.now()}.mp4`;
-}
-
-async function downloadVideo(task, extraction) {
-  const candidates = extraction.candidates?.length ? extraction.candidates : [extraction.best];
-  let lastError = null;
-  for (const candidate of candidates.filter(Boolean).slice(0, 8)) {
-    const mediaUrl = candidate.url;
-    if (/\.m3u8(?:$|[?#])/i.test(mediaUrl)) continue;
-    try {
-      const response = await fetch(mediaUrl, {
-        credentials: 'include',
-        cache: 'no-store',
-        referrer: extraction.pageUrl || task.sourcePageUrl,
-      });
-      if (!response.ok) throw new Error(`视频下载失败 (${response.status})`);
-      const blob = await response.blob();
-      if (!blob.size) throw new Error('下载到的视频文件为空');
-      const responseType = (response.headers.get('content-type') || '').split(';', 1)[0].toLowerCase();
-      const detectedType = videoMimeFromBytes(await blob.slice(0, 16).arrayBuffer());
-      if (!responseType.startsWith('video/') && !detectedType) throw new Error('识别到的资源不是视频文件');
-      const contentType = responseType.startsWith('video/') ? responseType : detectedType;
-      return { blob, contentType, filename: videoFilename(response.url || mediaUrl, extraction.platform) };
-    } catch (error) {
-      lastError = error;
-    }
-  }
-  throw new Error(`${lastError?.message || '未找到可下载的视频资源'}, 请打开原视频并开始播放后重试`);
-}
-
-async function uploadVideo(task, video, extraction) {
-  await apiRequest(task, '/upload', {
-    method: 'POST',
-    headers: {
-      'Content-Type': video.contentType,
-      'X-Video-Filename': encodeURIComponent(video.filename),
-      'X-Source-Title': encodeURIComponent((extraction.title || '').slice(0, 200)),
-    },
-    body: video.blob,
-  });
-}
+});
 
 async function runCapture(task) {
+  await recovery;
   if (activeCaptures.has(task.captureId)) return;
   activeCaptures.add(task.captureId);
-  let tabId = null;
-  let createdTab = false;
+  const key = `capture-live:${task.captureId}`;
+  const diagnostics = { version: chrome.runtime.getManifest().version, build: globalThis.EnruiCaptureBuild.build, browser: navigator.userAgent.slice(0, 256), target_video_id: '', candidate_count: 0, last_code: '', attempts: [] };
+  let source;
+  let succeeded = false;
+  let heartbeat;
   try {
-    await updateStage(task, 'opening_source');
-    const source = await sourceTab(task.sourcePageUrl);
-    tabId = source.tab.id;
-    createdTab = source.created;
-    if (!tabId) throw new Error('无法创建视频页面');
-    trackedCaptureTabs.add(tabId);
-    mediaRequestsByTab.delete(tabId);
-    if (source.navigateTo) await chrome.tabs.update(tabId, { url: source.navigateTo, active: false });
-
-    await updateStage(task, 'locating_video');
-    let extraction = await waitForVideo(tabId, 25_000);
-    if (!extraction && createdTab) {
-      mediaRequestsByTab.delete(tabId);
-      await chrome.tabs.reload(tabId);
-      extraction = await waitForVideo(tabId, 60_000);
-    }
-    if (!extraction?.best?.url) throw new Error('未识别到可下载的视频, 请确认平台已登录并打开视频详情页');
-
-    await updateStage(task, 'downloading');
-    const video = await downloadVideo(task, extraction);
-    await updateStage(task, 'uploading');
-    await uploadVideo(task, video, extraction);
+    await chrome.storage.session.set({ [key]: { task } });
+    // Chrome API activity keeps a pending transfer alive; persisted tasks detect worker restarts.
+    heartbeat = setInterval(() => { void chrome.storage.session.set({ [key]: { task } }); }, 10_000);
+    await updateStage(task, 'opening_source', diagnostics);
+    source = await sourceTab(task.sourcePageUrl);
+    mediaByTab.set(source.tab.id, new Map());
+    if (source.navigateTo) await chrome.tabs.update(source.tab.id, { url: source.navigateTo, active: false });
+    const { video, extraction } = await locateAndDownload(task, source.tab.id, diagnostics);
+    await updateStage(task, 'uploading', diagnostics);
+    const suffix = video.contentType === 'video/webm' ? 'webm' : 'mp4';
+    await apiRequest(task, '/upload', {
+      method: 'POST', headers: {
+        'Content-Type': video.contentType, 'X-Video-Filename': `${extraction.platform}-${Date.now()}.${suffix}`,
+        'X-Source-Title': encodeURIComponent(extraction.title.slice(0, 200)),
+      }, body: video.blob,
+    });
+    succeeded = true;
     await chrome.action.setBadgeText({ text: '' });
-
   } catch (error) {
-    const message = error?.message || '视频采集失败';
-    await chrome.action.setBadgeBackgroundColor({ color: '#b42318' });
-    await chrome.action.setBadgeText({ text: '!' });
-    await failCapture(task, message);
+    diagnostics.last_code = error.code || diagnostics.last_code || 'network_error';
+    await failCapture(task, error.apiError ? error.message : MESSAGES[diagnostics.last_code] || MESSAGES.network_error, diagnostics);
+    await chrome.action.setBadgeBackgroundColor({ color: '#b42318' }).catch(() => undefined);
+    await chrome.action.setBadgeText({ text: '!' }).catch(() => undefined);
   } finally {
-    if (tabId) {
-      trackedCaptureTabs.delete(tabId);
-      mediaRequestsByTab.delete(tabId);
+    clearInterval(heartbeat);
+    if (source?.tab.id) {
+      mediaByTab.delete(source.tab.id);
+      await tabRequest(source.tab.id, { type: 'STOP_CAPTURE' }).catch(() => undefined);
       const { autoClose = true } = await chrome.storage.sync.get('autoClose');
-      if (createdTab && autoClose) await chrome.tabs.remove(tabId).catch(() => undefined);
+      if (succeeded) {
+        await chrome.storage.session.remove(sourceKey(task.sourcePageUrl));
+        if (source.created && autoClose) await chrome.tabs.remove(source.tab.id).catch(() => undefined);
+      }
     }
+    await chrome.storage.session.remove(key);
     activeCaptures.delete(task.captureId);
   }
 }
 
-async function appBase() {
-  const stored = await chrome.storage.sync.get('appBase');
-  return trustedAppOrigin(stored.appBase) || DEFAULT_APP_BASE;
+async function openSource(url) {
+  const source = await sourceTab(url);
+  await chrome.tabs.update(source.tab.id, { ...(source.navigateTo ? { url: source.navigateTo } : {}), active: true });
+  await chrome.windows.update(source.tab.windowId, { focused: true });
 }
 
-async function openCurrentInApp(sourcePageUrl, sourceTabId) {
-  const base = await appBase();
-  if (sourceTabId) {
-    await chrome.storage.session.set({
-      pendingSource: { sourcePageUrl, tabId: sourceTabId, expiresAt: Date.now() + 5 * 60_000 },
-    });
-  }
-  const targetUrl = `${base}/director-inspiration?capture=1&capture_url=${encodeURIComponent(sourcePageUrl)}`;
-  const tabs = await chrome.tabs.query({});
-  const existing = tabs.find((tab) => tab.id && tab.url?.startsWith(`${base}/`));
-  if (existing?.id) {
-    await chrome.tabs.update(existing.id, { url: targetUrl, active: true });
-    if (existing.windowId) await chrome.windows.update(existing.windowId, { focused: true });
-    return;
-  }
-  await chrome.tabs.create({ url: targetUrl, active: true });
-}
-
-chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
-  if (message?.type === 'START_CAPTURE') {
-    const task = message.payload || {};
-    if (!task.captureId || !task.captureToken || !task.sourcePageUrl || !task.apiBase) {
-      sendResponse({ ok: false, error: '采集任务参数不完整' });
-      return false;
+chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  if (!['START_CAPTURE', 'OPEN_SOURCE', 'OPEN_APP'].includes(message?.type)) return;
+  void (async () => {
+    if (message.type === 'OPEN_APP' && sender.id === chrome.runtime.id && !sender.tab) {
+      const stored = await chrome.storage.sync.get('appBase');
+      await chrome.tabs.create({ url: `${trustedAppOrigin(stored.appBase) || DEFAULT_APP_BASE}/director-inspiration` });
+      return;
     }
-    void runCapture(task);
-    sendResponse({ ok: true });
-    return false;
-  }
-  if (message?.type === 'OPEN_CURRENT_IN_APP') {
-    void openCurrentInApp(message.sourcePageUrl, message.sourceTabId)
-      .then(() => sendResponse({ ok: true }))
-      .catch((error) => sendResponse({ ok: false, error: error?.message || '无法打开编导灵感' }));
-    return true;
-  }
-  return undefined;
+    const origin = trustedAppOrigin(sender.url);
+    if (!origin || sender.id !== chrome.runtime.id) throw new Error('采集请求来源无效');
+    const task = message.payload || {};
+    const sourceUrl = new URL(task.sourcePageUrl);
+    if (!['http:', 'https:'].includes(sourceUrl.protocol) || sourceUrl.username || sourceUrl.password) throw new Error('视频页面地址无效');
+    if (message.type === 'OPEN_SOURCE') { await openSource(task.sourcePageUrl); return; }
+    if (task.apiBase !== origin || !/^[a-f0-9]{32}$/.test(task.captureId || '') || !task.captureToken) throw new Error('采集任务参数无效');
+    void runCapture(task).catch(() => undefined);
+  })().then(() => sendResponse({ ok: true })).catch((error) => sendResponse({ ok: false, error: error.message }));
+  return true;
 });

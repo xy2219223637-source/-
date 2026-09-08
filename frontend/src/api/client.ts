@@ -180,10 +180,10 @@ export const directorApi = {
     return api.post<DirectorProject>('/director-projects/upload', form, { timeout: 360000 }).then((r) => r.data);
   },
   fromUrl: (url: string, name = '') => api.post<DirectorProject>('/director-projects/from-url', { url, name }).then((r) => r.data),
-  createCapture: (url: string, name = '') => api.post<{
+  createCapture: (url: string, name = '', projectId?: number) => api.post<{
     project: DirectorProject;
-    capture: { id: string; token: string; expires_at: string; source_page_url: string; source_platform: string };
-  }>('/director-projects/capture-sessions', { url, name }).then((r) => r.data),
+    capture: { id: string; token: string; expires_at: string; source_page_url: string; source_platform: string; max_bytes: number };
+  }>('/director-projects/capture-sessions', { url, name, project_id: projectId }).then((r) => r.data),
   failCapture: (captureId: string, token: string, message: string) => api.post(
     `/director-projects/capture-sessions/${captureId}/fail`,
     { message },

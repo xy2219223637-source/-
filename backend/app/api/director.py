@@ -24,6 +24,7 @@ from app.models import DirectorAsset, DirectorCaptureSession, DirectorProject, D
 from app.services.director_workflow import (
     SECTION_TEMPLATES,
     _primary_product_name,
+    _probe_media,
     analyze_reference_project,
     mix_silent_preview,
     render_ai_material_video,
@@ -55,14 +56,39 @@ class DirectorUrlCreate(BaseModel):
 class DirectorCaptureCreate(BaseModel):
     url: HttpUrl
     name: str = Field(default="", max_length=256)
+    project_id: int | None = Field(default=None, ge=1)
+
+
+class CaptureAttempt(BaseModel):
+    source: str = Field(default="", max_length=64, pattern=r"^[a-zA-Z0-9_.-]*$")
+    context: Literal["page", "extension"]
+    resource_host: str = Field(default="", max_length=253, pattern=r"^[a-zA-Z0-9.:-]*$")
+    url_key: str = Field(default="", max_length=16, pattern=r"^[a-f0-9]*$")
+    code: str = Field(default="", max_length=64, pattern=r"^[a-z_]*$")
+    status: int = Field(default=0, ge=0, le=599)
+    mime: str = Field(default="", max_length=80)
+    size: int = Field(default=0, ge=0)
+    body_kind: str = Field(default="", max_length=16)
+
+
+class CaptureDiagnostics(BaseModel):
+    version: str = Field(default="", max_length=32)
+    build: str = Field(default="", max_length=16, pattern=r"^[a-f0-9]*$")
+    browser: str = Field(default="", max_length=256)
+    target_video_id: str = Field(default="", max_length=24, pattern=r"^\d*$")
+    candidate_count: int = Field(default=0, ge=0, le=100)
+    last_code: str = Field(default="", max_length=64, pattern=r"^[a-z_]*$")
+    attempts: list[CaptureAttempt] = Field(default_factory=list, max_length=24)
 
 
 class DirectorCaptureStatusUpdate(BaseModel):
     stage: Literal["opening_source", "locating_video", "downloading", "uploading"]
+    diagnostics: CaptureDiagnostics | None = None
 
 
 class DirectorCaptureFailure(BaseModel):
     message: str = Field(default="浏览器插件未能获取视频", max_length=500)
+    diagnostics: CaptureDiagnostics | None = None
 
 
 class DirectorOriginalCreate(BaseModel):
@@ -146,12 +172,18 @@ def _project(db: Session, tenant_id: str, project_id: int) -> DirectorProject:
 
 
 def _capture_session(db: Session, capture_id: str, token: str) -> DirectorCaptureSession:
-    row = db.query(DirectorCaptureSession).filter_by(id=capture_id).with_for_update().first()
+    row = db.query(DirectorCaptureSession).filter_by(id=capture_id).first()
     if not row or not token or not capture_token_matches(token, row.token_hash):
         raise HTTPException(status_code=401, detail="采集凭证无效")
+    # Match retry's lock order, and reload state after waiting for a concurrent request.
+    project = db.query(DirectorProject).filter_by(id=row.project_id, tenant_id=row.tenant_id).populate_existing().with_for_update().first()
+    row = db.query(DirectorCaptureSession).filter_by(id=capture_id).populate_existing().with_for_update().first()
+    if row.status in {"superseded", "failed"}:
+        raise HTTPException(status_code=409, detail="采集任务已结束, 请重新采集")
+    if row.status == "completed":
+        return row
     if row.expires_at < _utcnow():
         row.status = "expired"
-        project = db.query(DirectorProject).filter_by(id=row.project_id, tenant_id=row.tenant_id).first()
         if project and project.status == "capturing":
             project.status = "failed"
             project.progress_stage = "capture_expired"
@@ -161,14 +193,21 @@ def _capture_session(db: Session, capture_id: str, token: str) -> DirectorCaptur
     return row
 
 
-def _set_capture_failed(db: Session, capture: DirectorCaptureSession, project: DirectorProject, message: str) -> None:
+def _set_capture_failed(db: Session, capture: DirectorCaptureSession, project: DirectorProject, message: str, diagnostics: CaptureDiagnostics | None = None) -> None:
+    db.refresh(project, with_for_update=True)
+    db.refresh(capture, with_for_update=True)
+    if capture.status in {"completed", "superseded", "expired"}:
+        return
     clean_message = message.strip()[:500] or "浏览器插件未能获取视频"
     capture.status = "failed"
     capture.details = {**(capture.details or {}), "error": clean_message}
+    if diagnostics:
+        capture.details = {**capture.details, "diagnostics": diagnostics.model_dump()}
     project.status = "failed"
     project.progress_stage = "capture_failed"
     project.error_message = clean_message
     db.commit()
+    logger.warning("Capture failed project=%s session=%s diagnostics=%s", project.id, capture.id, (capture.details or {}).get("diagnostics", {}))
 
 
 def _asset_out(row: DirectorAsset) -> dict[str, Any]:
@@ -214,6 +253,15 @@ def _shot_out(row: DirectorShot) -> dict[str, Any]:
 
 
 def _serialize(db: Session, row: DirectorProject) -> dict[str, Any]:
+    if row.status == "capturing":
+        db.refresh(row, with_for_update=True)
+        latest = db.query(DirectorCaptureSession).filter_by(project_id=row.id).order_by(DirectorCaptureSession.created_at.desc()).with_for_update().first()
+        if row.status == "capturing" and latest and latest.expires_at < _utcnow() and latest.status in {"waiting", "active", "uploading"}:
+            latest.status = "expired"
+            row.status = "failed"
+            row.progress_stage = "capture_expired"
+            row.error_message = "采集任务已超时, 请重新采集"
+            db.commit()
     sections = db.query(DirectorSection).filter_by(project_id=row.id).order_by(DirectorSection.sort_order).all()
     section_ids = [section.id for section in sections]
     assets = (
@@ -478,18 +526,35 @@ def create_capture_session(
 ):
     source_page_url = str(payload.url)
     platform = capture_platform(source_page_url)
-    project = DirectorProject(
-        tenant_id=auth.tenant_id,
-        name=payload.name.strip() or "链接视频",
-        mode="reference",
-        source_kind="browser_extension",
-        source_url="",
-        source_filename="",
-        status="capturing",
-        progress_stage="waiting_extension",
-        analysis={"capture": {"source_page_url": source_page_url, "source_platform": platform}},
-    )
-    db.add(project)
+    if payload.project_id:
+        project = db.query(DirectorProject).filter_by(id=payload.project_id, tenant_id=auth.tenant_id).with_for_update().first()
+        if not project:
+            raise HTTPException(status_code=404, detail="编导项目不存在")
+        if project.source_kind != "browser_extension" or project.source_url:
+            raise HTTPException(status_code=409, detail="该项目无需重新采集")
+        if (project.analysis or {}).get("capture", {}).get("source_page_url") != source_page_url:
+            raise HTTPException(status_code=409, detail="重新采集的视频链接与原项目不一致")
+        previous = db.query(DirectorCaptureSession).filter_by(project_id=project.id).with_for_update().all()
+        if any(row.status in {"waiting", "active", "uploading"} and row.expires_at > _utcnow() for row in previous):
+            raise HTTPException(status_code=409, detail="视频仍在采集中, 请等待当前任务结束")
+        for row in previous:
+            row.status = "superseded"
+        project.status = "capturing"
+        project.progress_stage = "waiting_extension"
+        project.error_message = ""
+    else:
+        project = DirectorProject(
+            tenant_id=auth.tenant_id,
+            name=payload.name.strip() or "链接视频",
+            mode="reference",
+            source_kind="browser_extension",
+            source_url="",
+            source_filename="",
+            status="capturing",
+            progress_stage="waiting_extension",
+            analysis={"capture": {"source_page_url": source_page_url, "source_platform": platform}},
+        )
+        db.add(project)
     db.flush()
     token = new_capture_token()
     capture = DirectorCaptureSession(
@@ -514,6 +579,7 @@ def create_capture_session(
             "expires_at": capture.expires_at.isoformat(),
             "source_page_url": capture.source_page_url,
             "source_platform": capture.source_platform,
+            "max_bytes": get_settings().director_video_max_upload_mb * 1024 * 1024,
         },
     }
 
@@ -528,11 +594,15 @@ def update_capture_session(
     capture = _capture_session(db, capture_id, x_capture_token)
     if capture.status == "completed":
         return {"status": "completed"}
+    if capture.status == "uploading":
+        raise HTTPException(status_code=409, detail="采集视频正在上传或验证")
     project = db.query(DirectorProject).filter_by(id=capture.project_id, tenant_id=capture.tenant_id).first()
     if not project:
         raise HTTPException(status_code=404, detail="编导项目不存在")
     capture.status = "active"
     capture.details = {**(capture.details or {}), "stage": payload.stage}
+    if payload.diagnostics:
+        capture.details = {**capture.details, "diagnostics": payload.diagnostics.model_dump()}
     project.status = "capturing"
     project.progress_stage = payload.stage
     project.error_message = ""
@@ -550,10 +620,12 @@ def fail_capture_session(
     capture = _capture_session(db, capture_id, x_capture_token)
     if capture.status == "completed":
         return {"status": "completed"}
+    if capture.status == "uploading":
+        raise HTTPException(status_code=409, detail="采集视频正在上传或验证")
     project = db.query(DirectorProject).filter_by(id=capture.project_id, tenant_id=capture.tenant_id).first()
     if not project:
         raise HTTPException(status_code=404, detail="编导项目不存在")
-    _set_capture_failed(db, capture, project, payload.message)
+    _set_capture_failed(db, capture, project, payload.message, payload.diagnostics)
     return {"status": capture.status}
 
 
@@ -600,14 +672,25 @@ async def upload_captured_video(
             async for chunk in request.stream():
                 size += len(chunk)
                 if size > max_bytes:
-                    _set_capture_failed(db, capture, project, f"视频不能超过 {get_settings().director_video_max_upload_mb}MB")
                     raise HTTPException(status_code=413, detail=f"视频不能超过 {get_settings().director_video_max_upload_mb}MB")
                 await output.write(chunk)
         if not size:
             raise HTTPException(status_code=400, detail="采集到的视频文件为空")
-
+        capture = _capture_session(db, capture_id, x_capture_token)
+        project.progress_stage = "validating_media"
+        db.commit()
+        try:
+            media_info = await asyncio.to_thread(_probe_media, temporary_path)
+            if not media_info.get("width") or not media_info.get("height") or media_info.get("duration_seconds", 0) <= 0:
+                raise ValueError("No video track")
+        except Exception as exc:
+            raise HTTPException(status_code=415, detail="采集文件不是可解析的视频, 请重新采集") from exc
+        capture = _capture_session(db, capture_id, x_capture_token)
+        db.commit()
         source_url = await get_storage().upload_path(temporary_path, filename, "director/sources")
-    except HTTPException:
+        capture = _capture_session(db, capture_id, x_capture_token)
+    except HTTPException as exc:
+        _set_capture_failed(db, capture, project, str(exc.detail))
         raise
     except Exception as exc:
         logger.exception("Browser capture upload failed for project %s", project.id)
@@ -635,7 +718,7 @@ async def upload_captured_video(
         },
     }
     capture.status = "completed"
-    capture.details = {"content_type": content_type, "filename": filename, "size_bytes": size, "source_title": source_title}
+    capture.details = {**(capture.details or {}), "content_type": content_type, "filename": filename, "size_bytes": size, "source_title": source_title}
     db.commit()
     db.refresh(project)
     background_tasks.add_task(analyze_reference_project, project.id)
@@ -716,6 +799,10 @@ def reanalyze_project(
     row = _project(db, auth.tenant_id, project_id)
     if row.mode != "reference":
         raise HTTPException(status_code=409, detail="只有参考视频项目可以重新解析")
+    if not row.source_url:
+        raise HTTPException(status_code=409, detail="视频尚未采集成功, 请先重新采集")
+    if row.status in {"capturing", "queued", "analyzing"}:
+        raise HTTPException(status_code=409, detail="视频正在处理中, 请等待当前任务结束")
     row.status = "queued"
     row.progress_stage = "queued"
     row.error_message = ""

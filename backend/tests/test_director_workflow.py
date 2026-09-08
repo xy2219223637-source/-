@@ -1,4 +1,5 @@
 import unittest
+from datetime import timedelta
 import tempfile
 from pathlib import Path
 from types import SimpleNamespace
@@ -434,17 +435,23 @@ class DirectorCaptureApiTests(unittest.TestCase):
             "X-Video-Filename": "sample.mp4",
             "Content-Type": "video/mp4",
         }
-        with patch("app.api.director.get_storage", return_value=storage), patch(
-            "app.api.director.analyze_reference_project", return_value=None
-        ):
-            upload_response = self.client.post(
-                f"/api/director-projects/capture-sessions/{capture['id']}/upload",
-                headers=headers,
-                content=b"fake-mp4-payload",
-            )
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory) / "source.jpg"
+            video = Path(directory) / "video.mp4"
+            Image.new("RGB", (64, 64), "green").save(source)
+            self.assertTrue(_render_ai_material_file(source, video, 0.3))
+            video_bytes = video.read_bytes()
+            with patch("app.api.director.get_storage", return_value=storage), patch(
+                "app.api.director.analyze_reference_project", return_value=None
+            ):
+                upload_response = self.client.post(
+                    f"/api/director-projects/capture-sessions/{capture['id']}/upload",
+                    headers=headers,
+                    content=video_bytes,
+                )
         self.assertEqual(upload_response.status_code, 200)
         self.assertEqual(upload_response.json()["status"], "queued")
-        self.assertEqual(storage.uploaded, b"fake-mp4-payload")
+        self.assertEqual(storage.uploaded, video_bytes)
         self.assertEqual(storage.filename, "sample.mp4")
         self.assertEqual(storage.subdir, "director/sources")
 
@@ -466,6 +473,104 @@ class DirectorCaptureApiTests(unittest.TestCase):
             json={"stage": "opening_source"},
         )
         self.assertEqual(response.status_code, 401)
+
+    def test_invalid_media_never_reaches_storage_or_analysis(self):
+        created = self.client.post("/api/director-projects/capture-sessions", json={"url": "https://www.douyin.com/video/7666807663723875611"}).json()
+        capture = created["capture"]
+        with patch("app.api.director.get_storage") as storage, patch("app.api.director.analyze_reference_project") as analyze:
+            response = self.client.post(
+                f"/api/director-projects/capture-sessions/{capture['id']}/upload",
+                headers={"X-Capture-Token": capture["token"], "Content-Type": "video/mp4"},
+                content=b"<html>verification required</html>",
+            )
+        self.assertEqual(response.status_code, 415)
+        storage.assert_not_called()
+        analyze.assert_not_called()
+        project = self.client.get(f"/api/director-projects/{created['project']['id']}").json()
+        self.assertEqual(project["status"], "failed")
+        self.assertEqual(project["source_url"], "")
+
+    def test_retry_uses_same_project_and_revokes_previous_session(self):
+        url = "https://www.douyin.com/video/7666807663723875611"
+        created = self.client.post("/api/director-projects/capture-sessions", json={"url": url}).json()
+        capture = created["capture"]
+        project_id = created["project"]["id"]
+        headers = {"X-Capture-Token": capture["token"]}
+        failed = self.client.post(f"/api/director-projects/capture-sessions/{capture['id']}/fail", headers=headers,
+                                  json={"message": "采集失败", "diagnostics": {"version": "0.5.0", "last_code": "not_video"}})
+        self.assertEqual(failed.status_code, 200)
+        with patch("app.api.director.analyze_reference_project") as analyze:
+            self.assertEqual(self.client.post(f"/api/director-projects/{project_id}/reanalyze").status_code, 409)
+            analyze.assert_not_called()
+        retry = self.client.post("/api/director-projects/capture-sessions", json={"url": url, "project_id": project_id})
+        self.assertEqual(retry.status_code, 200)
+        self.assertEqual(retry.json()["project"]["id"], project_id)
+        self.assertNotEqual(retry.json()["capture"]["token"], capture["token"])
+        self.assertEqual(self.client.patch(f"/api/director-projects/capture-sessions/{capture['id']}", headers=headers, json={"stage": "downloading"}).status_code, 409)
+        with self.session_factory() as db:
+            previous = db.get(DirectorCaptureSession, capture["id"])
+            self.assertEqual(previous.details["diagnostics"]["last_code"], "not_video")
+
+    def test_active_capture_cannot_be_replaced_and_expiry_allows_retry(self):
+        url = "https://www.douyin.com/video/7666807663723875611"
+        created = self.client.post("/api/director-projects/capture-sessions", json={"url": url}).json()
+        payload = {"url": url, "project_id": created["project"]["id"]}
+        self.assertEqual(self.client.post("/api/director-projects/capture-sessions", json=payload).status_code, 409)
+        with self.session_factory() as db:
+            session = db.get(DirectorCaptureSession, created["capture"]["id"])
+            session.expires_at = director_api._utcnow() - timedelta(seconds=1)
+            db.commit()
+        project = self.client.get(f"/api/director-projects/{payload['project_id']}").json()
+        self.assertEqual(project["status"], "failed")
+        self.assertEqual(self.client.post("/api/director-projects/capture-sessions", json=payload).status_code, 200)
+
+    def test_retry_cannot_access_another_tenants_project(self):
+        url = "https://www.douyin.com/video/7666807663723875611"
+        created = self.client.post("/api/director-projects/capture-sessions", json={"url": url}).json()
+        project_id = created["project"]["id"]
+        with self.session_factory() as db:
+            db.get(DirectorProject, project_id).tenant_id = "other-tenant"
+            db.commit()
+        self.assertEqual(self.client.post("/api/director-projects/capture-sessions", json={"url": url, "project_id": project_id}).status_code, 404)
+
+    def test_uploading_session_rejects_late_progress_and_failure_reports(self):
+        created = self.client.post("/api/director-projects/capture-sessions", json={"url": "https://www.douyin.com/video/7666807663723875611"}).json()
+        capture = created["capture"]
+        with self.session_factory() as db:
+            db.get(DirectorCaptureSession, capture["id"]).status = "uploading"
+            db.get(DirectorProject, created["project"]["id"]).progress_stage = "validating_media"
+            db.commit()
+        path = f"/api/director-projects/capture-sessions/{capture['id']}"
+        headers = {"X-Capture-Token": capture["token"]}
+        self.assertEqual(self.client.patch(path, headers=headers, json={"stage": "downloading"}).status_code, 409)
+        self.assertEqual(self.client.post(path + "/fail", headers=headers, json={"message": "late failure"}).status_code, 409)
+        self.assertEqual(self.client.get(f"/api/director-projects/{created['project']['id']}").json()["progress_stage"], "validating_media")
+
+    def test_superseded_upload_cannot_overwrite_retry_or_start_analysis(self):
+        created = self.client.post("/api/director-projects/capture-sessions", json={"url": "https://www.douyin.com/video/7666807663723875611"}).json()
+        capture = created["capture"]
+        session_factory = self.session_factory
+
+        class DelayedStorage:
+            async def upload_path(self, path, filename, subdir):
+                with session_factory() as db:
+                    db.get(DirectorCaptureSession, capture["id"]).status = "superseded"
+                    db.get(DirectorProject, created["project"]["id"]).progress_stage = "waiting_extension"
+                    db.commit()
+                return "/api/storage/objects/obsolete-upload"
+
+        with patch("app.api.director._probe_media", return_value={"width": 64, "height": 64, "duration_seconds": 1}), patch(
+            "app.api.director.get_storage", return_value=DelayedStorage()
+        ), patch("app.api.director.analyze_reference_project") as analyze:
+            response = self.client.post(
+                f"/api/director-projects/capture-sessions/{capture['id']}/upload",
+                headers={"X-Capture-Token": capture["token"], "Content-Type": "video/mp4"}, content=b"media fixture",
+            )
+        self.assertEqual(response.status_code, 409)
+        analyze.assert_not_called()
+        project = self.client.get(f"/api/director-projects/{created['project']['id']}").json()
+        self.assertEqual(project["source_url"], "")
+        self.assertEqual(project["progress_stage"], "waiting_extension")
 
 
 if __name__ == "__main__":
