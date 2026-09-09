@@ -61,13 +61,30 @@ export function apiUrl(path: string): string {
   return `/api${path}`;
 }
 
+let productListCache: { data: Product[]; expiresAt: number } | null = null;
+let productListRequest: Promise<Product[]> | null = null;
+
+function invalidateProductListCache() {
+  productListCache = null;
+}
+
+function listProducts() {
+  if (productListCache && productListCache.expiresAt > Date.now()) return Promise.resolve(productListCache.data);
+  if (productListRequest) return productListRequest;
+  productListRequest = api.get<Product[]>('/products').then((response) => {
+    productListCache = { data: response.data, expiresAt: Date.now() + 30_000 };
+    return response.data;
+  }).finally(() => { productListRequest = null; });
+  return productListRequest;
+}
+
 export const productApi = {
-  list: () => api.get<Product[]>('/products').then((r) => r.data),
+  list: listProducts,
   get: (id: number) => api.get<Product>(`/products/${id}`).then((r) => r.data),
-  create: (data: ProductCreate) => api.post<Product>('/products', data).then((r) => r.data),
+  create: (data: ProductCreate) => api.post<Product>('/products', data).then((r) => { invalidateProductListCache(); return r.data; }),
   update: (id: number, data: Partial<ProductCreate>) =>
-    api.put<Product>(`/products/${id}`, data).then((r) => r.data),
-  remove: (id: number) => api.delete(`/products/${id}`).then((r) => r.data),
+    api.put<Product>(`/products/${id}`, data).then((r) => { invalidateProductListCache(); return r.data; }),
+  remove: (id: number) => api.delete(`/products/${id}`).then((r) => { invalidateProductListCache(); return r.data; }),
   uploadImage: async (file: File) => {
     const form = new FormData();
     form.append('file', file);
@@ -79,6 +96,7 @@ export const productApi = {
     form.append('image_type', imageType);
     files.forEach((f) => form.append('files', f));
     const { data } = await api.post<Product>(`/products/${productId}/images`, form);
+    invalidateProductListCache();
     return data;
   },
   listAssets: (productId: number) =>
