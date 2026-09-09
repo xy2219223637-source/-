@@ -88,6 +88,7 @@ export interface AutoEditAsset {
 }
 export interface VideoLibraryAsset {
   id:number;asset_id:string;product_id:number;filename:string;source:string;library_type:'semi_finished'|'finished';asset_kind:'material'|'final_output';generation_depth:number;origin_asset_ids:string[];reusable_status:VideoReusableStatus;burned_subtitles:boolean;has_background_music:boolean;object_url:string;duration_seconds:number;width:number;height:number;fps:number;has_audio:boolean;status:string;excluded:boolean;duplicate?:boolean;
+  created_at:string;
   ai_tags:string[];manual_tags:string[];removed_ai_tags:string[];effective_tags:string[];
   analysis:null|{id:number;status:string;summary:string;model:string;prompt_version:string;analysis_json:Record<string,unknown>;request_count:number;retry_count:number;error_message:string};
   highlights:Array<{highlight_id:string;start:number;end:number;description:string;reason:string;recommended_roles:string[];content_role?:string;track_role?:string;speech_text?:string;speaker_id?:string;score:number}>;

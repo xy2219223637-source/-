@@ -7,7 +7,7 @@ import json
 import subprocess
 import tempfile
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
 
@@ -56,9 +56,15 @@ class MultipartComplete(BaseModel):
     session_id: str
 
 
-def _serialize(db: Session, asset: VideoAsset) -> dict[str, Any]:
-    analysis = db.query(VideoAssetAnalysis).filter(VideoAssetAnalysis.asset_id == asset.id).order_by(VideoAssetAnalysis.id.desc()).first()
-    highlights = db.query(VideoHighlight).filter(VideoHighlight.asset_id == asset.id).order_by(VideoHighlight.start_seconds).all()
+_NOT_LOADED = object()
+
+
+def _serialize(db: Session, asset: VideoAsset, analysis: Any = _NOT_LOADED,
+               highlights: Any = _NOT_LOADED) -> dict[str, Any]:
+    if analysis is _NOT_LOADED:
+        analysis = db.query(VideoAssetAnalysis).filter(VideoAssetAnalysis.asset_id == asset.id).order_by(VideoAssetAnalysis.id.desc()).first()
+    if highlights is _NOT_LOADED:
+        highlights = db.query(VideoHighlight).filter(VideoHighlight.asset_id == asset.id).order_by(VideoHighlight.start_seconds).all()
     effective_tags = list(dict.fromkeys([tag for tag in (asset.ai_tags or []) if tag not in (asset.removed_ai_tags or [])] + (asset.manual_tags or [])))
     return {"id": asset.id, "asset_id": asset.asset_id, "product_id": asset.product_id, "filename": asset.filename,
             "source": asset.source, "library_type": asset.library_type, "asset_kind": asset.asset_kind,
@@ -67,7 +73,9 @@ def _serialize(db: Session, asset: VideoAsset) -> dict[str, Any]:
             "burned_subtitles": asset.burned_subtitles, "has_background_music": bool(asset.has_background_music),
             "object_url": asset.object_url, "duration_seconds": asset.duration_seconds,
             "width": asset.width, "height": asset.height, "fps": asset.fps, "has_audio": asset.has_audio,
-            "status": asset.status, "excluded": asset.excluded, "ai_tags": asset.ai_tags or [],
+            "status": asset.status, "excluded": asset.excluded,
+            "created_at": asset.created_at.replace(tzinfo=timezone.utc).isoformat(),
+            "ai_tags": asset.ai_tags or [],
             "manual_tags": asset.manual_tags or [], "removed_ai_tags": asset.removed_ai_tags or [], "effective_tags": effective_tags,
             "analysis": None if not analysis else {"id": analysis.id, "status": analysis.status, "summary": analysis.summary,
                 "model": analysis.model, "prompt_version": analysis.prompt_version, "analysis_json": analysis.analysis_json,
@@ -369,7 +377,17 @@ def list_assets(product_id: Optional[int] = None, library_type: Optional[str] = 
     if product_id is not None: query = query.filter(VideoAsset.product_id == product_id)
     if library_type is not None: query = query.filter(VideoAsset.library_type == library_type)
     if asset_kind is not None: query = query.filter(VideoAsset.asset_kind == asset_kind)
-    return [_serialize(db, asset) for asset in query.order_by(VideoAsset.created_at.desc()).all()]
+    assets = query.order_by(VideoAsset.created_at.desc()).all()
+    if not assets:
+        return []
+    asset_ids = [asset.id for asset in assets]
+    latest_analysis: dict[int, VideoAssetAnalysis] = {}
+    for analysis in db.query(VideoAssetAnalysis).filter(VideoAssetAnalysis.asset_id.in_(asset_ids)).order_by(VideoAssetAnalysis.id.desc()).all():
+        latest_analysis.setdefault(analysis.asset_id, analysis)
+    highlights_by_asset: dict[int, list[VideoHighlight]] = {asset_id: [] for asset_id in asset_ids}
+    for highlight in db.query(VideoHighlight).filter(VideoHighlight.asset_id.in_(asset_ids)).order_by(VideoHighlight.asset_id, VideoHighlight.start_seconds).all():
+        highlights_by_asset[highlight.asset_id].append(highlight)
+    return [_serialize(db, asset, latest_analysis.get(asset.id), highlights_by_asset[asset.id]) for asset in assets]
 
 
 @router.post("")
