@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>恩睿视频采集助手</title>
+    <link rel="stylesheet" href="popup.css" />
+  </head>
+  <body>
+    <main>
+      <header>
+        <div class="mark">ER</div>
+        <div>
+          <h1>视频采集助手</h1>
+            <p id="platform">后台解析</p>
+        </div>
+      </header>
+      <section>
+        <div id="page-title" class="page-title">当前页面</div>
+        <div id="page-url" class="page-url"></div>
+      </section>
+      <label class="toggle-row">
+        <input id="auto-close" type="checkbox" />
+        <span>成功后关闭临时标签页</span>
+      </label>
+      <button id="collect" type="button">打开编导灵感</button>
+      <p id="status" role="status"></p>
+    </main>
+    <script src="build-info.js"></script>
+    <script src="capture-utils.js"></script>
+    <script src="popup.js"></script>
+  </body>
+</html>

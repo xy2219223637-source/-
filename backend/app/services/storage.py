@@ -115,6 +115,15 @@ class AliyunOSSProvider:
         self.bucket.put_object(key, data, headers=headers)
         return OBJECT_ROUTE + _token(key)
 
+    def save_path(self, path: Path, filename: str, subdir: str) -> str:
+        key = self._new_key(filename, subdir)
+        headers = {}
+        content_type = mimetypes.guess_type(filename)[0]
+        if content_type:
+            headers["Content-Type"] = content_type
+        self.bucket.put_object_from_file(key, str(path), headers=headers)
+        return OBJECT_ROUTE + _token(key)
+
     def local_path(self, url: str) -> Optional[Path]:
         key = object_key(url)
         if not key:
@@ -204,6 +213,9 @@ class StorageService:
 
     async def upload(self, data: bytes, filename: str, subdir: str) -> str:
         return await asyncio.to_thread(self.provider.save_bytes, data, filename, subdir)
+
+    async def upload_path(self, path: Path, filename: str, subdir: str) -> str:
+        return await asyncio.to_thread(self.provider.save_path, path, filename, subdir)
 
     def save_bytes(self, data: bytes, filename: str, subdir: str) -> str:
         return self.provider.save_bytes(data, filename, subdir)

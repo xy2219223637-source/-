@@ -4,8 +4,10 @@ services:
     build:
       context: ./backend
     env_file:
-      - ${APP_ENV_FILE:-./deploy/.env.production.example}
+      - ${APP_ENV_FILE:-./backend/.env}
     restart: unless-stopped
+    ports:
+      - "${BACKEND_BIND:-127.0.0.1}:${BACKEND_PORT:-8000}:8000"
     expose:
       - "8000"
     healthcheck:
