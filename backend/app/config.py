@@ -86,6 +86,14 @@ class Settings(BaseSettings):
     auth_secret: str = "change-this-secret-in-production"
     access_token_hours: int = 24
 
+    qianchuan_enabled: bool = False
+    qianchuan_app_id: str = ""
+    qianchuan_app_secret: str = ""
+    qianchuan_authorization_url: str = ""
+    qianchuan_redirect_uri: str = ""
+    qianchuan_scope: str = ""
+    qianchuan_token_encryption_key: str = ""
+
     host: str = "0.0.0.0"
     port: int = 8000
     debug: bool = True

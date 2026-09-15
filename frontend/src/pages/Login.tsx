@@ -12,7 +12,9 @@ export default function Login() {
     try {
       const result = registering ? await authApi.register(form) : await authApi.login(form.email, form.password);
       localStorage.setItem('access_token', result.access_token);
-      window.location.href = '/';
+      const oauthReturn = sessionStorage.getItem('qianchuan_oauth_return') || '';
+      sessionStorage.removeItem('qianchuan_oauth_return');
+      window.location.href = /^\/qianchuan\/oauth\/result\?session_id=[0-9a-f-]{36}$/.test(oauthReturn) ? oauthReturn : '/';
     } catch (err: any) {
       setError(err.response?.data?.detail || '操作失败');
     }

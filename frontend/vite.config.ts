@@ -1,8 +1,14 @@
-import { defineConfig } from 'vite';
+import { createLogger, defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
 import tailwindcss from '@tailwindcss/vite';
 
+const logger = createLogger();
+const logError = logger.error.bind(logger);
+logger.error = (message, options) => logError(message.includes('/api/qianchuan/oauth/callback')
+  ? '千川授权回调代理失败，请检查后端服务。' : message, options);
+
 export default defineConfig({
+  customLogger: logger,
   plugins: [react(), tailwindcss()],
   build: {
     rollupOptions: {

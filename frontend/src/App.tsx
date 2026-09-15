@@ -29,6 +29,7 @@ const AutoEditWorkspace = lazy(() => import('./pages/AutoEditWorkspace'));
 const VideoAssetLibrary = lazy(() => import('./pages/VideoAssetLibrary'));
 const FinalVideoLibrary = lazy(() => import('./pages/FinalVideoLibrary'));
 const FinalVideoDetail = lazy(() => import('./pages/FinalVideoDetail'));
+const QianchuanOAuthResult = lazy(() => import('./pages/QianchuanOAuthResult'));
 
 function PageLoading() {
   return <div className="min-h-screen grid place-items-center bg-[var(--bg)] text-[var(--muted)]"><div className="flex items-center gap-2 text-sm"><Loader2 size={18} className="animate-spin text-[var(--accent)]" />页面加载中…</div></div>;
@@ -65,6 +66,7 @@ export default function App() {
             <Route path="finished-video-assets" element={<VideoAssetLibrary libraryType="finished" title="成品素材库" description="只存放可参与混剪的成品片段。每段保留原声、原画面、原字幕和原 BGM，审核为可混剪后进入成品混剪。" />} />
             <Route path="final-videos" element={<FinalVideoLibrary />} />
             <Route path="final-videos/:id" element={<FinalVideoDetail />} />
+            <Route path="qianchuan/oauth/result" element={<QianchuanOAuthResult />} />
             <Route path="smart-video-compose" element={<PerformanceVideoProjectsPage editMode="smart_compose" title="智能成片" description="只用半成品素材，按 Hook→卖点→品牌信任→痛点→展示→使用→效果→直播间 CTA 生成成片，并自动进入成片库。" />} />
             <Route path="smart-video-compose/:id" element={<AutoEditWorkspace />} />
             <Route path="finished-video-remix" element={<PerformanceVideoProjectsPage editMode="finished_remix" title="成品混剪" description="只用已审核可复用的成品素材，保留原声、原画面和原字幕，按相邻语义衔接生成多个去重版本。" />} />

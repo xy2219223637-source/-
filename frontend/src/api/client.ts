@@ -37,6 +37,9 @@ api.interceptors.request.use((config) => {
 
 api.interceptors.response.use(undefined, (error) => {
   if (error.response?.status === 401 && !window.location.pathname.startsWith('/login')) {
+    if (window.location.pathname === '/qianchuan/oauth/result') {
+      sessionStorage.setItem('qianchuan_oauth_return', window.location.pathname + window.location.search);
+    }
     localStorage.removeItem('access_token');
     window.location.href = '/login';
   }
@@ -47,6 +50,73 @@ export const authApi = {
   login: (email: string, password: string) => api.post('/auth/login', { email, password }).then((r) => r.data),
   register: (payload: { tenant_name: string; tenant_code: string; name: string; email: string; password: string }) =>
     api.post('/auth/register', payload).then((r) => r.data),
+};
+
+export interface QianchuanAccount {
+  id: string;
+  advertiser_id: string;
+  advertiser_name: string;
+  source_account_id: string;
+  source_account_name: string;
+  source_account_type: string;
+}
+
+export interface QianchuanAccounts {
+  configuration: {status: string; missing: string[]};
+  can_manage: boolean;
+  connections: {id: string; status: string; error: string; warnings: string[];
+    last_synced_at: string | null; accounts: QianchuanAccount[]}[];
+}
+
+export interface QianchuanSessionResult {
+  session_id: string;
+  status: string;
+  error_code: string;
+  message: string;
+  connection_id: string;
+  connection_status: string;
+  connection_error: string;
+  return_path: string;
+}
+
+export interface QianchuanUpload {
+  id: string; video_asset_id: number; binding_id: string; advertiser_id: string; advertiser_name: string;
+  filename: string; is_aigc: boolean; status: string; phase: string; material_id: string; video_id: string;
+  error_message: string; created_at: string; updated_at: string;
+  auto_pending: boolean; can_retry: boolean; can_verify: boolean;
+}
+
+export interface QianchuanReportMetric {
+  label: string;
+  value: string | null;
+}
+
+export interface QianchuanMaterialReport {
+  upload_id: string;
+  advertiser_id: string;
+  material_id: string;
+  data_topic: string;
+  start_time: string;
+  end_time: string;
+  status: 'available' | 'no_data';
+  metrics: Record<string, QianchuanReportMetric>;
+  per_second: {status: 'unavailable'; message: string};
+}
+
+export const qianchuanApi = {
+  accounts: () => api.get<QianchuanAccounts>('/qianchuan/accounts').then(r => r.data),
+  authorize: (video_asset_id?: number, connection_id?: string) => api.post<{session_id: string; authorization_url: string}>(
+    '/qianchuan/oauth/sessions', {video_asset_id, connection_id}).then(r => r.data),
+  session: (id: string) => api.get<QianchuanSessionResult>(`/qianchuan/oauth/sessions/${encodeURIComponent(id)}`).then(r => r.data),
+  sync: (id: string) => api.post(`/qianchuan/connections/${encodeURIComponent(id)}/sync`),
+  disable: (id: string) => api.delete(`/qianchuan/connections/${encodeURIComponent(id)}`),
+  remove: (id: string) => api.post(`/qianchuan/connections/${encodeURIComponent(id)}/remove`),
+  upload: (video_asset_id: number, binding_id: string, filename: string, is_aigc: boolean) =>
+    api.post<QianchuanUpload>('/qianchuan/uploads', {video_asset_id, binding_id, filename, is_aigc}).then(r => r.data),
+  uploads: (video_asset_id: number) => api.get<QianchuanUpload[]>('/qianchuan/uploads', {params: {video_asset_id}}).then(r => r.data),
+  retryUpload: (id: string) => api.post<QianchuanUpload>(`/qianchuan/uploads/${encodeURIComponent(id)}/retry`).then(r => r.data),
+  report: (id: string, days: number) => api.get<QianchuanMaterialReport>(
+    `/qianchuan/uploads/${encodeURIComponent(id)}/report`, {params: {days}}).then(r => r.data),
 };
 
 export function mediaUrl(path: string): string {

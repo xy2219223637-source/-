@@ -14,6 +14,11 @@ from app.models import AuditLog, CreativeBatchJob, CreativeGeneration
 from app.services.production_queue import start_worker, stop_worker
 from app.services.video_analysis_queue import start_video_analysis_worker, stop_video_analysis_worker
 from app.services.redis_client import get_redis
+from app.api import qianchuan
+from app.services.qianchuan.service import get_qianchuan_service, install_log_filters
+from app.services.qianchuan.worker import start_qianchuan_worker, stop_qianchuan_worker
+
+install_log_filters()
 
 settings = get_settings()
 
@@ -63,6 +68,7 @@ app.include_router(storage.router, prefix="/api")
 app.include_router(videos.router, prefix="/api")
 app.include_router(director.router, prefix="/api")
 app.include_router(auto_edit.router, prefix="/api")
+app.include_router(qianchuan.router, prefix="/api")
 app.include_router(video_library.router, prefix="/api")
 
 @app.on_event("startup")
@@ -96,11 +102,13 @@ def on_startup() -> None:
         db.close()
     start_worker()
     start_video_analysis_worker()
+    start_qianchuan_worker()
 
 @app.on_event("shutdown")
 def on_shutdown() -> None:
     stop_worker()
     stop_video_analysis_worker()
+    stop_qianchuan_worker()
 
 
 @app.get("/api/health")
@@ -124,4 +132,5 @@ def health() -> dict:
         "database": engine.dialect.name,
         "redis": redis_status,
         "storage": settings.storage_provider,
+        "qianchuan": get_qianchuan_service().configuration(),
     }

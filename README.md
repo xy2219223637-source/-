@@ -6,6 +6,10 @@
 - [功能说明](docs/02-FEATURES.md)：当前功能范围和推荐业务流程。
 - [功能实现与开发指南](docs/03-IMPLEMENTATION-GUIDE.md)：关键入口、实现链路、扩展约定与技术债。
 - [业务流程图索引](docs/04-FLOWCHARTS.md)：商品详情页图片生成的完整流程图、分页说明与维护约定。
+- [巨量千川素材上传技术设计](docs/05-QIANCHUAN-MATERIAL-UPLOAD-TECHNICAL-DESIGN.md)：授权回调配置、账户解析、视频上传、失败恢复与验收方案。
+- [千川授权闭环验证记录](docs/06-QIANCHUAN-AUTH-VERIFICATION.md)：已实现范围、Mock 测试结果、本地运行和真实联调前置条件。
+- [千川素材上传验证记录](docs/07-QIANCHUAN-UPLOAD-VERIFICATION.md)：上传队列、结果核验、异常恢复和真实上传素材记录。
+- [千川素材数据报表接口](docs/08-QIANCHUAN-REPORT-API.md)：替代接口、参数与指标、Python 示例、真实查询结果及逐秒数据限制。
 
 ## 阿里云一键部署
 
