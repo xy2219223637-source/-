@@ -74,6 +74,33 @@ export interface AutoEditClip {
   duration_seconds:number; role:string; reason:string; audio_mode:'source'|'mute'; transition:'cut'|'fade';
 }
 export type VideoReusableStatus = 'review_required'|'reusable'|'excluded'|'blocked';
+export type VideoObjectType = 'material'|'final_output';
+export type VideoTagAppliesTo = VideoObjectType|'both';
+export interface VideoCategoryDefinition {
+  id:number;object_type:VideoObjectType;parent_id:number|null;name:string;code:string;sort_order:number;
+  status:'active'|'inactive';usage_count:number;child_count:number;
+}
+export interface VideoTagGroupDefinition {
+  id:number;name:string;code:string;applies_to:VideoTagAppliesTo;inherit_to_final:boolean;sort_order:number;
+  status:'active'|'inactive';usage_count:number;tag_count:number;
+}
+export interface VideoTaxonomyTag {
+  id:number;group_id:number|null;name:string;code:string;scope:'public'|'personal';applies_to:VideoTagAppliesTo;
+  sort_order:number;status:'active'|'inactive';usage_count:number;
+}
+export interface VideoTagAssignment extends Omit<VideoTaxonomyTag,'code'|'sort_order'|'status'|'usage_count'> {
+  group_name:string|null;status:'active'|'inactive';source:'manual'|'inherited'|'ai';confidence:number;confirmed:boolean;
+}
+export interface VideoFilterPreset {
+  id:number;object_type:VideoObjectType;name:string;filters:Record<string,unknown>;created_at:string;updated_at:string;
+}
+export interface VideoTaxonomyCatalog {
+  object_type:VideoObjectType;can_manage_public:boolean;categories:VideoCategoryDefinition[];
+  groups:VideoTagGroupDefinition[];public_tags:VideoTaxonomyTag[];personal_tags:VideoTaxonomyTag[];presets:VideoFilterPreset[];
+}
+export interface VideoTaxonomyFilterValue {
+  categoryId:number|null;publicTagIds:number[];publicTagMatchMode:'any'|'all';personalTagIds:number[];
+}
 export interface AutoEditVariant {
   variant_id:string; name:string; target_duration_seconds:number; actual_duration_seconds:number; edit_mode?:'smart_compose'|'finished_remix';
   strategy:{hook_approach:string;selection_principle:string;pace:string;average_shot_duration_seconds:number;difference_from_other_versions:string};
@@ -88,8 +115,10 @@ export interface AutoEditAsset {
 }
 export interface VideoLibraryAsset {
   id:number;asset_id:string;product_id:number;filename:string;source:string;library_type:'semi_finished'|'finished';asset_kind:'material'|'final_output';generation_depth:number;origin_asset_ids:string[];reusable_status:VideoReusableStatus;burned_subtitles:boolean;has_background_music:boolean;object_url:string;duration_seconds:number;width:number;height:number;fps:number;has_audio:boolean;status:string;excluded:boolean;duplicate?:boolean;
+  category_id:number|null;category:null|{id:number;name:string;code:string;status:'active'|'inactive';parent_id:number|null;parent_name:string|null;path:string[]};
   created_at:string;
   ai_tags:string[];manual_tags:string[];removed_ai_tags:string[];effective_tags:string[];
+  taxonomy_tags:VideoTagAssignment[];public_tags:VideoTagAssignment[];personal_tags:VideoTagAssignment[];
   analysis:null|{id:number;status:string;summary:string;model:string;prompt_version:string;analysis_json:Record<string,unknown>;request_count:number;retry_count:number;error_message:string};
   highlights:Array<{highlight_id:string;start:number;end:number;description:string;reason:string;recommended_roles:string[];content_role?:string;track_role?:string;speech_text?:string;speaker_id?:string;score:number}>;
 }

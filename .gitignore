@@ -33,3 +33,6 @@ dist/
 *.log
 .npm/
 .eslintcache
+
+# IDE
+.idea/

@@ -15,6 +15,7 @@ const CreativeCanvasPage = lazy(() => import('./pages/CreativeCanvas'));
 const StoryboardPage = lazy(() => import('./pages/Storyboard'));
 const BrandVisualsPage = lazy(() => import('./pages/BrandVisuals'));
 const TaskCenterPage = lazy(() => import('./pages/TaskCenter'));
+const VideoTaxonomyPage = lazy(() => import('./pages/VideoTaxonomy'));
 const DetailTemplatesPage = lazy(() => import('./pages/DetailTemplates'));
 const ProductionHubPage = lazy(() => import('./pages/ProductionHub'));
 const QualityWorkbenchPage = lazy(() => import('./pages/QualityWorkbench'));
@@ -27,6 +28,7 @@ const ShootingTasksPage = lazy(() => import('./pages/ShootingTasks'));
 const PerformanceVideoProjectsPage = lazy(() => import('./pages/PerformanceVideoProjects'));
 const AutoEditWorkspace = lazy(() => import('./pages/AutoEditWorkspace'));
 const VideoAssetLibrary = lazy(() => import('./pages/VideoAssetLibrary'));
+const VideoAssetDetail = lazy(() => import('./pages/VideoAssetDetail'));
 const FinalVideoLibrary = lazy(() => import('./pages/FinalVideoLibrary'));
 const FinalVideoDetail = lazy(() => import('./pages/FinalVideoDetail'));
 const ManualComposeProjects = lazy(() => import('./pages/ManualComposeProjects'));
@@ -51,6 +53,7 @@ export default function App() {
             <Route path="design-skills" element={<DesignSkillsPage />} />
             <Route path="brand-visuals" element={<BrandVisualsPage />} />
             <Route path="task-center" element={<TaskCenterPage />} />
+            <Route path="video-taxonomy" element={<VideoTaxonomyPage />} />
             <Route path="detail-templates" element={<DetailTemplatesPage />} />
             <Route path="production" element={<ProductionHubPage />} />
             <Route path="quality" element={<QualityWorkbenchPage />} />
@@ -64,7 +67,9 @@ export default function App() {
             <Route path="director-inspiration/:id/workspace" element={<DirectorWorkspacePage />} />
             <Route path="shooting-tasks" element={<ShootingTasksPage />} />
             <Route path="semi-finished-assets" element={<VideoAssetLibrary libraryType="semi_finished" title="半成品素材库" description="存放达人口播、商品展示、质地特写、上脸过程、效果对比和空镜。上传后自动分析原声、口型与可用时间段，只供智能成片使用。" />} />
+            <Route path="semi-finished-assets/:id" element={<VideoAssetDetail libraryType="semi_finished" title="半成品素材库" />} />
             <Route path="finished-video-assets" element={<VideoAssetLibrary libraryType="finished" title="成品素材库" description="只存放可参与混剪的成品片段。每段保留原声、原画面、原字幕和原 BGM，审核为可混剪后进入成品混剪。" />} />
+            <Route path="finished-video-assets/:id" element={<VideoAssetDetail libraryType="finished" title="成品素材库" />} />
             <Route path="final-videos" element={<FinalVideoLibrary />} />
             <Route path="final-videos/:id" element={<FinalVideoDetail />} />
             <Route path="manual-video-compose" element={<ManualComposeProjects />} />

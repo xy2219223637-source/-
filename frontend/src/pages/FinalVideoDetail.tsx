@@ -1,8 +1,9 @@
-import {useEffect,useMemo,useRef,useState} from 'react';
+import {useCallback,useEffect,useMemo,useRef,useState} from 'react';
 import {ArrowLeft,Download,ExternalLink,Loader2,Send} from 'lucide-react';
 import {Link,useParams} from 'react-router-dom';
-import {mediaUrl,productApi,videoLibraryApi} from '../api/client';
-import type {Product,VideoLibraryAsset} from '../types';
+import {mediaUrl,productApi,videoLibraryApi,videoTaxonomyApi} from '../api/client';
+import {VideoTaxonomyEditor,VideoTaxonomySummary} from '../components/VideoTaxonomyEditor';
+import type {Product,VideoLibraryAsset,VideoTaxonomyCatalog} from '../types';
 
 type MetricKey='click_cnt'|'dy_follow'|'dy_comment'|'dy_like'|'user_lose_cnt';
 const metricLabels:Record<MetricKey,string>={click_cnt:'点击数',dy_follow:'关注数',dy_comment:'评论数',dy_like:'点赞数',user_lose_cnt:'流失数'};
@@ -24,24 +25,38 @@ function MetricCard({label,value,helper}:{label:string;value:string;helper?:stri
 
 export default function FinalVideoDetail(){
   const {id}=useParams();
+  const assetId=Number(id);
   const videoRef=useRef<HTMLVideoElement>(null);
   const [video,setVideo]=useState<VideoLibraryAsset|null>(null);
   const [product,setProduct]=useState<Product|null>(null);
+  const [catalog,setCatalog]=useState<VideoTaxonomyCatalog|null>(null);
   const [loading,setLoading]=useState(true);
   const [error,setError]=useState('');
+  const [editingTaxonomy,setEditingTaxonomy]=useState(false);
   const [pushNotice,setPushNotice]=useState(false);
   const [primary,setPrimary]=useState<MetricKey>('click_cnt');
   const [secondary,setSecondary]=useState<MetricKey>('user_lose_cnt');
   const [currentSecond,setCurrentSecond]=useState(0);
   const [hoverSecond,setHoverSecond]=useState<number|null>(null);
 
+  const refreshVideo=useCallback(async()=>{
+    if(!Number.isInteger(assetId)||assetId<=0)throw new Error('not-found');
+    const selected=await videoLibraryApi.get(assetId);
+    if(selected.asset_kind!=='final_output')throw new Error('not-found');
+    setVideo(selected);
+  },[assetId]);
+
+  const refreshCatalog=useCallback(async()=>{
+    setCatalog(await videoTaxonomyApi.catalog('final_output'));
+  },[]);
+
   useEffect(()=>{let active=true;(async()=>{try{
-    const videos=await videoLibraryApi.list(undefined,'finished','final_output');
-    const selected=videos.find(item=>String(item.id)===id);
-    if(!selected)throw new Error('not-found');
-    const products=await productApi.list();
-    if(active){setVideo(selected);setProduct(products.find(item=>item.id===selected.product_id)||null)}
-  }catch{if(active)setError('没有找到这条成片')}finally{if(active)setLoading(false)}})();return()=>{active=false}},[id]);
+    if(!Number.isInteger(assetId)||assetId<=0)throw new Error('not-found');
+    const [selected,nextCatalog]=await Promise.all([videoLibraryApi.get(assetId),videoTaxonomyApi.catalog('final_output')]);
+    if(selected.asset_kind!=='final_output')throw new Error('not-found');
+    const selectedProduct=await productApi.get(selected.product_id);
+    if(active){setVideo(selected);setProduct(selectedProduct);setCatalog(nextCatalog)}
+  }catch{if(active)setError('没有找到这条成片')}finally{if(active)setLoading(false)}})();return()=>{active=false}},[assetId]);
 
   const chartPoints=useMemo(()=>{
     const duration=Math.max(1,Math.min(30,Math.round(video?.duration_seconds||30)));
@@ -81,6 +96,8 @@ export default function FinalVideoDetail(){
 
     <section className="panel grid overflow-hidden lg:grid-cols-[minmax(360px,1.1fr)_minmax(320px,.9fr)]"><div className="grid min-h-[600px] place-items-center bg-black p-5"><video ref={videoRef} className="max-h-[70vh] max-w-full" controls playsInline src={mediaUrl(video.object_url)} onTimeUpdate={event=>setCurrentSecond(event.currentTarget.currentTime)}/></div><div className="p-6 lg:p-8"><div className="flex items-center justify-between border-b border-[var(--border)] pb-5"><div><div className="text-xs text-[var(--muted)]">推送状态</div><div className="mt-2 font-medium">未推送到千川</div></div><span className="rounded-full bg-[#f0f0ee] px-3 py-1 text-xs">本地成片</span></div><dl className="mt-6 grid grid-cols-[100px_1fr] gap-x-4 gap-y-5 text-sm"><dt className="text-[var(--muted)]">商品</dt><dd>{product?.name||'—'}</dd><dt className="text-[var(--muted)]">文件名</dt><dd className="break-all">{video.filename}</dd><dt className="text-[var(--muted)]">时长</dt><dd>{formatDuration(video.duration_seconds)}</dd><dt className="text-[var(--muted)]">画面规格</dt><dd>{video.width} × {video.height}{video.height>video.width?' · 竖版':video.height===video.width?' · 方形':' · 横版'}</dd><dt className="text-[var(--muted)]">生成时间</dt><dd>{formatDate(video.created_at)}</dd><dt className="text-[var(--muted)]">千川素材 ID</dt><dd>—</dd><dt className="text-[var(--muted)]">投放使用</dt><dd>— 个计划</dd></dl></div></section>
 
+    <section className="panel p-5"><VideoTaxonomySummary asset={video} showAiTags={false} onEdit={()=>setEditingTaxonomy(true)}/></section>
+
     <section className="panel p-5"><div className="flex flex-wrap items-start justify-between gap-3"><div><h2 className="text-lg font-medium">投放表现</h2><p className="mt-1 text-xs text-[var(--muted)]">展示结构依据巨量千川素材报表字段设计</p></div><div className="flex items-center gap-3"><span className="rounded bg-amber-50 px-2.5 py-1 text-xs text-amber-800">示例数据 · 尚未接入千川</span><select className="input-select"><option>近 7 天</option><option>近 30 天</option><option>自定义时间</option></select></div></div><div className="mt-5 grid grid-cols-2 gap-3 lg:grid-cols-4">{overview.map(([label,value])=><MetricCard key={label} label={label} value={value}/>)}</div><div className="mt-3 grid grid-cols-2 gap-3 lg:grid-cols-4">{delivery.map(([label,value])=><MetricCard key={label} label={label} value={value}/>)}</div><div className="mt-7 flex items-center justify-between"><h3 className="font-medium">视频播放质量</h3><span className="text-xs text-[var(--muted)]">数据更新时间：—</span></div><div className="mt-3 grid grid-cols-2 gap-3 lg:grid-cols-5">{quality.map(([label,value])=><MetricCard key={label} label={label} value={value}/>)}</div></section>
 
     <section className="panel p-5"><div className="flex items-center justify-between"><div><h2 className="text-lg font-medium">互动表现</h2><p className="mt-1 text-xs text-[var(--muted)]">当前时间范围内的互动汇总</p></div><span className="rounded bg-amber-50 px-2.5 py-1 text-xs text-amber-800">示例数据</span></div><div className="mt-5 grid grid-cols-2 gap-3 lg:grid-cols-4">{interactions.map(([label,value])=><MetricCard key={label} label={label} value={value}/>)}</div></section>
@@ -97,5 +114,6 @@ export default function FinalVideoDetail(){
         <g transform={`translate(${Math.max(plot.left,Math.min(plot.right-70,xFor(focusPoint.second)-35))},228)`}><rect width="70" height="21" rx="3" fill="#4b5563"/><text x="35" y="14" textAnchor="middle" fontSize="10" fill="white">{focusPoint.second}s</text></g>
       </svg></div><div className="mt-2 flex gap-5 text-xs"><span style={{color:metricColors[primary]}}>● {metricLabels[primary]}（左轴）</span><span style={{color:metricColors[secondary]}}>● {metricLabels[secondary]}（右轴）</span></div><div className="mt-5 flex items-start gap-2 rounded bg-[#f6f5f2] p-3 text-xs text-[var(--muted)]"><ExternalLink size={14} className="mt-0.5 shrink-0"/><span>正式接入后，数据将按千川素材 ID、广告账户和日期范围查询；逐秒数据为 T+1，次日 9 点后稳定。</span></div></div></div>
     </section>
+    {editingTaxonomy&&catalog&&<VideoTaxonomyEditor asset={video} catalog={catalog} objectType="final_output" onClose={()=>setEditingTaxonomy(false)} onSaved={refreshVideo} onCatalogRefresh={refreshCatalog}/>}
   </div>;
 }
