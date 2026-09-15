@@ -1,23 +1,33 @@
 from __future__ import annotations
 
 import json
+import logging
 import re
 import threading
 import time
 from collections.abc import Callable
+from urllib.parse import urlsplit
 
 import httpx
 
 from app.config import Settings
+from .logging import response_preview
 
 API_BASE = "https://api.oceanengine.com"
+logger = logging.getLogger(__name__)
+MATERIAL_RESPONSE_PATHS = {
+    "/open_api/2/file/video/ad/",
+    "/open_api/v1.0/qianchuan/video/get/",
+    "/open_api/v1.0/qianchuan/report/uni_promotion/config/get/",
+    "/open_api/v1.0/qianchuan/report/uni_promotion/data/get/",
+}
 SHOP_ROLE = "PLATFORM_ROLE_SHOP_ACCOUNT"
 AGENT_ROLE = "PLATFORM_ROLE_QIANCHUAN_AGENT"
 WORKSPACE_ROLES = {"CUSTOMER_ADMIN", "CUSTOMER_OPERATOR"}
 
 
 class PlatformError(Exception):
-    """Only application-owned messages may reach logs or API responses."""
+    """Application-owned errors for API responses; sanitized previews are logged separately."""
     def __init__(self, code: str, message: str, request_id: str = ""):
         super().__init__(message)
         self.code, self.message, self.request_id = code, message, request_id
@@ -51,6 +61,32 @@ class QianchuanClient:
             self.http.close()
 
     def request(self, method: str, path: str, *, token: str = "", params=None, body=None, form=None, files=None) -> dict:
+        started = time.monotonic()
+        trace = {"http_status": "-", "provider_code": "-", "request_id": "-"}
+        outcome = "success"
+        error = "-"
+        try:
+            return self._request(method, path, token=token, params=params, body=body,
+                                 form=form, files=files, trace=trace)
+        except PlatformError as exc:
+            outcome, error = "failed", exc.code
+            raise
+        except Exception:
+            outcome, error = "failed", "unexpected_error"
+            raise
+        finally:
+            # Paths are internal constants. Never include queries, headers, bodies,
+            # platform messages or exception text (which may contain credentials).
+            safe_path = urlsplit(path).path
+            safe_path = safe_path if re.fullmatch(r"/[A-Za-z0-9_./-]+", safe_path) else "[invalid_path]"
+            logger.log(logging.INFO if outcome == "success" else logging.WARNING,
+                "qianchuan api_request method=%s path=%s outcome=%s http_status=%s "
+                "provider_code=%s error=%s request_id=%s duration_ms=%.1f",
+                method if method in {"GET", "POST", "DELETE", "PUT", "PATCH"} else "OTHER",
+                safe_path, outcome, trace["http_status"], trace["provider_code"], error,
+                trace["request_id"], (time.monotonic() - started) * 1000)
+
+    def _request(self, method: str, path: str, *, token: str, params, body, form, files, trace: dict) -> dict:
         headers = {"Access-Token": token} if token else {}
         try:
             with self._client_lock:
@@ -60,6 +96,15 @@ class QianchuanClient:
             response = self.http.request(method, path, params=params, json=body, data=form, files=files, headers=headers)
         except httpx.HTTPError:
             raise PlatformError("transport_uncertain", "平台请求结果不确定，请重新授权或稍后重新同步") from None
+        trace["http_status"] = response.status_code
+        if self.settings.qianchuan_log_material_response and path in MATERIAL_RESPONSE_PATHS:
+            try:
+                preview = response_preview(response.json(), [token, self.settings.qianchuan_app_secret,
+                    self.settings.qianchuan_token_encryption_key])
+            except (ValueError, TypeError, RecursionError):
+                preview = '{"omitted": "response is not valid JSON"}'
+            logger.info("qianchuan material_response path=%s http_status=%s response=%s",
+                        path, response.status_code, preview)
         if response.status_code != 200:
             raise PlatformError("http_error", "平台 HTTP 请求失败，请检查授权与接口可用性")
         try:
@@ -69,12 +114,14 @@ class QianchuanClient:
             code = payload["code"]
             if isinstance(code, bool) or not isinstance(code, int):
                 raise ValueError
+            trace["provider_code"] = code
             request_id = str(payload.get("request_id", ""))
             secrets = [token, self.settings.qianchuan_app_secret,
                        (params or {}).get("access_token", ""), (body or {}).get("auth_code", ""),
                        (body or {}).get("refresh_token", "")]
             if not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", request_id) or any(s and s in request_id for s in secrets):
                 request_id = ""
+            trace["request_id"] = request_id or "-"
             if code != 0:
                 if (code == 40000
                         and path == "/open_api/v1.0/qianchuan/report/uni_promotion/config/get/"

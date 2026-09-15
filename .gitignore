@@ -20,6 +20,7 @@ htmlcov/
 *.tmp
 *.swp
 deploy/logs/
+backend/logs/
 output/
 
 # Browser automation artifacts

@@ -19,6 +19,8 @@ from app.database import SessionLocal
 from app.models import (QianchuanAccountBinding as Binding, QianchuanConnection as Connection,
                         QianchuanOAuthSession as OAuthSession, Tenant, TenantMember, User, VideoAsset)
 from .client import PlatformError, QianchuanClient, identifier
+from .logging import configure_logging
+from .cache import ReportCache
 
 CALLBACK_PATH = "/api/qianchuan/oauth/callback"
 LOCAL_ORIGINS = {f"http://{host}:{port}" for host in ("127.0.0.1", "localhost") for port in (5173, 8080)}
@@ -48,6 +50,7 @@ class SensitiveLogFilter(logging.Filter):
 
 
 def install_log_filters() -> None:
+    configure_logging()
     # Filter on the emitting loggers: parent logger filters are not inherited.
     for name in ("uvicorn.access", "httpx", "httpcore.http11", "httpcore.http2", "httpcore.connection"):
         logger = logging.getLogger(name)
@@ -58,6 +61,7 @@ def install_log_filters() -> None:
 class QianchuanService:
     def __init__(self, settings: Settings, client: QianchuanClient, session_factory=SessionLocal):
         self.settings, self.client, self.session_factory = settings, client, session_factory
+        self.report_cache = ReportCache()
 
     @property
     def origin(self) -> str:

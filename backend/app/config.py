@@ -93,6 +93,7 @@ class Settings(BaseSettings):
     qianchuan_redirect_uri: str = ""
     qianchuan_scope: str = ""
     qianchuan_token_encryption_key: str = ""
+    qianchuan_log_material_response: bool = False
 
     host: str = "0.0.0.0"
     port: int = 8000

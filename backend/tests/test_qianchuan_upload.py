@@ -2,6 +2,9 @@
 import hashlib
 import json
 import unittest
+from concurrent.futures import Future, ThreadPoolExecutor
+from threading import Event
+from unittest.mock import patch
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -280,6 +283,103 @@ class UploadTests(QianchuanAuthorizationTests):
         self.assertEqual(json.loads(request.url.params['dimensions']), ['material_id', 'roi2_material_video_name'])
         self.assertEqual(json.loads(request.url.params['filters']), [
             {'field': 'material_id', 'operator': 7, 'values': ['9007199254740995']}])
+        cached = self.browser.get(PREFIX + f'/uploads/{upload_id}/report', headers=self.headers)
+        self.assertEqual(cached.json()['cache_status'], 'hit')
+        another_range = self.browser.get(PREFIX + f'/uploads/{upload_id}/report?days=30', headers=self.headers)
+        self.assertEqual(another_range.status_code, 200)
+        self.assertEqual(self.call_count(A10), 2)
+        self.assertEqual(self.call_count(A11), 2)
+
+    def cached_report_fixture(self):
+        upload_id = self.create_upload().json()['id']
+        self.uploads.send(upload_id)
+        self.custom[A10] = lambda r: self.envelope(self.report_config())
+        self.custom[A11] = lambda r: self.envelope({'rows': [], 'page_info': {'total_page': 0}})
+        return PREFIX + f'/uploads/{upload_id}/report'
+
+    def test_report_cache_expiration_range_and_timestamp(self):
+        url = self.cached_report_fixture()
+        clock = [0]
+        self.service.report_cache.clock = lambda: clock[0]
+        first = self.browser.get(url, headers=self.headers).json()
+        self.assertEqual(first['cache_status'], 'miss')
+        self.assertEqual((datetime.fromisoformat(first['cache_expires_at']) -
+                          datetime.fromisoformat(first['queried_at'])).total_seconds(), 3600)
+        clock[0] = 3599
+        second = self.browser.get(url, headers=self.headers).json()
+        self.assertEqual(second['cache_status'], 'hit')
+        self.assertEqual(second['queried_at'], first['queried_at'])
+        self.assertEqual(self.call_count(A11), 1)
+        self.assertEqual(self.browser.get(url + '?days=30', headers=self.headers).status_code, 200)
+        self.assertEqual(self.call_count(A10), 1)
+        self.assertEqual(self.call_count(A11), 2)
+        clock[0] = 3601
+        self.assertEqual(self.browser.get(url, headers=self.headers).json()['cache_status'], 'miss')
+        self.assertEqual(self.call_count(A10), 2)
+        self.assertEqual(self.call_count(A11), 3)
+
+    def test_report_cache_cannot_bypass_tenant_or_disabled_authorization(self):
+        url = self.cached_report_fixture()
+        self.assertEqual(self.browser.get(url, headers=self.headers).status_code, 200)
+        self.assertEqual(self.browser.get(url, headers=self.other_headers).status_code, 404)
+        self.browser.delete(PREFIX + '/connections/' + self.connection_id, headers=self.headers)
+        self.assertEqual(self.browser.get(url, headers=self.headers).status_code, 409)
+        self.assertEqual(self.call_count(A11), 1)
+
+    def test_report_new_credential_version_does_not_reuse_old_cache(self):
+        url = self.cached_report_fixture()
+        self.assertEqual(self.browser.get(url, headers=self.headers).status_code, 200)
+        with self.sessions() as db:
+            db.get(Connection, self.connection_id).credential_version += 1
+            db.commit()
+        self.assertEqual(self.browser.get(url, headers=self.headers).json()['cache_status'], 'miss')
+        self.assertEqual(self.call_count(A10), 2)
+        self.assertEqual(self.call_count(A11), 2)
+
+    def test_report_failure_is_not_cached(self):
+        url = self.cached_report_fixture()
+        self.custom[A11] = lambda r: httpx.Response(200, json={'code': 40000, 'message': 'test'})
+        self.assertEqual(self.browser.get(url, headers=self.headers).status_code, 502)
+        self.custom[A11] = lambda r: self.envelope({'rows': [], 'page_info': {'total_page': 0}})
+        self.assertEqual(self.browser.get(url, headers=self.headers).json()['cache_status'], 'miss')
+        self.assertEqual(self.call_count(A11), 2)
+
+    def test_concurrent_report_routes_share_one_platform_request(self):
+        url = self.cached_report_fixture()
+        started, joined, release = Event(), Event(), Event()
+        class ObservedFuture(Future):
+            def result(self, *args, **kwargs):
+                joined.set()
+                return super().result(*args, **kwargs)
+        def data(request):
+            started.set()
+            if not release.wait(10):
+                raise TimeoutError('test release timed out')
+            return self.envelope({'rows': [], 'page_info': {'total_page': 0}})
+        self.custom[A11] = data
+        with patch('app.services.qianchuan.cache.Future', ObservedFuture), ThreadPoolExecutor(2) as pool:
+            first = pool.submit(self.browser.get, url, headers=self.headers)
+            try:
+                self.assertTrue(started.wait(10))
+                second = pool.submit(self.browser.get, url, headers=self.member_headers)
+                self.assertTrue(joined.wait(10))
+            finally:
+                release.set()
+            responses = [first.result(timeout=10), second.result(timeout=10)]
+        self.assertTrue(all(response.status_code == 200 for response in responses))
+        self.assertEqual({response.json()['cache_status'] for response in responses}, {'miss', 'joined'})
+        self.assertEqual(responses[0].json()['queried_at'], responses[1].json()['queried_at'])
+        self.assertEqual(self.call_count(A10), 1)
+        self.assertEqual(self.call_count(A11), 1)
+
+    def test_report_revoked_during_data_call_is_not_returned_or_cached(self):
+        url = self.cached_report_fixture()
+        def revoke(request):
+            self.browser.delete(PREFIX + '/connections/' + self.connection_id, headers=self.headers)
+            return self.envelope({'rows': [], 'page_info': {'total_page': 0}})
+        self.custom[A11] = revoke
+        self.assertEqual(self.browser.get(url, headers=self.headers).status_code, 409)
+        self.assertFalse(any(key[0] == 'report' for key in self.service.report_cache._values))
 
     def test_report_does_not_fallback_on_other_platform_errors(self):
         upload_id = self.create_upload().json()['id']

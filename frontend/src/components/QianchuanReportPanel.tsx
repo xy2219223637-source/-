@@ -36,6 +36,12 @@ export default function QianchuanReportPanel({upload}:{upload?:QianchuanUpload})
   return <>
     <section className="panel p-5"><div className="flex flex-wrap items-start justify-between gap-3"><div><h2 className="text-lg font-medium">千川素材数据</h2><p className="mt-1 text-xs text-[var(--muted)]">查询账户：{upload.advertiser_name||'千川账户'} · {upload.advertiser_id}</p><p className="mt-1 text-xs text-[var(--muted)]">{report?.data_topic==='SITE_PROMOTION_PRODUCT_POST_DATA_VIDEO'?'全域商品视频素材报表':'全域/乘方商品素材报表'} · 素材 {upload.material_id}</p></div><div className="flex items-center gap-2"><select aria-label="报表时间范围" className="input-select" value={days} onChange={event=>setDays(Number(event.target.value))} disabled={loading}><option value={7}>近 7 天</option><option value={30}>近 30 天</option></select><button className="btn-secondary whitespace-nowrap shrink-0" onClick={()=>setRevision(value=>value+1)} disabled={loading}>{loading?<Loader2 size={14} className="animate-spin"/>:<RefreshCw size={14}/>}刷新</button></div></div>
       {error&&<div className="mt-5 border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{error}</div>}
+      <p className="mt-3 text-xs text-[var(--muted)]">数据缓存 1 小时，缓存期间刷新不会重复查询千川；到期后再次刷新获取新数据。</p>
+      {report&&<div className="mt-2 text-xs text-[var(--muted)]" aria-live="polite">
+        上次成功查询：{new Date(report.queried_at).toLocaleString('zh-CN')} ·
+        缓存到期：{new Date(report.cache_expires_at).toLocaleString('zh-CN')} ·
+        {report.cache_status==='hit'?'本次读取缓存':report.cache_status==='joined'?'本次共用查询结果':'本次已查询千川'}
+      </div>}
       {loading&&!report&&<div className="grid min-h-36 place-items-center text-sm text-[var(--muted)]"><Loader2 className="animate-spin"/></div>}
       {report&&<><div className={`mt-5 px-4 py-3 text-sm ${report.status==='no_data'?'border border-amber-200 bg-amber-50 text-amber-800':'border border-emerald-200 bg-emerald-50 text-emerald-800'}`}>{report.status==='no_data'?'当前账户、素材和时间范围内暂无投放数据；素材上传状态不受影响。':'已读取千川真实报表数据。'}<span className="ml-2 text-xs opacity-75">{report.start_time} 至 {report.end_time}</span></div>
         {groups.map(group=>{const metrics=group.fields.map(field=>report.metrics[field]).filter(Boolean);return metrics.length?<div className="mt-7" key={group.title}><h3 className="font-medium">{group.title}</h3><div className="mt-3 grid grid-cols-2 gap-3 lg:grid-cols-4">{metrics.map(metric=><Metric key={metric.label} label={metric.label} value={metric.value}/>)}</div></div>:null})}

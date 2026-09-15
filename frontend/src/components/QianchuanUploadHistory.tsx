@@ -1,4 +1,4 @@
-import {useEffect, useState} from 'react';
+import {useEffect, useRef, useState} from 'react';
 import {qianchuanApi, type QianchuanUpload} from '../api/client';
 import {qianchuanError} from './QianchuanUploadModal';
 
@@ -12,10 +12,15 @@ export function uploadStatus(row?: QianchuanUpload) {
 export function useQianchuanUploads(videoId: number, revision: number) {
   const [uploads, setUploads] = useState<QianchuanUpload[]>([]);
   const [error, setError] = useState('');
+  const loadedVideoId = useRef(videoId);
   useEffect(() => {
     let active = true;
     let timer: ReturnType<typeof setTimeout> | undefined;
-    setUploads([]); setError('');
+    if (loadedVideoId.current !== videoId) {
+      setUploads([]);
+      loadedVideoId.current = videoId;
+    }
+    setError('');
     async function load() {
       if (timer) clearTimeout(timer);
       if (document.hidden || !videoId) return;

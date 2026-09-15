@@ -98,9 +98,24 @@ export interface QianchuanMaterialReport {
   data_topic: string;
   start_time: string;
   end_time: string;
+  queried_at: string;
+  cache_expires_at: string;
+  cache_status: 'hit' | 'miss' | 'joined';
   status: 'available' | 'no_data';
   metrics: Record<string, QianchuanReportMetric>;
   per_second: {status: 'unavailable'; message: string};
+}
+
+const pendingReports = new Map<string, Promise<QianchuanMaterialReport>>();
+function loadQianchuanReport(id: string, days: number) {
+  const key = JSON.stringify([localStorage.getItem('access_token'), id, days]);
+  const pending = pendingReports.get(key);
+  if (pending) return pending;
+  const request = api.get<QianchuanMaterialReport>(
+    `/qianchuan/uploads/${encodeURIComponent(id)}/report`, {params: {days}})
+    .then(r => r.data).finally(() => pendingReports.delete(key));
+  pendingReports.set(key, request);
+  return request;
 }
 
 export const qianchuanApi = {
@@ -115,8 +130,7 @@ export const qianchuanApi = {
     api.post<QianchuanUpload>('/qianchuan/uploads', {video_asset_id, binding_id, filename, is_aigc}).then(r => r.data),
   uploads: (video_asset_id: number) => api.get<QianchuanUpload[]>('/qianchuan/uploads', {params: {video_asset_id}}).then(r => r.data),
   retryUpload: (id: string) => api.post<QianchuanUpload>(`/qianchuan/uploads/${encodeURIComponent(id)}/retry`).then(r => r.data),
-  report: (id: string, days: number) => api.get<QianchuanMaterialReport>(
-    `/qianchuan/uploads/${encodeURIComponent(id)}/report`, {params: {days}}).then(r => r.data),
+  report: loadQianchuanReport,
 };
 
 export function mediaUrl(path: string): string {
