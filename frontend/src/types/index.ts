@@ -123,8 +123,8 @@ export interface VideoLibraryAsset {
   highlights:Array<{highlight_id:string;start:number;end:number;description:string;reason:string;recommended_roles:string[];content_role?:string;track_role?:string;speech_text?:string;speaker_id?:string;score:number}>;
 }
 export interface AutoEditProject {
-  id:number;product_id:number;name:string;target_duration_seconds:number;variant_count:number;aspect_ratio:string;objective:string;edit_mode:'smart_compose'|'finished_remix';
-  structure:Array<{role:string;objective:string;required:boolean}>;constraints:string[];status:string;error_message:string;
+  id:number;product_id:number;name:string;target_duration_seconds:number;variant_count:number;aspect_ratio:string;objective:string;edit_mode:'smart_compose'|'finished_remix'|'manual_compose';
+  structure:Array<{id?:string;role:string;title?:string;objective:string;required:boolean;asset_ids?:string[]}>;constraints:string[];status:string;error_message:string;
   product:{name:string;image_urls:string[]};assets:AutoEditAsset[];plan_version_id:number|null;
   material_readiness:{original_speech_segments:number;supporting_visual_segments:number;original_speech_seconds:number;speaker_count:number;ready:boolean;missing:string[]};
   plan:{schema_version:string;material_selection?:{a_roll_count:number;b_roll_count:number;a_roll_seconds:number;notes:string};variants:AutoEditVariant[]}|null;

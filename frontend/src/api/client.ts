@@ -139,15 +139,17 @@ export const videoApi = {
 };
 
 export const autoEditApi = {
-  list: (editMode?:'smart_compose'|'finished_remix') => api.get<import('../types').AutoEditProject[]>('/auto-edit-projects',{params:editMode?{edit_mode:editMode}:undefined}).then(r=>r.data),
+  list: (editMode?:'smart_compose'|'finished_remix'|'manual_compose') => api.get<import('../types').AutoEditProject[]>('/auto-edit-projects',{params:editMode?{edit_mode:editMode}:undefined}).then(r=>r.data),
   get: (id:number) => api.get<import('../types').AutoEditProject>(`/auto-edit-projects/${id}`).then(r=>r.data),
-  create: (data:{product_id:number;name?:string;target_duration_seconds:number;variant_count:number;aspect_ratio:string;objective:string;edit_mode:'smart_compose'|'finished_remix';constraints?:string[]}) =>
+  create: (data:{product_id:number;name?:string;target_duration_seconds:number;variant_count:number;aspect_ratio:string;objective:string;edit_mode:'smart_compose'|'finished_remix'|'manual_compose';constraints?:string[];structure?:Array<Record<string,unknown>>}) =>
     api.post<import('../types').AutoEditProject>('/auto-edit-projects',data).then(r=>r.data),
   updateDuration: (id:number,target_duration_seconds:number) =>
     api.patch<import('../types').AutoEditProject>(`/auto-edit-projects/${id}/duration`,{target_duration_seconds}).then(r=>r.data),
   uploadAssets: async (id:number,files:File[]) => { const form=new FormData(); files.forEach(file=>form.append('files',file)); return api.post<import('../types').AutoEditProject>(`/auto-edit-projects/${id}/assets`,form,{timeout:600000}).then(r=>r.data); },
   generatePlan: (id:number) => api.post<import('../types').AutoEditProject>(`/auto-edit-projects/${id}/plan`,undefined,{timeout:180000}).then(r=>r.data),
   render: (id:number) => api.post<import('../types').AutoEditProject>(`/auto-edit-projects/${id}/render`,undefined,{timeout:1200000}).then(r=>r.data),
+  saveManualPlan: (id:number,sections:Array<{id:string;role:string;title:string;objective:string;required:boolean;asset_ids:string[]}>) =>
+    api.put<import('../types').AutoEditProject>(`/auto-edit-projects/${id}/manual-plan`,{sections}).then(r=>r.data),
 };
 
 export const videoLibraryApi = {

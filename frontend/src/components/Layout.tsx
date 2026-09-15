@@ -15,6 +15,7 @@ import {
   Film,
   Library,
   Layers,
+  Layers3,
   ChevronDown,
   ChevronRight,
   ClipboardList,
@@ -39,6 +40,7 @@ const routePreloaders: Record<string, () => Promise<unknown>> = {
   '/finished-video-remix': () => import('../pages/AutoEditWorkspace'),
   '/video-projects': () => import('../pages/VideoProjects'),
   '/final-videos': () => import('../pages/FinalVideoLibrary'),
+  '/manual-video-compose': () => import('../pages/ManualComposeProjects'),
   '/task-center': () => import('../pages/TaskCenter'),
   '/video-taxonomy': () => import('../pages/VideoTaxonomy'),
   '/semi-finished-assets': () => import('../pages/VideoAssetLibrary'),
@@ -71,6 +73,7 @@ const navGroups = [
     label: '视频生产',
     items: [
       { to: '/finished-video-assets', label: '成品素材库', icon: Film },
+      { to: '/manual-video-compose', label: '视频编排', icon: Layers3 },
       { to: '/finished-video-remix', label: '成品混剪', icon: Video },
       { to: '/final-videos', label: '成片库', icon: Library },
       { to: '/director-inspiration', label: '编导灵感', icon: Clapperboard },
