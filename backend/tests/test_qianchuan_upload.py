@@ -297,6 +297,53 @@ class UploadTests(QianchuanAuthorizationTests):
         self.custom[A11] = lambda r: self.envelope({'rows': [], 'page_info': {'total_page': 0}})
         return PREFIX + f'/uploads/{upload_id}/report'
 
+    def test_report_emits_one_record_with_raw_response_and_processed_metrics(self):
+        url = self.cached_report_fixture()
+        raw = {'rows': [{'dimensions': {'material_id': '9007199254740995'},
+            'metrics': {'stat_cost_for_roi2': 0}}], 'page_info': {'total_page': 1},
+            'extra': {'access_token': 'mock-access', 'diagnostic': 'keep-this'}}
+        self.custom[A11] = lambda r: self.envelope(raw)
+        with self.assertLogs('app.services.qianchuan', level='INFO') as logs:
+            response = self.browser.get(url, headers=self.headers)
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(len(logs.records), 1)
+        record = logs.records[0]
+        calls = record.qc_details['平台接口调用']
+        self.assertEqual([call['接口路径'] for call in calls], [A10, A11])
+        logged = calls[1]['平台原始回参（已脱敏）']['data']
+        self.assertEqual(logged['rows'], raw['rows'])
+        self.assertEqual(logged['extra'], {'access_token': '[REDACTED]', 'diagnostic': 'keep-this'})
+        self.assertEqual(record.qc_details['整理后的指标']['stat_cost_for_roi2']['指标值'], '0')
+        self.assertNotIn('平台接口调用', response.text)
+        with self.assertLogs('app.services.qianchuan', level='INFO') as cached:
+            result = self.browser.get(url, headers=self.headers)
+        self.assertEqual(result.json()['cache_status'], 'hit')
+        self.assertEqual(len(cached.records), 1)
+        self.assertNotIn('平台接口调用', cached.records[0].qc_details)
+        self.assertEqual(cached.records[0].qc_fields['原始查询编号'], record.qc_fields['查询编号'])
+
+    def test_report_empty_and_failed_queries_preserve_raw_once(self):
+        url = self.cached_report_fixture()
+        self.custom[A11] = lambda r: httpx.Response(200, json={
+            'code': 40000, 'message': '拒绝 mock-access', 'request_id': 'failed-request'})
+        with self.assertLogs('app.services.qianchuan', level='INFO') as failed:
+            response = self.browser.get(url, headers=self.headers)
+        self.assertEqual(response.status_code, 502)
+        self.assertEqual(len(failed.records), 1)
+        raw = failed.records[0].qc_details['平台接口调用'][-1]['平台原始回参（已脱敏）']
+        self.assertEqual(raw['message'], '拒绝 [REDACTED]')
+        self.assertEqual(raw['request_id'], 'failed-request')
+        self.custom[A11] = lambda r: self.envelope({'rows': [], 'page_info': {'total_page': 0}})
+        with self.assertLogs('app.services.qianchuan', level='INFO') as empty:
+            response = self.browser.get(url, headers=self.headers)
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(len(empty.records), 1)
+        self.assertEqual(empty.records[0].qc_fields['返回行数'], 0)
+        self.assertNotIn('整理后的指标', empty.records[0].qc_details)
+        calls = empty.records[0].qc_details['平台接口调用']
+        self.assertEqual([call['接口路径'] for call in calls], [A11])
+        self.assertEqual(calls[0]['平台原始回参（已脱敏）']['data']['rows'], [])
+
     def test_report_cache_expiration_range_and_timestamp(self):
         url = self.cached_report_fixture()
         clock = [0]
@@ -357,7 +404,8 @@ class UploadTests(QianchuanAuthorizationTests):
                 raise TimeoutError('test release timed out')
             return self.envelope({'rows': [], 'page_info': {'total_page': 0}})
         self.custom[A11] = data
-        with patch('app.services.qianchuan.cache.Future', ObservedFuture), ThreadPoolExecutor(2) as pool:
+        with self.assertLogs('app.services.qianchuan', level='INFO') as logs, \
+                patch('app.services.qianchuan.cache.Future', ObservedFuture), ThreadPoolExecutor(2) as pool:
             first = pool.submit(self.browser.get, url, headers=self.headers)
             try:
                 self.assertTrue(started.wait(10))
@@ -371,6 +419,11 @@ class UploadTests(QianchuanAuthorizationTests):
         self.assertEqual(responses[0].json()['queried_at'], responses[1].json()['queried_at'])
         self.assertEqual(self.call_count(A10), 1)
         self.assertEqual(self.call_count(A11), 1)
+
+        self.assertEqual(len(logs.records), 2)
+        self.assertEqual(len({record.qc_fields['查询编号'] for record in logs.records}), 2)
+        call_groups = [(record.qc_details or {}).get('平台接口调用', []) for record in logs.records]
+        self.assertEqual(sorted(len(group) for group in call_groups), [0, 2])
 
     def test_report_revoked_during_data_call_is_not_returned_or_cached(self):
         url = self.cached_report_fixture()

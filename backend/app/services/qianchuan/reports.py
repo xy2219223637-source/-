@@ -10,6 +10,8 @@ from fastapi import HTTPException
 from app.models import QianchuanUpload as Upload
 from .client import PlatformError, identifier
 from .uploads import UploadService
+from .logging import log_context, collect_api_calls, event_fields, response_preview, QUERY_ID
+import json
 
 TOPIC = "OVERALL_ROI_PRODUCT_MATERIAL"
 UNI_TOPIC = "SITE_PROMOTION_PRODUCT_POST_DATA_VIDEO"
@@ -55,6 +57,18 @@ class ReportService:
         self.cache = auth_service.report_cache
 
     def get(self, db, auth, upload_id: str, days: int) -> dict:
+        with log_context(), collect_api_calls() as calls:
+            try:
+                return self._get(db, auth, upload_id, days, calls)
+            except HTTPException:
+                raise
+            except Exception:
+                logger.error("qianchuan report_failed upload=%s code=unexpected_error", upload_id,
+                    extra=event_fields("千川报表｜查询失败", {"上传任务": upload_id,
+                        "错误分类": "unexpected_error"}, {"平台接口调用": calls}))
+                raise
+
+    def _get(self, db, auth, upload_id: str, days: int, calls: list) -> dict:
         row = db.query(Upload).filter_by(id=upload_id, tenant_id=auth.tenant_id).first()
         if not row:
             raise HTTPException(404, "未找到上传记录")
@@ -68,12 +82,32 @@ class ReportService:
                    row.material_id, version, days, datetime.now(TIMEZONE).date())
             result, cache_status = self.cache.get(key, lambda: self._query(row, version, days))
             # Recheck even on cache hits or after waiting for another request.
-            self.uploads.access(row.id, version)
+            token, _ = self.uploads.access(row.id, version)
             result.update(upload_id=row.id, cache_status=cache_status)
-            logger.info("qianchuan report_cache upload=%s days=%s status=%s", row.id, days, cache_status)
+            fields = {"上传任务": row.id, "账户编号": row.advertiser_id,
+                "素材编号": row.material_id, "查询范围": f"近 {days} 天",
+                "数据来源": {"hit": "读取缓存，本次未请求千川", "joined": "共用相同并发查询结果", "miss": "本次查询千川"}[cache_status],
+                "原始查询编号": result.get("source_query_id", "—"),
+                "查询结果": "暂无匹配数据" if result["status"] == "no_data" else "有数据",
+                "报表类型": "全域商品视频素材" if result["data_topic"] == UNI_TOPIC else "乘方商品素材",
+                "报表主题": result["data_topic"], "统计开始": result["start_time"], "统计结束": result["end_time"],
+                "返回行数": 0 if result["status"] == "no_data" else 1,
+                "上次成功查询": result["queried_at"], "缓存到期": result["cache_expires_at"]}
+            details = {"平台接口调用": calls} if calls else None
+            if self.auth.settings.qianchuan_log_material_response and result["status"] != "no_data":
+                metrics = {field: {"指标名称": metric["label"], "指标值": metric["value"]}
+                           for field, metric in result["metrics"].items()}
+                details = {**(details or {}), "整理后的指标": json.loads(response_preview(metrics,
+                    [token, self.auth.settings.qianchuan_app_secret, self.auth.settings.qianchuan_token_encryption_key],
+                    truncate=False))}
+            logger.info("qianchuan report_cache upload=%s days=%s status=%s", row.id, days, cache_status,
+                        extra=event_fields("千川报表｜查询结果", fields, details))
             return result
         except PlatformError as exc:
-            logger.warning("qianchuan report_failed upload=%s code=%s request_id=%s", row.id, exc.code, exc.request_id)
+            logger.warning("qianchuan report_failed upload=%s code=%s request_id=%s", row.id, exc.code, exc.request_id,
+                extra=event_fields("千川报表｜查询失败", {"上传任务": row.id, "中文说明": exc.message,
+                    "账户编号": row.advertiser_id, "素材编号": row.material_id, "查询范围": f"近 {days} 天",
+                    "错误分类": exc.code, "平台请求编号": exc.request_id or "未返回"}, {"平台接口调用": calls}))
             status = 409 if exc.code in {"refresh_pending", "scope_changed", "owner_inactive"} else 502
             raise HTTPException(status, exc.message) from None
 
@@ -85,7 +119,6 @@ class ReportService:
         except PlatformError as exc:
             if exc.code != "report_overall_unavailable":
                 raise
-            logger.info("qianchuan report_fallback upload=%s request_id=%s", row.id, exc.request_id)
             data_topic = UNI_TOPIC
             token, _ = self.uploads.access(row.id, version)
             config = self.client.report_config(token, row.advertiser_id, [data_topic])
@@ -157,12 +190,11 @@ class ReportService:
                 "label": name if isinstance(name, str) and name else field,
                 "value": _scalar(values.get(field)),
             }
-        logger.info("qianchuan report_finished upload=%s topic=%s days=%s status=%s rows=%s",
-                    row.id, data_topic, days, "available" if rows else "no_data", len(rows))
         self.uploads.access(row.id, version)
         queried_at = datetime.now(TIMEZONE)
         return {
             "upload_id": row.id, "advertiser_id": row.advertiser_id,
+            "source_query_id": QUERY_ID.get(),
             "material_id": row.material_id, "data_topic": data_topic,
             "start_time": start_time, "end_time": end_time,
             "queried_at": queried_at.isoformat(),

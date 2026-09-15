@@ -10,11 +10,47 @@ import httpx
 
 from app.config import Settings
 from app.services.qianchuan.client import PlatformError, QianchuanClient
-from app.services.qianchuan.logging import configure_logging, response_preview, RESPONSE_LIMIT
+from app.services.qianchuan.logging import configure_logging, response_preview, RESPONSE_LIMIT, ChineseLogFormatter, log_context, QUERY_ID, event_fields
 import json
 
 
 class QianchuanLoggingTests(unittest.TestCase):
+    def test_detailed_logs_are_enabled_by_default(self):
+        self.assertTrue(Settings(_env_file=None).qianchuan_log_material_response)
+
+    def test_chinese_blocks_keep_payload_readable_and_share_query_id(self):
+        with self.assertLogs("app.services.qianchuan.client", level="INFO") as capture:
+            self.run_request(lambda request: httpx.Response(200, json={"code": 0, "message": "成功",
+                "request_id": "req-1", "data": {"count": 0, "missing": None}}),
+                response_logging=True, path="/open_api/v1.0/qianchuan/video/get/")
+        formatted = [ChineseLogFormatter().format(record) for record in capture.records]
+        self.assertEqual(len(capture.records), 1)
+        self.assertIn("[信息 INFO] 千川接口｜调用成功", formatted[0])
+        self.assertIn("接口名称：查询视频素材", formatted[0])
+        self.assertIn('"平台原始回参（已脱敏）": {', formatted[0])
+        self.assertIn('"count": 0', formatted[0])
+        self.assertIn('"missing": null', formatted[0])
+        self.assertTrue(capture.records[0].qc_fields['查询编号'].startswith('qc-'))
+
+    def test_log_context_resets_and_field_newlines_cannot_forge_headers(self):
+        with log_context():
+            first = QUERY_ID.get()
+            with log_context():
+                self.assertEqual(first, QUERY_ID.get())
+            record = logging.LogRecord('test', logging.INFO, '', 0, 'internal', (), None)
+            record.__dict__.update(event_fields('中文事件', {'账户': 'name\nFAKE LOG'}))
+            self.assertNotIn('\nFAKE LOG', ChineseLogFormatter().format(record))
+        self.assertEqual(QUERY_ID.get(), '')
+        with log_context():
+            self.assertNotEqual(QUERY_ID.get(), first)
+
+    def test_legacy_authorization_event_has_chinese_labels(self):
+        record = logging.LogRecord('test', logging.INFO, '', 0,
+            'qianchuan action=accounts_synced tenant=%s connection=%s count=%s', ('tenant-1', 'conn-1', 2), None)
+        text = ChineseLogFormatter().format(record)
+        self.assertIn('千川授权｜账户同步完成', text)
+        self.assertIn('账户数量：2', text)
+
     def run_request(self, provider, *, response_logging=False, path="/open_api/test/?auth_code=query-fixture", **kwargs):
         client = QianchuanClient(Settings(_env_file=None, qianchuan_app_secret="secret-fixture",
                                          qianchuan_log_material_response=response_logging),
@@ -35,7 +71,8 @@ class QianchuanLoggingTests(unittest.TestCase):
                         "message": "OK", "request_id": "req-1", "data": {"material_id": "123"}}),
                         response_logging=enabled, path=path)
                 self.assertEqual(result, {"material_id": "123"})
-                self.assertEqual(any("material_response" in line for line in capture.output), expected)
+                self.assertEqual(len(capture.records), 1)
+                self.assertEqual(capture.records[0].qc_details is not None, expected)
                 if expected:
                     preview = json.loads(capture.output[0].split("response=", 1)[1])
                     self.assertEqual(preview["data"]["material_id"], "123")
@@ -62,6 +99,23 @@ class QianchuanLoggingTests(unittest.TestCase):
         self.assertTrue(json.loads(preview)["truncated"])
         self.assertEqual(payload["access_token"], "sensitive-value")
         self.assertNotIn("sensitive-value", preview)
+
+    def test_raw_response_retains_long_lists_strings_and_nested_credentials(self):
+        nested = {'access_token': 'deep-credential'}
+        for _ in range(12):
+            nested = {'nested': nested}
+        payload = {'code': 0, 'data': {'rows': [{'index': i, 'value': '文' * 5000}
+            for i in range(101)], 'deep': nested, 'message': 'deep-credential',
+            'zero': 0, 'missing': None, 'enabled': False}}
+        with self.assertLogs('app.services.qianchuan.client', level='INFO') as capture:
+            result = self.run_request(lambda r: httpx.Response(200, json=payload),
+                response_logging=True, path='/open_api/v1.0/qianchuan/report/uni_promotion/data/get/')
+        self.assertEqual(len(capture.records), 1)
+        raw = capture.records[0].qc_details['平台原始回参（已脱敏）']['data']
+        self.assertEqual(raw['rows'], payload['data']['rows'])
+        self.assertEqual((raw['zero'], raw['missing'], raw['enabled']), (0, None, False))
+        self.assertNotIn('deep-credential', json.dumps(raw))
+        self.assertEqual(result['message'], 'deep-credential')
 
     def test_non_json_material_response_is_not_dumped(self):
         with self.assertLogs("app.services.qianchuan.client", level="INFO") as capture:

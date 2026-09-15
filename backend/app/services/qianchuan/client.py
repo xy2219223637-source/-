@@ -11,10 +11,18 @@ from urllib.parse import urlsplit
 import httpx
 
 from app.config import Settings
-from .logging import response_preview
+from .logging import response_preview, log_context, event_fields, API_CALLS
 
 API_BASE = "https://api.oceanengine.com"
 logger = logging.getLogger(__name__)
+API_NAMES = {
+    "/open_api/2/file/video/ad/": "上传视频素材",
+    "/open_api/v1.0/qianchuan/video/get/": "查询视频素材",
+    "/open_api/v1.0/qianchuan/report/uni_promotion/config/get/": "查询报表配置",
+    "/open_api/v1.0/qianchuan/report/uni_promotion/data/get/": "查询报表数据",
+    "/open_api/oauth2/access_token/": "获取授权凭证",
+    "/open_api/oauth2/refresh_token/": "刷新授权凭证",
+}
 MATERIAL_RESPONSE_PATHS = {
     "/open_api/2/file/video/ad/",
     "/open_api/v1.0/qianchuan/video/get/",
@@ -27,7 +35,7 @@ WORKSPACE_ROLES = {"CUSTOMER_ADMIN", "CUSTOMER_OPERATOR"}
 
 
 class PlatformError(Exception):
-    """Application-owned errors for API responses; sanitized previews are logged separately."""
+    """Application-owned errors; sanitized provider responses stay in diagnostic logs."""
     def __init__(self, code: str, message: str, request_id: str = ""):
         super().__init__(message)
         self.code, self.message, self.request_id = code, message, request_id
@@ -61,6 +69,10 @@ class QianchuanClient:
             self.http.close()
 
     def request(self, method: str, path: str, *, token: str = "", params=None, body=None, form=None, files=None) -> dict:
+        with log_context():
+            return self._logged_request(method, path, token=token, params=params, body=body, form=form, files=files)
+
+    def _logged_request(self, method: str, path: str, *, token, params, body, form, files) -> dict:
         started = time.monotonic()
         trace = {"http_status": "-", "provider_code": "-", "request_id": "-"}
         outcome = "success"
@@ -79,12 +91,28 @@ class QianchuanClient:
             # platform messages or exception text (which may contain credentials).
             safe_path = urlsplit(path).path
             safe_path = safe_path if re.fullmatch(r"/[A-Za-z0-9_./-]+", safe_path) else "[invalid_path]"
-            logger.log(logging.INFO if outcome == "success" else logging.WARNING,
-                "qianchuan api_request method=%s path=%s outcome=%s http_status=%s "
-                "provider_code=%s error=%s request_id=%s duration_ms=%.1f",
-                method if method in {"GET", "POST", "DELETE", "PUT", "PATCH"} else "OTHER",
-                safe_path, outcome, trace["http_status"], trace["provider_code"], error,
-                trace["request_id"], (time.monotonic() - started) * 1000)
+            fallback = error == "report_overall_unavailable"
+            elapsed = (time.monotonic() - started) * 1000
+            fields = {
+                "接口名称": API_NAMES.get(safe_path, "千川账户接口"), "接口路径": safe_path,
+                "请求方法": method if method in {"GET", "POST", "DELETE", "PUT", "PATCH"} else "OTHER",
+                "HTTP 状态": trace["http_status"], "平台错误码": trace["provider_code"],
+                "结果说明": "账户暂无乘方能力，将尝试全域主题" if fallback else "成功" if outcome == "success" else "请结合平台响应说明排查",
+                "内部错误分类": error, "平台请求编号": trace["request_id"],
+                "请求耗时": f"{elapsed:.1f} 毫秒"}
+            details = {"平台原始回参（已脱敏）": trace["response"]} if "response" in trace else None
+            calls = API_CALLS.get()
+            if calls is not None:
+                calls.append({**fields, **(details or {})})
+            else:
+                logger.log(logging.INFO if outcome == "success" or fallback else logging.WARNING,
+                    "qianchuan api_request method=%s path=%s outcome=%s http_status=%s "
+                    "provider_code=%s error=%s request_id=%s duration_ms=%.1f%s",
+                    fields["请求方法"],
+                    safe_path, outcome, trace["http_status"], trace["provider_code"], error,
+                    trace["request_id"], elapsed,
+                    " response=" + json.dumps(trace["response"], ensure_ascii=False) if details is not None else "",
+                    extra=event_fields("千川接口｜" + ("调用成功" if outcome == "success" else "默认主题不适用" if fallback else "调用失败"), fields, details))
 
     def _request(self, method: str, path: str, *, token: str, params, body, form, files, trace: dict) -> dict:
         headers = {"Access-Token": token} if token else {}
@@ -100,11 +128,10 @@ class QianchuanClient:
         if self.settings.qianchuan_log_material_response and path in MATERIAL_RESPONSE_PATHS:
             try:
                 preview = response_preview(response.json(), [token, self.settings.qianchuan_app_secret,
-                    self.settings.qianchuan_token_encryption_key])
+                    self.settings.qianchuan_token_encryption_key], truncate=False)
             except (ValueError, TypeError, RecursionError):
-                preview = '{"omitted": "response is not valid JSON"}'
-            logger.info("qianchuan material_response path=%s http_status=%s response=%s",
-                        path, response.status_code, preview)
+                preview = '{"omitted": "response is not valid JSON", "说明": "响应不是有效 JSON，正文已省略"}'
+            trace["response"] = json.loads(preview)
         if response.status_code != 200:
             raise PlatformError("http_error", "平台 HTTP 请求失败，请检查授权与接口可用性")
         try:

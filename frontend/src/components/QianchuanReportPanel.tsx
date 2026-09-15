@@ -1,4 +1,4 @@
-import {useEffect,useState} from 'react';
+import {useEffect,useRef,useState} from 'react';
 import axios from 'axios';
 import {BarChart3,Loader2,RefreshCw} from 'lucide-react';
 import {qianchuanApi} from '../api/client';
@@ -21,22 +21,40 @@ function Metric({label,value}:{label:string;value:string|null}){
 
 export default function QianchuanReportPanel({upload}:{upload?:QianchuanUpload}){
   const [days,setDays]=useState(7);
-  const [revision,setRevision]=useState(0);
   const [report,setReport]=useState<QianchuanMaterialReport|null>(null);
   const [loading,setLoading]=useState(false);
   const [error,setError]=useState('');
+  const requestId=useRef(0);
+  const pending=useRef(false);
 
-  useEffect(()=>{let active=true;if(!upload?.material_id||upload.status!=='succeeded'){setReport(null);setError('');return()=>{active=false}}
+  // Changing query conditions only resets the display; fetching is button-driven.
+  useEffect(()=>{
+    requestId.current+=1;pending.current=false;
+    setReport(null);setError('');setLoading(false);
+    return()=>{requestId.current+=1;pending.current=false};
+  },[upload?.id,upload?.material_id,upload?.status,days]);
+
+  async function refresh(){
+    if(pending.current||!upload?.material_id||upload.status!=='succeeded')return;
+    pending.current=true;
+    const current=++requestId.current;
     setLoading(true);setError('');setReport(null);
-    qianchuanApi.report(upload.id,days).then(value=>{if(active)setReport(value)}).catch(reason=>{if(active){setReport(null);setError(message(reason))}}).finally(()=>{if(active)setLoading(false)});
-    return()=>{active=false};
-  },[upload?.id,upload?.material_id,upload?.status,days,revision]);
+    try{
+      const value=await qianchuanApi.report(upload.id,days);
+      if(current===requestId.current)setReport(value);
+    }catch(reason){
+      if(current===requestId.current)setError(message(reason));
+    }finally{
+      if(current===requestId.current){pending.current=false;setLoading(false)}
+    }
+  }
 
   if(!upload?.material_id||upload.status!=='succeeded')return <section className="panel p-8 text-center text-sm text-[var(--muted)]"><BarChart3 className="mx-auto mb-3"/>素材上传并核验成功后，可读取千川真实投放数据。</section>;
   return <>
-    <section className="panel p-5"><div className="flex flex-wrap items-start justify-between gap-3"><div><h2 className="text-lg font-medium">千川素材数据</h2><p className="mt-1 text-xs text-[var(--muted)]">查询账户：{upload.advertiser_name||'千川账户'} · {upload.advertiser_id}</p><p className="mt-1 text-xs text-[var(--muted)]">{report?.data_topic==='SITE_PROMOTION_PRODUCT_POST_DATA_VIDEO'?'全域商品视频素材报表':'全域/乘方商品素材报表'} · 素材 {upload.material_id}</p></div><div className="flex items-center gap-2"><select aria-label="报表时间范围" className="input-select" value={days} onChange={event=>setDays(Number(event.target.value))} disabled={loading}><option value={7}>近 7 天</option><option value={30}>近 30 天</option></select><button className="btn-secondary whitespace-nowrap shrink-0" onClick={()=>setRevision(value=>value+1)} disabled={loading}>{loading?<Loader2 size={14} className="animate-spin"/>:<RefreshCw size={14}/>}刷新</button></div></div>
+    <section className="panel p-5"><div className="flex flex-wrap items-start justify-between gap-3"><div><h2 className="text-lg font-medium">千川素材数据</h2><p className="mt-1 text-xs text-[var(--muted)]">查询账户：{upload.advertiser_name||'千川账户'} · {upload.advertiser_id}</p><p className="mt-1 text-xs text-[var(--muted)]">{report?.data_topic==='SITE_PROMOTION_PRODUCT_POST_DATA_VIDEO'?'全域商品视频素材报表':'全域/乘方商品素材报表'} · 素材 {upload.material_id}</p></div><div className="flex items-center gap-2"><select aria-label="报表时间范围" className="input-select" value={days} onChange={event=>setDays(Number(event.target.value))} disabled={loading}><option value={7}>近 7 天</option><option value={30}>近 30 天</option></select><button className="btn-secondary whitespace-nowrap shrink-0" onClick={()=>void refresh()} disabled={loading}>{loading?<Loader2 size={14} className="animate-spin"/>:<RefreshCw size={14}/>}刷新</button></div></div>
       {error&&<div className="mt-5 border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{error}</div>}
       <p className="mt-3 text-xs text-[var(--muted)]">数据缓存 1 小时，缓存期间刷新不会重复查询千川；到期后再次刷新获取新数据。</p>
+      {!report&&!loading&&!error&&<p className="mt-5 text-sm text-[var(--muted)]" role="status">点击“刷新”获取当前账户、素材和时间范围的投放数据。</p>}
       {report&&<div className="mt-2 text-xs text-[var(--muted)]" aria-live="polite">
         上次成功查询：{new Date(report.queried_at).toLocaleString('zh-CN')} ·
         缓存到期：{new Date(report.cache_expires_at).toLocaleString('zh-CN')} ·
