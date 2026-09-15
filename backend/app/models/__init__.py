@@ -238,6 +238,7 @@ class VideoAsset(Base):
     tenant_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
     project_id: Mapped[Optional[int]] = mapped_column(ForeignKey("video_edit_projects.id"), nullable=True, index=True)
     product_id: Mapped[int] = mapped_column(ForeignKey("products.id"), nullable=False, index=True)
+    category_id: Mapped[Optional[int]] = mapped_column(ForeignKey("video_categories.id"), nullable=True, index=True)
     asset_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
     filename: Mapped[str] = mapped_column(String(512), nullable=False)
     source: Mapped[str] = mapped_column(String(256), nullable=False, default="manual_upload")
@@ -262,6 +263,102 @@ class VideoAsset(Base):
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="uploaded")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class VideoCategory(Base):
+    __tablename__ = "video_categories"
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "object_type", "code", name="uq_video_category_code"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    tenant_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    object_type: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+    parent_id: Mapped[Optional[int]] = mapped_column(ForeignKey("video_categories.id"), nullable=True, index=True)
+    name: Mapped[str] = mapped_column(String(128), nullable=False)
+    code: Mapped[str] = mapped_column(String(128), nullable=False)
+    sort_order: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="active", index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class VideoTagGroup(Base):
+    __tablename__ = "video_tag_groups"
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "code", name="uq_video_tag_group_code"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    tenant_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    name: Mapped[str] = mapped_column(String(128), nullable=False)
+    code: Mapped[str] = mapped_column(String(128), nullable=False)
+    applies_to: Mapped[str] = mapped_column(String(32), nullable=False, default="both", index=True)
+    inherit_to_final: Mapped[bool] = mapped_column(nullable=False, default=True)
+    sort_order: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="active", index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class VideoTag(Base):
+    __tablename__ = "video_tags"
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "scope", "owner_id", "code", name="uq_video_tag_owner_code"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    tenant_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    group_id: Mapped[Optional[int]] = mapped_column(ForeignKey("video_tag_groups.id"), nullable=True, index=True)
+    name: Mapped[str] = mapped_column(String(128), nullable=False)
+    code: Mapped[str] = mapped_column(String(128), nullable=False)
+    scope: Mapped[str] = mapped_column(String(32), nullable=False, default="public", index=True)
+    owner_id: Mapped[str] = mapped_column(String(64), nullable=False, default="", index=True)
+    applies_to: Mapped[str] = mapped_column(String(32), nullable=False, default="both", index=True)
+    sort_order: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="active", index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class VideoAssetTag(Base):
+    __tablename__ = "video_asset_tags"
+    __table_args__ = (
+        UniqueConstraint("asset_id", "tag_id", name="uq_video_asset_tag"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    tenant_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    asset_id: Mapped[int] = mapped_column(ForeignKey("video_assets.id"), nullable=False, index=True)
+    tag_id: Mapped[int] = mapped_column(ForeignKey("video_tags.id"), nullable=False, index=True)
+    source: Mapped[str] = mapped_column(String(32), nullable=False, default="manual")
+    confidence: Mapped[float] = mapped_column(Float, nullable=False, default=1.0)
+    confirmed: Mapped[bool] = mapped_column(nullable=False, default=True)
+    created_by: Mapped[str] = mapped_column(String(64), nullable=False, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
+class VideoFilterPreset(Base):
+    __tablename__ = "video_filter_presets"
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "owner_id", "object_type", "name", name="uq_video_filter_preset_name"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    tenant_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    owner_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    object_type: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+    name: Mapped[str] = mapped_column(String(128), nullable=False)
+    filters: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class VideoTaxonomyState(Base):
+    __tablename__ = "video_taxonomy_states"
+
+    tenant_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    initialized_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
 
 class VideoEditProjectAsset(Base):

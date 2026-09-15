@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { NavLink, Outlet, useLocation } from 'react-router-dom';
 import {
   LayoutDashboard,
@@ -15,14 +15,17 @@ import {
   Film,
   Library,
   Layers,
+  Layers3,
   ChevronDown,
   ChevronRight,
   ClipboardList,
   Menu,
   X,
+  Tags,
 } from 'lucide-react';
 import IcpFiling from './IcpFiling';
 import dirovoLogo from '../assets/dirovo-logo.svg';
+import { authApi } from '../api/client';
 
 const dashboardLink = { to: '/', label: '工作台', icon: LayoutDashboard, end: true };
 
@@ -37,7 +40,9 @@ const routePreloaders: Record<string, () => Promise<unknown>> = {
   '/finished-video-remix': () => import('../pages/AutoEditWorkspace'),
   '/video-projects': () => import('../pages/VideoProjects'),
   '/final-videos': () => import('../pages/FinalVideoLibrary'),
+  '/manual-video-compose': () => import('../pages/ManualComposeProjects'),
   '/task-center': () => import('../pages/TaskCenter'),
+  '/video-taxonomy': () => import('../pages/VideoTaxonomy'),
   '/semi-finished-assets': () => import('../pages/VideoAssetLibrary'),
   '/smart-video-compose': () => import('../pages/AutoEditWorkspace'),
   '/director-inspiration': () => import('../pages/DirectorProjects'),
@@ -68,6 +73,7 @@ const navGroups = [
     label: '视频生产',
     items: [
       { to: '/finished-video-assets', label: '成品素材库', icon: Film },
+      { to: '/manual-video-compose', label: '视频编排', icon: Layers3 },
       { to: '/finished-video-remix', label: '成品混剪', icon: Video },
       { to: '/final-videos', label: '成片库', icon: Library },
       { to: '/director-inspiration', label: '编导灵感', icon: Clapperboard },
@@ -78,6 +84,7 @@ const navGroups = [
     label: '运营管理',
     items: [
       { to: '/task-center', label: '任务与费用', icon: Activity },
+      { to: '/video-taxonomy', label: '管理分类与标签', icon: Tags, adminOnly: true },
     ],
   },
 ];
@@ -118,7 +125,12 @@ export default function Layout() {
   const location = useLocation();
   const [plannedOpen, setPlannedOpen] = useState(false);
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
+  const [role, setRole] = useState('');
   const isDirectorWorkspace = /^\/director-inspiration\/\d+\/workspace/.test(location.pathname);
+
+  useEffect(() => {
+    authApi.me().then((result) => setRole(result.role)).catch(() => setRole(''));
+  }, []);
 
   if (!localStorage.getItem('access_token')) {
     window.location.href = '/login';
@@ -167,7 +179,7 @@ export default function Layout() {
                 {group.label}
               </div>
               <div className="space-y-1">
-                {group.items.map((item) => (
+                {group.items.filter((item) => !('adminOnly' in item) || !item.adminOnly || role === 'owner' || role === 'admin').map((item) => (
                   <NavLink
                     key={item.to}
                     to={item.to}
