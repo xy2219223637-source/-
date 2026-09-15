@@ -1,10 +1,34 @@
-import {useEffect,useMemo,useState} from 'react';
-import {Ban,CheckCircle2,ChevronDown,FileVideo,Loader2,Pencil,RefreshCw,Tag,Upload,X} from 'lucide-react';
-import {mediaUrl,productApi,videoLibraryApi} from '../api/client';
-import type {Product,VideoLibraryAsset,VideoReusableStatus} from '../types';
+import {useEffect,useMemo,useRef,useState} from 'react';
+import {
+  Ban,
+  CheckCircle2,
+  CheckSquare2,
+  ChevronDown,
+  FileVideo,
+  Loader2,
+  Pencil,
+  RefreshCw,
+  Square,
+  Tag,
+  Upload,
+  X,
+} from 'lucide-react';
+import {mediaUrl,productApi,videoLibraryApi,videoTaxonomyApi} from '../api/client';
+import {matchesVideoTaxonomy,VideoBatchTaxonomyBar,VideoTaxonomyFilters} from '../components/VideoTaxonomyFilters';
+import type {
+  Product,
+  VideoLibraryAsset,
+  VideoReusableStatus,
+  VideoTaxonomyCatalog,
+  VideoTaxonomyFilterValue,
+} from '../types';
 
-const statusText:Record<string,string>={validating:'正在校验视频',queued_for_analysis:'待分析',analyzing:'分析中',analyzed:'分析完成',analysis_failed:'分析失败'};
-const businessStatusText:Record<string,string>={processing:'处理中',review:'待确认',reusable:'可混剪',excluded:'已排除',blocked:'禁止复用',failed:'分析失败'};
+const statusText:Record<string,string>={
+  validating:'正在校验视频',queued_for_analysis:'待分析',analyzing:'分析中',analyzed:'分析完成',analysis_failed:'分析失败',
+};
+const businessStatusText:Record<string,string>={
+  processing:'处理中',review:'待确认',reusable:'可混剪',excluded:'已排除',blocked:'禁止复用',failed:'分析失败',
+};
 type LibraryType='semi_finished'|'finished';
 type Props={libraryType:LibraryType;title:string;description:string};
 
@@ -17,36 +41,168 @@ function businessStatus(asset:VideoLibraryAsset){
   return'review';
 }
 
+function formatSize(bytes:number){
+  return bytes>=1024**3?`${(bytes/1024**3).toFixed(2)} GB`:`${(bytes/1024**2).toFixed(1)} MB`;
+}
+
 export default function VideoAssetLibrary({libraryType,title,description}:Props){
   const isFinished=libraryType==='finished';
-  const [products,setProducts]=useState<Product[]>([]);const [productId,setProductId]=useState('');const [assets,setAssets]=useState<VideoLibraryAsset[]>([]);const [files,setFiles]=useState<File[]>([]);const [busy,setBusy]=useState('');const [error,setError]=useState('');const [dragging,setDragging]=useState(false);const [selectionError,setSelectionError]=useState('');
+  const [products,setProducts]=useState<Product[]>([]);
+  const [productId,setProductId]=useState('');
+  const [assets,setAssets]=useState<VideoLibraryAsset[]>([]);
+  const [files,setFiles]=useState<File[]>([]);
+  const [busy,setBusy]=useState('');
+  const [error,setError]=useState('');
+  const [dragging,setDragging]=useState(false);
+  const [selectionError,setSelectionError]=useState('');
   const [uploadProgress,setUploadProgress]=useState({loaded:0,total:0,percent:0,processing:false});
-  const [tagFilter,setTagFilter]=useState('全部');const [statusFilter,setStatusFilter]=useState('all');const [durationFilter,setDurationFilter]=useState('all');const [uploadOpen,setUploadOpen]=useState(false);const [editingId,setEditingId]=useState<number|null>(null);const [tagDraft,setTagDraft]=useState('');
-  useEffect(()=>{productApi.list().then(rows=>{setProducts(rows);setProductId(String(rows[0]?.id||''))}).catch(()=>setError('商品列表加载失败'))},[]);
-  useEffect(()=>{if(!productId)return;load();const refresh=()=>{if(document.visibilityState==='visible')void load(true)};const timer=window.setInterval(refresh,5000);document.addEventListener('visibilitychange',refresh);return()=>{window.clearInterval(timer);document.removeEventListener('visibilitychange',refresh)}},[productId,libraryType]);
-  async function load(silent=false){if(!silent)setBusy('load');try{setAssets(await videoLibraryApi.list(Number(productId),libraryType));setError('')}catch{if(!silent)setError('素材库加载失败')}finally{if(!silent)setBusy('')}}
-  async function upload(){if(!files.length||!productId)return;setBusy('upload');setError('');setUploadProgress({loaded:0,total:selectedBytes,percent:0,processing:false});try{await videoLibraryApi.upload(Number(productId),files,'manual_upload',(loaded,total,percent)=>setUploadProgress({loaded,total,percent,processing:percent>=100}),libraryType);setFiles([]);await load()}catch{setError('上传失败，请检查网络、OSS 和 FFmpeg 配置')}finally{setBusy('');setUploadProgress({loaded:0,total:0,percent:0,processing:false})}}
-  async function exclude(asset:VideoLibraryAsset){setBusy(String(asset.id));try{await videoLibraryApi.exclude(asset.id,!asset.excluded);await load(true)}finally{setBusy('')}}
-  async function setReusable(asset:VideoLibraryAsset,reusable_status:VideoReusableStatus){setBusy(`reuse-${asset.id}`);try{await videoLibraryApi.updateReusableStatus(asset.id,reusable_status);await load(true)}catch{setError('复用状态更新失败')}finally{setBusy('')}}
-  async function reanalyze(asset:VideoLibraryAsset){setBusy(String(asset.id));try{await videoLibraryApi.reanalyze(asset.id);await load(true)}finally{setBusy('')}}
-  async function saveTags(asset:VideoLibraryAsset,manualTags:string[],removedAiTags:string[]){setBusy(`tags-${asset.id}`);try{const updated=await videoLibraryApi.updateTags(asset.id,{manual_tags:manualTags,removed_ai_tags:removedAiTags});setAssets(current=>current.map(item=>item.id===asset.id?updated:item))}catch{setError('标签保存失败')}finally{setBusy('')}}
-  function removeTag(asset:VideoLibraryAsset,tag:string){if(asset.manual_tags.includes(tag))saveTags(asset,asset.manual_tags.filter(x=>x!==tag),asset.removed_ai_tags);else saveTags(asset,asset.manual_tags,[...asset.removed_ai_tags,tag])}
-  function restoreTag(asset:VideoLibraryAsset,tag:string){saveTags(asset,asset.manual_tags,asset.removed_ai_tags.filter(x=>x!==tag))}
-  function addManualTags(asset:VideoLibraryAsset){const additions=tagDraft.split(/[,，\n]/).map(x=>x.trim()).filter(Boolean);if(!additions.length)return;saveTags(asset,Array.from(new Set([...asset.manual_tags,...additions])),asset.removed_ai_tags);setTagDraft('')}
+  const [tagFilter,setTagFilter]=useState('全部');
+  const [statusFilter,setStatusFilter]=useState('all');
+  const [durationFilter,setDurationFilter]=useState('all');
+  const [uploadOpen,setUploadOpen]=useState(false);
+  const [editingId,setEditingId]=useState<number|null>(null);
+  const [tagDraft,setTagDraft]=useState('');
+  const [catalog,setCatalog]=useState<VideoTaxonomyCatalog|null>(null);
+  const [taxonomyFilter,setTaxonomyFilter]=useState<VideoTaxonomyFilterValue>({categoryId:null,publicTagIds:[],publicTagMatchMode:'any',personalTagIds:[]});
+  const [selectedIds,setSelectedIds]=useState<number[]>([]);
+  const loadRequest=useRef(0);
+
+  useEffect(()=>{
+    productApi.list().then(rows=>{
+      setProducts(rows);
+      setProductId(String(rows[0]?.id||''));
+    }).catch(()=>setError('商品列表加载失败'));
+    void refreshCatalog();
+  },[]);
+
+  useEffect(()=>{
+    setSelectedIds([]);
+    if(!productId){setAssets([]);return;}
+    void load();
+    const refresh=()=>{if(document.visibilityState==='visible')void load(true)};
+    const timer=window.setInterval(refresh,5000);
+    document.addEventListener('visibilitychange',refresh);
+    return()=>{loadRequest.current+=1;window.clearInterval(timer);document.removeEventListener('visibilitychange',refresh)};
+  },[productId,libraryType]);
+
+  async function refreshCatalog(){
+    try{setCatalog(await videoTaxonomyApi.catalog('material'))}catch{setError('分类与标签加载失败')}
+  }
+
+  async function load(silent=false){
+    if(!productId)return;
+    const request=++loadRequest.current;
+    if(!silent)setBusy('load');
+    try{
+      const rows=await videoLibraryApi.list(Number(productId),libraryType);
+      if(request!==loadRequest.current)return;
+      setAssets(rows);
+      setSelectedIds(current=>current.filter(id=>rows.some(asset=>asset.id===id)));
+      setError('');
+    }catch{if(request===loadRequest.current&&!silent)setError('素材库加载失败')}
+    finally{if(request===loadRequest.current&&!silent)setBusy('')}
+  }
+
+  async function upload(){
+    if(!files.length||!productId)return;
+    setBusy('upload');setError('');
+    setUploadProgress({loaded:0,total:selectedBytes,percent:0,processing:false});
+    try{
+      await videoLibraryApi.upload(
+        Number(productId),files,'manual_upload',
+        (loaded,total,percent)=>setUploadProgress({loaded,total,percent,processing:percent>=100}),
+        libraryType,
+      );
+      setFiles([]);await load();
+    }catch{setError('上传失败, 请检查网络 OSS 和 FFmpeg 配置')}
+    finally{setBusy('');setUploadProgress({loaded:0,total:0,percent:0,processing:false})}
+  }
+
+  async function exclude(asset:VideoLibraryAsset){
+    setBusy(String(asset.id));
+    try{await videoLibraryApi.exclude(asset.id,!asset.excluded);await load(true)}finally{setBusy('')}
+  }
+
+  async function setReusable(asset:VideoLibraryAsset,reusable_status:VideoReusableStatus){
+    setBusy(`reuse-${asset.id}`);
+    try{await videoLibraryApi.updateReusableStatus(asset.id,reusable_status);await load(true)}
+    catch{setError('复用状态更新失败')}
+    finally{setBusy('')}
+  }
+
+  async function reanalyze(asset:VideoLibraryAsset){
+    setBusy(String(asset.id));
+    try{await videoLibraryApi.reanalyze(asset.id);await load(true)}finally{setBusy('')}
+  }
+
+  async function saveLegacyTags(asset:VideoLibraryAsset,manualTags:string[],removedAiTags:string[]){
+    setBusy(`tags-${asset.id}`);
+    try{
+      const updated=await videoLibraryApi.updateTags(asset.id,{manual_tags:manualTags,removed_ai_tags:removedAiTags});
+      setAssets(current=>current.map(item=>item.id===asset.id?updated:item));
+    }catch{setError('AI 标签修正保存失败')}
+    finally{setBusy('')}
+  }
+
+  function removeLegacyTag(asset:VideoLibraryAsset,tag:string){
+    if(asset.manual_tags.includes(tag))void saveLegacyTags(asset,asset.manual_tags.filter(value=>value!==tag),asset.removed_ai_tags);
+    else void saveLegacyTags(asset,asset.manual_tags,[...asset.removed_ai_tags,tag]);
+  }
+
+  function restoreLegacyTag(asset:VideoLibraryAsset,tag:string){
+    void saveLegacyTags(asset,asset.manual_tags,asset.removed_ai_tags.filter(value=>value!==tag));
+  }
+
+  function addManualTags(asset:VideoLibraryAsset){
+    const additions=tagDraft.split(/[,，\n]/).map(value=>value.trim()).filter(Boolean);
+    if(!additions.length)return;
+    void saveLegacyTags(asset,Array.from(new Set([...asset.manual_tags,...additions])),asset.removed_ai_tags);
+    setTagDraft('');
+  }
+
   function addFiles(incoming:File[]){
     const videos=incoming.filter(file=>file.type.startsWith('video/')||/\.(mp4|mov|m4v|webm|mkv|avi)$/i.test(file.name));
     const merged=[...files];
-    videos.forEach(file=>{if(!merged.some(existing=>existing.name===file.name&&existing.size===file.size&&existing.lastModified===file.lastModified))merged.push(file)});
-    const accepted=merged.slice(0,30);setFiles(accepted);
-    const messages=[];if(incoming.length-videos.length)messages.push(`已忽略 ${incoming.length-videos.length} 个非视频文件`);if(merged.length>30)messages.push('单批最多保留 30 条视频');setSelectionError(messages.join('；'));
+    videos.forEach(file=>{
+      if(!merged.some(existing=>existing.name===file.name&&existing.size===file.size&&existing.lastModified===file.lastModified))merged.push(file);
+    });
+    setFiles(merged.slice(0,30));
+    const messages:string[]=[];
+    if(incoming.length-videos.length)messages.push(`已忽略 ${incoming.length-videos.length} 个非视频文件`);
+    if(merged.length>30)messages.push('单批最多保留 30 条视频');
+    setSelectionError(messages.join('; '));
   }
-  function formatSize(bytes:number){return bytes>=1024**3?`${(bytes/1024**3).toFixed(2)} GB`:`${(bytes/1024**2).toFixed(1)} MB`}
+
+  function applyPreset(filters:Record<string,unknown>){
+    if(typeof filters.status_filter==='string')setStatusFilter(filters.status_filter);
+    if(typeof filters.duration_filter==='string')setDurationFilter(filters.duration_filter);
+    if(typeof filters.ai_tag_filter==='string')setTagFilter(filters.ai_tag_filter);
+    if(typeof filters.product_id==='number'&&products.some(product=>product.id===filters.product_id))setProductId(String(filters.product_id));
+  }
+
   const selectedBytes=files.reduce((total,file)=>total+file.size,0);
-  const stats=useMemo(()=>({total:assets.length,analyzed:assets.filter(x=>x.status==='analyzed').length,usable:assets.filter(x=>x.status==='analyzed'&&!x.excluded&&(!isFinished||x.reusable_status==='reusable')).length,review:assets.filter(x=>businessStatus(x)==='review').length,processing:assets.filter(x=>businessStatus(x)==='processing').length,excluded:assets.filter(x=>businessStatus(x)==='excluded').length,blocked:assets.filter(x=>x.reusable_status==='blocked').length,failed:assets.filter(x=>x.status==='analysis_failed').length,duration:assets.reduce((n,x)=>n+x.duration_seconds,0)}),[assets,isFinished]);
-  const analysisStats=useMemo(()=>{const active=assets.filter(x=>!x.excluded);const completed=active.filter(x=>x.status==='analyzed').length;const failed=active.filter(x=>x.status==='analysis_failed').length;const analyzing=active.filter(x=>x.status==='analyzing').length;const queued=active.filter(x=>x.status==='queued_for_analysis').length;return{total:active.length,completed,failed,analyzing,queued,percent:active.length?Math.round((completed+failed)/active.length*100):0}},[assets]);
   const allTags=useMemo(()=>Array.from(new Set(assets.flatMap(asset=>asset.effective_tags||[]))).sort(),[assets]);
+  const stats=useMemo(()=>({
+    total:assets.length,
+    analyzed:assets.filter(asset=>asset.status==='analyzed').length,
+    usable:assets.filter(asset=>asset.status==='analyzed'&&!asset.excluded&&(!isFinished||asset.reusable_status==='reusable')).length,
+    review:assets.filter(asset=>businessStatus(asset)==='review').length,
+    processing:assets.filter(asset=>businessStatus(asset)==='processing').length,
+    excluded:assets.filter(asset=>businessStatus(asset)==='excluded').length,
+    failed:assets.filter(asset=>asset.status==='analysis_failed').length,
+    duration:assets.reduce((total,asset)=>total+asset.duration_seconds,0),
+  }),[assets,isFinished]);
+  const analysisStats=useMemo(()=>{
+    const active=assets.filter(asset=>!asset.excluded);
+    const completed=active.filter(asset=>asset.status==='analyzed').length;
+    const failed=active.filter(asset=>asset.status==='analysis_failed').length;
+    const analyzing=active.filter(asset=>asset.status==='analyzing').length;
+    const queued=active.filter(asset=>asset.status==='queued_for_analysis').length;
+    return{total:active.length,completed,failed,analyzing,queued,percent:active.length?Math.round((completed+failed)/active.length*100):0};
+  },[assets]);
   const visibleAssets=assets.filter(asset=>{
-    if(tagFilter!=='全部'&&!(asset.effective_tags||[]).includes(tagFilter))return false;
+    if(catalog&&!matchesVideoTaxonomy(asset,catalog,taxonomyFilter))return false;
+    if(tagFilter!=='全部'&&!asset.effective_tags.includes(tagFilter))return false;
     if(isFinished&&statusFilter!=='all'&&businessStatus(asset)!==statusFilter)return false;
     if(durationFilter==='under-15'&&asset.duration_seconds>15)return false;
     if(durationFilter==='15-30'&&(asset.duration_seconds<=15||asset.duration_seconds>30))return false;
@@ -54,12 +210,62 @@ export default function VideoAssetLibrary({libraryType,title,description}:Props)
     if(durationFilter==='over-60'&&asset.duration_seconds<=60)return false;
     return true;
   });
-  return <div className="space-y-6 max-w-7xl mx-auto animate-fade-in"><header><div className="text-xs tracking-[.18em] text-[var(--muted)] mb-2">{isFinished?'FINISHED VIDEO LIBRARY':'SEMI-FINISHED MATERIAL LIBRARY'}</div><h1 className="font-display text-4xl">{title}</h1><p className="text-sm text-[var(--muted)] mt-2">{description}</p></header>
-    {error&&<div className="border border-red-200 bg-red-50 text-red-700 p-3 text-sm">{error}</div>}
-    {isFinished&&<section className="panel p-4"><div className="flex flex-wrap items-end gap-3"><label className="field min-w-56 flex-1"><span>商品</span><select className="input-select" value={productId} onChange={e=>setProductId(e.target.value)}><option value="">请选择商品</option>{products.map(p=><option key={p.id} value={p.id}>{p.name}{p.brand_name?` · ${p.brand_name}`:''}</option>)}</select></label><label className="field min-w-36"><span>状态</span><select className="input-select" value={statusFilter} onChange={e=>setStatusFilter(e.target.value)}><option value="all">全部状态</option><option value="processing">处理中</option><option value="review">待确认</option><option value="reusable">可混剪</option><option value="excluded">已排除</option><option value="blocked">禁止复用</option><option value="failed">分析失败</option></select></label><label className="field min-w-36"><span>时长</span><select className="input-select" value={durationFilter} onChange={e=>setDurationFilter(e.target.value)}><option value="all">全部时长</option><option value="under-15">15 秒内</option><option value="15-30">15–30 秒</option><option value="30-60">30–60 秒</option><option value="over-60">60 秒以上</option></select></label><label className="field min-w-36"><span>标签</span><select className="input-select" value={tagFilter} onChange={e=>setTagFilter(e.target.value)}><option value="全部">全部标签</option>{allTags.map(tag=><option key={tag} value={tag}>{tag}</option>)}</select></label><button className="btn-primary h-[42px]" onClick={()=>setUploadOpen(open=>!open)}><Upload size={15}/>上传成品视频<ChevronDown size={14} className={`transition-transform ${uploadOpen?'rotate-180':''}`}/></button></div></section>}
-    {(!isFinished||uploadOpen)&&<section className="panel p-5">{!isFinished&&<label className="field"><span>当前商品</span><select className="input-select" value={productId} onChange={e=>setProductId(e.target.value)}><option value="">请选择商品</option>{products.map(p=><option key={p.id} value={p.id}>{p.name}{p.brand_name?` · ${p.brand_name}`:''}</option>)}</select></label>}<div onDragEnter={e=>{e.preventDefault();setDragging(true)}} onDragOver={e=>{e.preventDefault();e.dataTransfer.dropEffect='copy';setDragging(true)}} onDragLeave={e=>{e.preventDefault();if(!e.currentTarget.contains(e.relatedTarget as Node))setDragging(false)}} onDrop={e=>{e.preventDefault();setDragging(false);addFiles(Array.from(e.dataTransfer.files))}} className={`${!isFinished?'mt-5 ':''}border-2 border-dashed p-8 text-center transition-colors ${dragging?'border-blue-500 bg-blue-50':'border-[var(--border)] bg-[#faf9f7]'}`}><Upload className={`mx-auto ${dragging?'text-blue-600':'text-[var(--muted)]'}`} size={28}/><div className="font-medium mt-3">{dragging?'松开即可加入素材':'把视频文件拖到这里'}</div><p className="text-xs text-[var(--muted)] mt-2">支持一次拖入多个视频，也可以点击下面的按钮选择</p><label className="btn-secondary cursor-pointer mt-4 inline-flex"><FileVideo size={15}/>选择视频<input hidden multiple type="file" accept="video/*,.mp4,.mov,.m4v,.webm,.mkv,.avi" onChange={e=>{addFiles(Array.from(e.target.files||[]));e.currentTarget.value=''}}/></label></div>{selectionError&&<div className="text-xs text-amber-700 mt-3">{selectionError}</div>}{files.length>0&&<div className="mt-4 border border-[var(--border)]"><div className="flex justify-between items-center bg-[#f6f5f2] px-4 py-3 text-sm"><span>待上传 {files.length} 条 · {formatSize(selectedBytes)}</span><div className="flex gap-2"><button className="btn-secondary" onClick={()=>{setFiles([]);setSelectionError('')}} disabled={!!busy}>清空</button><button className="btn-primary" disabled={!productId||!!busy} onClick={upload}>{busy==='upload'?<Loader2 size={15} className="animate-spin"/>:<Upload size={15}/>}上传并自动分析</button></div></div>{busy==='upload'&&<div className="px-4 py-3 border-b border-[var(--border)] bg-blue-50"><div className="flex justify-between text-xs mb-2"><span>{uploadProgress.processing?'文件已传完，服务器正在校验并存入 OSS…':'正在上传视频…'}</span><span>{uploadProgress.percent}% · {formatSize(uploadProgress.loaded)} / {formatSize(uploadProgress.total||selectedBytes)}</span></div><div className="h-2 bg-blue-100 overflow-hidden rounded-full"><div className={`h-full bg-blue-600 transition-[width] duration-200 ${uploadProgress.processing?'animate-pulse':''}`} style={{width:`${uploadProgress.percent}%`}}/></div></div>}<div className="max-h-56 overflow-auto divide-y divide-[var(--border)]">{files.map((file,index)=><div className="flex justify-between gap-3 px-4 py-2 text-xs" key={`${file.name}-${file.size}-${file.lastModified}`}><div className="min-w-0"><span className="truncate block">{file.name}</span><span className="text-[var(--muted)]">{formatSize(file.size)}</span></div><button title="移除" onClick={()=>setFiles(current=>current.filter((_,i)=>i!==index))} disabled={!!busy} className="p-1 text-[var(--muted)] hover:text-black"><X size={14}/></button></div>)}</div></div>}<p className="text-xs text-[var(--muted)] mt-3">{isFinished?'成品上传后按完整语义句切成约 4～15 秒片段，并检测烧录字幕和原 BGM。审核为可混剪后才会进入成品混剪。':'半成品上传后自动分析 Whisper 原声、口型、商品和可用时间段。人物口播必须口型匹配且句子完整，才会作为 a_roll。'}</p></section>}
-    <section className="grid grid-cols-2 lg:grid-cols-5 gap-3">{isFinished?([[stats.total,'全部素材','all'],[stats.processing,'处理中','processing'],[stats.review,'待确认','review'],[stats.usable,'可混剪','reusable'],[stats.excluded,'已排除','excluded']] as Array<[number,string,string]>).map(([value,label,status])=><button className={`panel p-4 text-left transition-colors hover:border-black ${statusFilter===status?'border-black ring-1 ring-black':''}`} key={label} onClick={()=>setStatusFilter(status)}><div className="font-display text-2xl">{value}</div><div className="text-xs text-[var(--muted)] mt-1">{label}</div></button>):([[stats.total,'素材'],[stats.analyzed,'分析完成'],[stats.usable,'可用于成片'],[stats.failed,'失败'],[(stats.duration/60).toFixed(1),'总分钟']] as Array<[number|string,string]>).map(([value,label])=><div className="panel p-4" key={label}><div className="font-display text-2xl">{value}</div><div className="text-xs text-[var(--muted)] mt-1">{label}</div></div>)}</section>
-    {analysisStats.total>0&&analysisStats.completed+analysisStats.failed<analysisStats.total&&<section className="panel p-5 border-blue-200 bg-blue-50"><div className="flex flex-wrap justify-between gap-2"><div><div className="font-medium flex items-center gap-2"><Loader2 size={16} className="animate-spin text-blue-600"/>AI 正在理解这批素材</div><p className="text-xs text-[var(--muted)] mt-1">模型调用不返回内部百分比，这里按已完成的视频条数展示真实任务进度，每 5 秒自动刷新。</p></div><b className="text-blue-700">{analysisStats.completed+analysisStats.failed} / {analysisStats.total} 条 · {analysisStats.percent}%</b></div><div className="h-2.5 bg-blue-100 overflow-hidden rounded-full mt-4"><div className="h-full bg-blue-600 transition-[width] duration-500" style={{width:`${analysisStats.percent}%`}}/></div><div className="flex flex-wrap gap-4 mt-3 text-xs"><span>模型分析中 {analysisStats.analyzing}</span><span>排队等待 {analysisStats.queued}</span><span>成功 {analysisStats.completed}</span>{analysisStats.failed>0&&<span className="text-red-600">失败 {analysisStats.failed}</span>}</div></section>}
-    <section><div className="flex justify-between mb-3"><div><h2 className="text-lg font-medium">素材列表</h2><p className="text-xs text-[var(--muted)] mt-1">{isFinished?'确认可复用的素材后，才会进入成品混剪。':'AI 自动打标，人工修改结果优先。'}</p></div>{busy==='load'&&<Loader2 size={16} className="animate-spin"/>}</div>{!isFinished&&allTags.length>0&&<div className="flex flex-wrap gap-2 mb-4"><button onClick={()=>setTagFilter('全部')} className={`px-3 py-1.5 text-xs border ${tagFilter==='全部'?'bg-black text-white border-black':'bg-white border-[var(--border)]'}`}>全部 {assets.length}</button>{allTags.map(tag=><button key={tag} onClick={()=>setTagFilter(tag)} className={`px-3 py-1.5 text-xs border ${tagFilter===tag?'bg-black text-white border-black':'bg-white border-[var(--border)]'}`}>{tag} {assets.filter(a=>a.effective_tags.includes(tag)).length}</button>)}</div>}<div className="grid md:grid-cols-2 xl:grid-cols-3 gap-4">{visibleAssets.map(asset=>{const state=businessStatus(asset);const usableSeconds=asset.highlights.reduce((total,item)=>total+Math.max(0,item.end-item.start),0);return <article key={asset.id} className={`panel overflow-hidden ${state==='excluded'||state==='blocked'?'opacity-60':''}`}><div className="relative"><video className="w-full aspect-video object-cover bg-black" src={mediaUrl(asset.object_url)} controls preload="metadata"/>{isFinished&&<span className={`absolute left-3 top-3 rounded px-2 py-1 text-[11px] font-medium shadow ${state==='reusable'?'bg-emerald-600 text-white':state==='review'?'bg-amber-400 text-black':state==='failed'||state==='blocked'?'bg-red-600 text-white':state==='processing'?'bg-blue-600 text-white':'bg-black/75 text-white'}`}>{businessStatusText[state]}</span>}</div><div className="p-4"><div className="flex justify-between gap-2"><b className="truncate" title={asset.filename}>{asset.filename}</b>{!isFinished&&<span className={`text-xs shrink-0 ${asset.status==='analyzed'?'text-emerald-700':asset.status==='analysis_failed'?'text-red-600':'text-blue-600'}`}>{statusText[asset.status]||asset.status}</span>}</div><div className="text-xs text-[var(--muted)] mt-2">{asset.duration_seconds.toFixed(1)} 秒 · {asset.width}×{asset.height}{asset.burned_subtitles?' · 烧录字幕':''}{asset.has_background_music?' · 原 BGM':''}</div>{(asset.status==='queued_for_analysis'||asset.status==='analyzing')&&<div className="mt-3 bg-blue-50 border border-blue-100 p-3"><div className="flex items-center gap-2 text-xs text-blue-800"><Loader2 size={13} className="animate-spin"/>{asset.status==='queued_for_analysis'?'等待前面的素材分析完成':'正在识别人物、口播、卖点、镜头和高价值时间段'}</div><div className="h-1.5 bg-blue-100 overflow-hidden rounded-full mt-2"><div className={`h-full bg-blue-600 ${asset.status==='analyzing'?'w-2/3':'w-1/4'} animate-pulse`}/></div></div>}<p className="text-sm leading-5 mt-3 min-h-10">{asset.analysis?.summary||'等待 AI 生成内容摘要'}</p>{isFinished&&asset.status==='analyzed'&&<div className="mt-3 rounded bg-[#f6f5f2] px-3 py-2 text-xs"><b>{asset.highlights.length} 个可用片段</b><span className="ml-2 text-[var(--muted)]">合计 {usableSeconds.toFixed(1)} 秒</span></div>}{asset.effective_tags.length>0&&<div className="flex flex-wrap gap-1.5 mt-3">{asset.effective_tags.map(tag=><span key={tag} className={`text-[11px] px-2 py-1 border ${asset.manual_tags.includes(tag)?'border-blue-300 bg-blue-50 text-blue-800':'border-[var(--border)] bg-[#f6f5f2]'}`}>{tag}{asset.manual_tags.includes(tag)&&<span className="ml-1 opacity-60">人工</span>}</span>)}</div>}{!isFinished&&asset.highlights.length>0&&<div className="mt-3 space-y-1">{asset.highlights.slice(0,3).map(h=><div className="text-xs bg-[#f6f5f2] p-2" key={h.highlight_id}>{h.start.toFixed(1)}–{h.end.toFixed(1)}s · {h.description}</div>)}</div>}{editingId===asset.id&&<div className="mt-4 border border-blue-200 bg-blue-50 p-3"><div className="text-xs font-medium">编辑标签</div><div className="flex flex-wrap gap-1.5 mt-2">{asset.effective_tags.map(tag=><button key={tag} onClick={()=>removeTag(asset,tag)} disabled={!!busy} className="text-[11px] px-2 py-1 bg-white border border-blue-200 inline-flex items-center gap-1">{tag}<X size={11}/></button>)}</div><div className="flex gap-2 mt-3"><input className="flex-1 border border-blue-200 px-2 py-1.5 text-xs" value={tagDraft} onChange={e=>setTagDraft(e.target.value)} onKeyDown={e=>{if(e.key==='Enter'){e.preventDefault();addManualTags(asset)}}} placeholder="输入标签，逗号分隔"/><button className="btn-secondary" onClick={()=>addManualTags(asset)} disabled={!tagDraft.trim()||!!busy}><Tag size={13}/>添加</button></div>{asset.removed_ai_tags.length>0&&<div className="mt-3 text-xs"><span className="text-[var(--muted)]">已隐藏的 AI 标签：</span>{asset.removed_ai_tags.map(tag=><button className="underline ml-2" key={tag} onClick={()=>restoreTag(asset,tag)}>{tag}（恢复）</button>)}</div>}</div>}{isFinished?<div className="mt-4 flex flex-wrap gap-2">{state==='review'&&asset.generation_depth<=1&&<><button className="btn-primary" disabled={!!busy} onClick={()=>setReusable(asset,'reusable')}><CheckCircle2 size={14}/>确认可混剪</button><button className="btn-secondary" disabled={!!busy} onClick={()=>setReusable(asset,'excluded')}><Ban size={14}/>排除</button></>}{state==='reusable'&&<button className="btn-secondary" disabled={!!busy} onClick={()=>setReusable(asset,'excluded')}><Ban size={14}/>排除</button>}{state==='excluded'&&asset.generation_depth<=1&&<button className="btn-secondary" disabled={!!busy} onClick={()=>setReusable(asset,'review_required')}><CheckCircle2 size={14}/>恢复待确认</button>}{state==='failed'&&<button className="btn-secondary" onClick={()=>reanalyze(asset)} disabled={!!busy}><RefreshCw size={14}/>重新分析</button>}{asset.status==='analyzed'&&<button className="btn-secondary" onClick={()=>{setEditingId(editingId===asset.id?null:asset.id);setTagDraft('')}}><Pencil size={14}/>编辑标签</button>}</div>:<div className="flex justify-between mt-4"><div className="flex flex-wrap gap-2"><button className="btn-secondary" onClick={()=>exclude(asset)} disabled={!!busy}>{asset.excluded?<><CheckCircle2 size={14}/>恢复</>:<><Ban size={14}/>排除</>}</button><button className="btn-secondary" onClick={()=>{setEditingId(editingId===asset.id?null:asset.id);setTagDraft('')}}><Pencil size={14}/>标签</button></div>{asset.status==='analysis_failed'&&<button className="btn-secondary" onClick={()=>reanalyze(asset)} disabled={!!busy}><RefreshCw size={14}/>重新分析</button>}</div>}</div></article>})}{!visibleAssets.length&&<div className="panel py-16 md:col-span-2 xl:col-span-3 text-center text-sm text-[var(--muted)]"><FileVideo className="mx-auto mb-3"/>{assets.length?'当前筛选条件下没有素材':productId?isFinished?'这个商品还没有成品素材，可上传完整成片，或从智能成片/成品混剪渲染入库':'这个商品还没有半成品素材':'请先选择商品'}</div>}</div></section>
-  </div>
+  const allVisibleSelected=visibleAssets.length>0&&visibleAssets.every(asset=>selectedIds.includes(asset.id));
+  const toggleSelection=(assetId:number)=>setSelectedIds(current=>current.includes(assetId)?current.filter(id=>id!==assetId):[...current,assetId]);
+
+  return <div className="mx-auto max-w-7xl space-y-6 animate-fade-in">
+    <header><div className="mb-2 text-xs tracking-[.18em] text-[var(--muted)]">{isFinished?'FINISHED VIDEO LIBRARY':'SEMI-FINISHED MATERIAL LIBRARY'}</div><h1 className="font-display text-4xl">{title}</h1><p className="mt-2 text-sm text-[var(--muted)]">{description}</p></header>
+    {error&&<div className="border border-red-200 bg-red-50 p-3 text-sm text-red-700" role="alert">{error}</div>}
+
+    <section className="panel p-4">
+      <div className="flex flex-wrap items-end gap-3">
+        <label className="field min-w-56 flex-1"><span>商品</span><select className="input-select" value={productId} onChange={event=>setProductId(event.target.value)}><option value="">请选择商品</option>{products.map(product=><option key={product.id} value={product.id}>{product.name}{product.brand_name?` - ${product.brand_name}`:''}</option>)}</select></label>
+        {isFinished&&<label className="field min-w-36"><span>状态</span><select className="input-select" value={statusFilter} onChange={event=>setStatusFilter(event.target.value)}><option value="all">全部状态</option><option value="processing">处理中</option><option value="review">待确认</option><option value="reusable">可混剪</option><option value="excluded">已排除</option><option value="blocked">禁止复用</option><option value="failed">分析失败</option></select></label>}
+        <label className="field min-w-36"><span>时长</span><select className="input-select" value={durationFilter} onChange={event=>setDurationFilter(event.target.value)}><option value="all">全部时长</option><option value="under-15">15 秒内</option><option value="15-30">15-30 秒</option><option value="30-60">30-60 秒</option><option value="over-60">60 秒以上</option></select></label>
+        <label className="field min-w-36"><span>AI 分析标签</span><select className="input-select" value={tagFilter} onChange={event=>setTagFilter(event.target.value)}><option value="全部">全部标签</option>{allTags.map(tag=><option key={tag} value={tag}>{tag}</option>)}</select></label>
+        <button className="btn-primary h-[42px]" onClick={()=>setUploadOpen(open=>!open)}><Upload size={15}/>上传视频<ChevronDown size={14} className={`transition-transform ${uploadOpen?'rotate-180':''}`}/></button>
+      </div>
+    </section>
+
+    {uploadOpen&&<section className="panel p-5">
+      <div onDragEnter={event=>{event.preventDefault();setDragging(true)}} onDragOver={event=>{event.preventDefault();event.dataTransfer.dropEffect='copy';setDragging(true)}} onDragLeave={event=>{event.preventDefault();if(!event.currentTarget.contains(event.relatedTarget as Node))setDragging(false)}} onDrop={event=>{event.preventDefault();setDragging(false);addFiles(Array.from(event.dataTransfer.files))}} className={`border-2 border-dashed p-8 text-center transition-colors ${dragging?'border-blue-500 bg-blue-50':'border-[var(--border)] bg-[#faf9f7]'}`}>
+        <Upload className={`mx-auto ${dragging?'text-blue-600':'text-[var(--muted)]'}`} size={28}/><div className="mt-3 font-medium">{dragging?'松开即可加入素材':'上传视频文件'}</div><label className="btn-secondary mt-4 inline-flex cursor-pointer"><FileVideo size={15}/>选择视频<input hidden multiple type="file" accept="video/*,.mp4,.mov,.m4v,.webm,.mkv,.avi" onChange={event=>{addFiles(Array.from(event.target.files||[]));event.currentTarget.value=''}}/></label>
+      </div>
+      {selectionError&&<div className="mt-3 text-xs text-amber-700">{selectionError}</div>}
+      {files.length>0&&<div className="mt-4 border border-[var(--border)]"><div className="flex items-center justify-between bg-[#f6f5f2] px-4 py-3 text-sm"><span>待上传 {files.length} 条 - {formatSize(selectedBytes)}</span><div className="flex gap-2"><button className="btn-secondary" onClick={()=>{setFiles([]);setSelectionError('')}} disabled={!!busy}>清空</button><button className="btn-primary" disabled={!productId||!!busy} onClick={upload}>{busy==='upload'?<Loader2 size={15} className="animate-spin"/>:<Upload size={15}/>}上传并分析</button></div></div>{busy==='upload'&&<div className="border-b border-[var(--border)] bg-blue-50 px-4 py-3"><div className="mb-2 flex justify-between text-xs"><span>{uploadProgress.processing?'服务器正在校验并存储':'正在上传视频'}</span><span>{uploadProgress.percent}% - {formatSize(uploadProgress.loaded)} / {formatSize(uploadProgress.total||selectedBytes)}</span></div><div className="h-2 overflow-hidden rounded-full bg-blue-100"><div className={`h-full bg-blue-600 transition-[width] ${uploadProgress.processing?'animate-pulse':''}`} style={{width:`${uploadProgress.percent}%`}}/></div></div>}<div className="max-h-56 divide-y divide-[var(--border)] overflow-auto">{files.map((file,index)=><div className="flex justify-between gap-3 px-4 py-2 text-xs" key={`${file.name}-${file.size}-${file.lastModified}`}><div className="min-w-0"><span className="block truncate">{file.name}</span><span className="text-[var(--muted)]">{formatSize(file.size)}</span></div><button onClick={()=>setFiles(current=>current.filter((_,itemIndex)=>itemIndex!==index))} disabled={!!busy} className="p-1 text-[var(--muted)] hover:text-black" aria-label={`移除 ${file.name}`}><X size={14}/></button></div>)}</div></div>}
+    </section>}
+
+    {catalog&&<VideoTaxonomyFilters objectType="material" catalog={catalog} value={taxonomyFilter} onChange={setTaxonomyFilter} onRefresh={refreshCatalog} presetFilters={{product_id:Number(productId)||null,library_type:libraryType,status_filter:statusFilter,duration_filter:durationFilter,ai_tag_filter:tagFilter}} onApplyPreset={applyPreset}/>}
+    {catalog&&<VideoBatchTaxonomyBar catalog={catalog} selectedIds={selectedIds} onClear={()=>setSelectedIds([])} onDone={async()=>{await Promise.all([load(true),refreshCatalog()])}}/>}
+
+    <section className="grid grid-cols-2 gap-3 lg:grid-cols-5">{(isFinished?[
+      [stats.total,'全部素材','all'],[stats.processing,'处理中','processing'],[stats.review,'待确认','review'],[stats.usable,'可混剪','reusable'],[stats.excluded,'已排除','excluded'],
+    ]:[
+      [stats.total,'素材','all'],[stats.analyzed,'分析完成','all'],[stats.usable,'可用于成片','all'],[stats.failed,'失败','all'],[(stats.duration/60).toFixed(1),'总分钟','all'],
+    ]).map(([value,label,status])=>isFinished?<button className={`panel p-4 text-left transition-colors hover:border-black ${statusFilter===status?'border-black ring-1 ring-black':''}`} key={label} onClick={()=>setStatusFilter(String(status))}><div className="font-display text-2xl">{value}</div><div className="mt-1 text-xs text-[var(--muted)]">{label}</div></button>:<div className="panel p-4" key={label}><div className="font-display text-2xl">{value}</div><div className="mt-1 text-xs text-[var(--muted)]">{label}</div></div>)}</section>
+
+    {analysisStats.total>0&&analysisStats.completed+analysisStats.failed<analysisStats.total&&<section className="panel border-blue-200 bg-blue-50 p-5"><div className="flex flex-wrap justify-between gap-2"><div className="flex items-center gap-2 font-medium"><Loader2 size={16} className="animate-spin text-blue-600"/>AI 正在分析素材</div><b className="text-blue-700">{analysisStats.completed+analysisStats.failed} / {analysisStats.total} 条 - {analysisStats.percent}%</b></div><div className="mt-4 h-2.5 overflow-hidden rounded-full bg-blue-100"><div className="h-full bg-blue-600 transition-[width]" style={{width:`${analysisStats.percent}%`}}/></div><div className="mt-3 flex flex-wrap gap-4 text-xs"><span>模型分析中 {analysisStats.analyzing}</span><span>排队等待 {analysisStats.queued}</span><span>成功 {analysisStats.completed}</span>{analysisStats.failed>0&&<span className="text-red-600">失败 {analysisStats.failed}</span>}</div></section>}
+
+    <section>
+      <div className="mb-3 flex flex-wrap items-center justify-between gap-3"><div><h2 className="text-lg font-medium">素材列表</h2><p className="mt-1 text-xs text-[var(--muted)]">共 {visibleAssets.length} 条结果</p></div><div className="flex items-center gap-2"><button className="btn-secondary" disabled={!visibleAssets.length} onClick={()=>setSelectedIds(allVisibleSelected?[]:visibleAssets.map(asset=>asset.id))}>{allVisibleSelected?<CheckSquare2 size={15}/>:<Square size={15}/>}选择当前结果</button>{busy==='load'&&<Loader2 size={16} className="animate-spin"/>}</div></div>
+      <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">{visibleAssets.map(asset=>{
+        const state=businessStatus(asset);
+        const usableSeconds=asset.highlights.reduce((total,item)=>total+Math.max(0,item.end-item.start),0);
+        const selected=selectedIds.includes(asset.id);
+        return <article key={asset.id} className={`panel overflow-hidden ${selected?'border-black ring-1 ring-black':''} ${state==='excluded'||state==='blocked'?'opacity-60':''}`}>
+          <div className="relative"><video className="aspect-video w-full bg-black object-cover" src={mediaUrl(asset.object_url)} controls preload="metadata"/><label className="absolute right-3 top-3 grid h-9 w-9 cursor-pointer place-items-center bg-white shadow" aria-label={`选择 ${asset.filename}`}><input className="sr-only" type="checkbox" checked={selected} onChange={()=>toggleSelection(asset.id)}/>{selected?<CheckSquare2 size={19}/>:<Square size={19}/>}</label>{isFinished&&<span className={`absolute left-3 top-3 px-2 py-1 text-[11px] font-medium shadow ${state==='reusable'?'bg-emerald-600 text-white':state==='review'?'bg-amber-400 text-black':state==='failed'||state==='blocked'?'bg-red-600 text-white':state==='processing'?'bg-blue-600 text-white':'bg-black/75 text-white'}`}>{businessStatusText[state]}</span>}</div>
+          <div className="p-4"><div className="flex justify-between gap-2"><b className="truncate" title={asset.filename}>{asset.filename}</b>{!isFinished&&<span className={`shrink-0 text-xs ${asset.status==='analyzed'?'text-emerald-700':asset.status==='analysis_failed'?'text-red-600':'text-blue-600'}`}>{statusText[asset.status]||asset.status}</span>}</div><div className="mt-2 text-xs text-[var(--muted)]">{asset.duration_seconds.toFixed(1)} 秒 - {asset.width} x {asset.height}{asset.burned_subtitles?' - 烧录字幕':''}{asset.has_background_music?' - 原 BGM':''}</div>
+            {asset.category&&<div className="mt-3 text-xs"><span className="text-[var(--muted)]">分类 </span>{asset.category.path.join(' / ')}</div>}
+            {asset.taxonomy_tags.length>0&&<div className="mt-3 flex flex-wrap gap-1.5">{asset.taxonomy_tags.map(tag=><span key={tag.id} className={`border px-2 py-1 text-[11px] ${tag.scope==='personal'?'border-amber-200 bg-amber-50 text-amber-800':'border-emerald-200 bg-emerald-50 text-emerald-800'}`}>{tag.name}{tag.source==='inherited'?' - 继承':''}</span>)}</div>}
+            {(asset.status==='queued_for_analysis'||asset.status==='analyzing')&&<div className="mt-3 border border-blue-100 bg-blue-50 p-3"><div className="flex items-center gap-2 text-xs text-blue-800"><Loader2 size={13} className="animate-spin"/>{asset.status==='queued_for_analysis'?'等待分析':'正在分析视频内容'}</div></div>}
+            <p className="mt-3 min-h-10 text-sm leading-5">{asset.analysis?.summary||'等待 AI 生成内容摘要'}</p>
+            {isFinished&&asset.status==='analyzed'&&<div className="mt-3 bg-[#f6f5f2] px-3 py-2 text-xs"><b>{asset.highlights.length} 个可用片段</b><span className="ml-2 text-[var(--muted)]">合计 {usableSeconds.toFixed(1)} 秒</span></div>}
+            {asset.effective_tags.length>0&&<div className="mt-3 flex flex-wrap gap-1.5">{asset.effective_tags.map(tag=><span key={tag} className={`border px-2 py-1 text-[11px] ${asset.manual_tags.includes(tag)?'border-blue-300 bg-blue-50 text-blue-800':'border-[var(--border)] bg-[#f6f5f2]'}`}>{tag}{asset.manual_tags.includes(tag)&&<span className="ml-1 opacity-60">人工</span>}</span>)}</div>}
+            {editingId===asset.id&&<div className="mt-4 border border-blue-200 bg-blue-50 p-3"><div className="text-xs font-medium">修正 AI 分析标签</div><div className="mt-2 flex flex-wrap gap-1.5">{asset.effective_tags.map(tag=><button key={tag} onClick={()=>removeLegacyTag(asset,tag)} disabled={!!busy} className="inline-flex items-center gap-1 border border-blue-200 bg-white px-2 py-1 text-[11px]">{tag}<X size={11}/></button>)}</div><div className="mt-3 flex gap-2"><input className="min-w-0 flex-1 border border-blue-200 px-2 py-1.5 text-xs" value={tagDraft} onChange={event=>setTagDraft(event.target.value)} onKeyDown={event=>{if(event.key==='Enter'){event.preventDefault();addManualTags(asset)}}} placeholder="输入标签, 使用逗号分隔"/><button className="btn-secondary" onClick={()=>addManualTags(asset)} disabled={!tagDraft.trim()||!!busy}><Tag size={13}/>添加</button></div>{asset.removed_ai_tags.length>0&&<div className="mt-3 text-xs"><span className="text-[var(--muted)]">已隐藏 </span>{asset.removed_ai_tags.map(tag=><button className="ml-2 underline" key={tag} onClick={()=>restoreLegacyTag(asset,tag)}>{tag}</button>)}</div>}</div>}
+            {isFinished?<div className="mt-4 flex flex-wrap gap-2">{state==='review'&&asset.generation_depth<=1&&<><button className="btn-primary" disabled={!!busy} onClick={()=>setReusable(asset,'reusable')}><CheckCircle2 size={14}/>确认可混剪</button><button className="btn-secondary" disabled={!!busy} onClick={()=>setReusable(asset,'excluded')}><Ban size={14}/>排除</button></>}{state==='reusable'&&<button className="btn-secondary" disabled={!!busy} onClick={()=>setReusable(asset,'excluded')}><Ban size={14}/>排除</button>}{state==='excluded'&&asset.generation_depth<=1&&<button className="btn-secondary" disabled={!!busy} onClick={()=>setReusable(asset,'review_required')}><CheckCircle2 size={14}/>恢复待确认</button>}{state==='failed'&&<button className="btn-secondary" onClick={()=>reanalyze(asset)} disabled={!!busy}><RefreshCw size={14}/>重新分析</button>}{asset.status==='analyzed'&&<button className="btn-secondary" onClick={()=>{setEditingId(editingId===asset.id?null:asset.id);setTagDraft('')}}><Pencil size={14}/>AI 标签</button>}</div>:<div className="mt-4 flex justify-between"><div className="flex flex-wrap gap-2"><button className="btn-secondary" onClick={()=>exclude(asset)} disabled={!!busy}>{asset.excluded?<><CheckCircle2 size={14}/>恢复</>:<><Ban size={14}/>排除</>}</button><button className="btn-secondary" onClick={()=>{setEditingId(editingId===asset.id?null:asset.id);setTagDraft('')}}><Pencil size={14}/>AI 标签</button></div>{asset.status==='analysis_failed'&&<button className="btn-secondary" onClick={()=>reanalyze(asset)} disabled={!!busy}><RefreshCw size={14}/>重新分析</button>}</div>}
+          </div>
+        </article>;
+      })}{!visibleAssets.length&&<div className="panel py-16 text-center text-sm text-[var(--muted)] md:col-span-2 xl:col-span-3"><FileVideo className="mx-auto mb-3"/>{assets.length?'当前筛选条件下没有素材':productId?'这个商品还没有视频素材':'请先选择商品'}</div>}</div>
+    </section>
+  </div>;
 }

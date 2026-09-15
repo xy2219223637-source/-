@@ -28,6 +28,7 @@ from app.services.storage import get_storage
 from app.services.tts import synthesize_speech
 from app.services.llm import LLMClient
 from app.services.video_analysis_queue import enqueue_video_analysis
+from app.services.video_taxonomy import inherit_public_tags_to_final
 
 router = APIRouter(prefix="/auto-edit-projects", tags=["auto-edit"])
 logger = logging.getLogger(__name__)
@@ -1230,6 +1231,7 @@ async def render(project_id: int, db: Session = Depends(get_db), auth: AuthConte
                     fps=30, has_audio=True, status="queued_for_analysis", excluded=False,
                 )
                 db.add(generated_asset)
+                inherit_public_tags_to_final(db, generated_asset, source_assets, auth.user_id)
             job.status = "completed"; job.output_url = url; job.duration_seconds = duration
         except Exception as exc:
             job.status = "failed"; job.error_message = str(exc)[:1000]

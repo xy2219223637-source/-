@@ -15,6 +15,7 @@ const CreativeCanvasPage = lazy(() => import('./pages/CreativeCanvas'));
 const StoryboardPage = lazy(() => import('./pages/Storyboard'));
 const BrandVisualsPage = lazy(() => import('./pages/BrandVisuals'));
 const TaskCenterPage = lazy(() => import('./pages/TaskCenter'));
+const VideoTaxonomyPage = lazy(() => import('./pages/VideoTaxonomy'));
 const DetailTemplatesPage = lazy(() => import('./pages/DetailTemplates'));
 const ProductionHubPage = lazy(() => import('./pages/ProductionHub'));
 const QualityWorkbenchPage = lazy(() => import('./pages/QualityWorkbench'));
@@ -49,6 +50,7 @@ export default function App() {
             <Route path="design-skills" element={<DesignSkillsPage />} />
             <Route path="brand-visuals" element={<BrandVisualsPage />} />
             <Route path="task-center" element={<TaskCenterPage />} />
+            <Route path="video-taxonomy" element={<VideoTaxonomyPage />} />
             <Route path="detail-templates" element={<DetailTemplatesPage />} />
             <Route path="production" element={<ProductionHubPage />} />
             <Route path="quality" element={<QualityWorkbenchPage />} />

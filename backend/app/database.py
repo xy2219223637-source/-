@@ -90,6 +90,7 @@ def init_db() -> None:
                 except Exception:
                     pass
             additions = {
+                "category_id": "INTEGER NULL",
                 "excluded": "BOOLEAN NOT NULL DEFAULT FALSE",
                 "updated_at": "TIMESTAMP DEFAULT CURRENT_TIMESTAMP",
                 "ai_tags": json_default,
@@ -106,6 +107,7 @@ def init_db() -> None:
             for name, definition in additions.items():
                 if name not in columns:
                     connection.execute(text(f"ALTER TABLE video_assets ADD COLUMN {name} {definition}"))
+            connection.execute(text("CREATE INDEX IF NOT EXISTS ix_video_assets_category_id ON video_assets (category_id)"))
             connection.execute(text("""UPDATE video_assets SET asset_kind = 'final_output'
                 WHERE source IN ('smart_compose_output', 'finished_remix_output')"""))
         analysis_columns = _table_columns(connection, "video_asset_analyses")
