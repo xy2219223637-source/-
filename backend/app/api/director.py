@@ -7,9 +7,9 @@ import logging
 import os
 import tempfile
 import uuid
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Literal, Optional
 from urllib.parse import unquote, urlparse
 
 import aiofiles
@@ -46,7 +46,7 @@ logger = logging.getLogger(__name__)
 
 
 def _utcnow() -> datetime:
-    return datetime.now(UTC).replace(tzinfo=None)
+    return datetime.now(timezone.utc).replace(tzinfo=None)
 
 class DirectorUrlCreate(BaseModel):
     url: HttpUrl
@@ -56,7 +56,7 @@ class DirectorUrlCreate(BaseModel):
 class DirectorCaptureCreate(BaseModel):
     url: HttpUrl
     name: str = Field(default="", max_length=256)
-    project_id: int | None = Field(default=None, ge=1)
+    project_id: Optional[int] = Field(default=None, ge=1)
 
 
 class CaptureAttempt(BaseModel):
@@ -83,12 +83,12 @@ class CaptureDiagnostics(BaseModel):
 
 class DirectorCaptureStatusUpdate(BaseModel):
     stage: Literal["opening_source", "locating_video", "downloading", "uploading"]
-    diagnostics: CaptureDiagnostics | None = None
+    diagnostics: Optional[CaptureDiagnostics] = None
 
 
 class DirectorCaptureFailure(BaseModel):
     message: str = Field(default="浏览器插件未能获取视频", max_length=500)
-    diagnostics: CaptureDiagnostics | None = None
+    diagnostics: Optional[CaptureDiagnostics] = None
 
 
 class DirectorOriginalCreate(BaseModel):
@@ -193,7 +193,7 @@ def _capture_session(db: Session, capture_id: str, token: str) -> DirectorCaptur
     return row
 
 
-def _set_capture_failed(db: Session, capture: DirectorCaptureSession, project: DirectorProject, message: str, diagnostics: CaptureDiagnostics | None = None) -> None:
+def _set_capture_failed(db: Session, capture: DirectorCaptureSession, project: DirectorProject, message: str, diagnostics: Optional[CaptureDiagnostics] = None) -> None:
     db.refresh(project, with_for_update=True)
     db.refresh(capture, with_for_update=True)
     if capture.status in {"completed", "superseded", "expired"}:
