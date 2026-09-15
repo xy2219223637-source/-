@@ -18,6 +18,9 @@ type TaxonomyListProps<T extends SortableEntity>={
   onAdd?:()=>void;
   onSelect?:(item:T)=>void;
   onEdit:(item:T)=>void;
+  onDelete:(item:T)=>void;
+  deleteBusy:boolean;
+  deletingId?:number|null;
   onReorder:(sourceId:number,targetId:number)=>Promise<void>;
   onMove:(itemId:number,direction:-1|1)=>Promise<void>;
 };
@@ -34,7 +37,7 @@ function bySortOrder<T extends SortableEntity>(left:T,right:T){
   return left.sort_order-right.sort_order||left.id-right.id;
 }
 
-function TaxonomyList<T extends SortableEntity>({title,items,selectedId,emptyText,meta,busy,onAdd,onSelect,onEdit,onReorder,onMove}:TaxonomyListProps<T>){
+function TaxonomyList<T extends SortableEntity>({title,items,selectedId,emptyText,meta,busy,onAdd,onSelect,onEdit,onDelete,deleteBusy,deletingId=null,onReorder,onMove}:TaxonomyListProps<T>){
   const [search,setSearch]=useState('');
   const [draggingId,setDraggingId]=useState<number|null>(null);
   const [dropTargetId,setDropTargetId]=useState<number|null>(null);
@@ -56,6 +59,7 @@ function TaxonomyList<T extends SortableEntity>({title,items,selectedId,emptyTex
         const selected=selectedId===item.id;
         const dragging=draggingId===item.id;
         const dropTarget=dropTargetId===item.id&&draggingId!==item.id;
+        const deleting=deletingId===item.id;
         return <div
           key={item.id}
           role="listitem"
@@ -92,6 +96,7 @@ function TaxonomyList<T extends SortableEntity>({title,items,selectedId,emptyTex
           <span className="shrink-0 px-2 text-[11px] text-[var(--muted)]">{meta(item)}</span>
           {item.status==='inactive'&&<span className="shrink-0 border border-[var(--border)] px-2 py-1 text-[10px]">已停用</span>}
           <button type="button" className="tax-icon-button m-1 p-2 text-[var(--muted)] hover:text-black" onClick={()=>onEdit(item)} aria-label={`编辑 ${item.name}`} title={`编辑 ${item.name}`}><Pencil size={14}/></button>
+          <button type="button" className="tax-icon-button mr-1 p-2 text-[var(--muted)] hover:text-[var(--danger)]" onClick={()=>onDelete(item)} disabled={busy||deleteBusy} aria-label={`删除 ${item.name}`} title={`删除 ${item.name}`}>{deleting?<Loader2 size={14} className="animate-spin"/>:<Trash2 size={14}/>}</button>
         </div>;
       })}
       {!visibleItems.length&&<div className="grid h-full place-items-center px-4 text-center text-xs text-[var(--muted)]">{normalizedSearch?'没有匹配结果':emptyText}</div>}
@@ -112,6 +117,7 @@ export default function VideoTaxonomyPage(){
   const [draft,setDraft]=useState<Draft>(emptyDraft);
   const [mergeTargetId,setMergeTargetId]=useState('');
   const [saving,setSaving]=useState(false);
+  const [deleting,setDeleting]=useState<{kind:EditorKind;id:number}|null>(null);
   const [reordering,setReordering]=useState<SortKind|null>(null);
 
   async function load(type=objectType){
@@ -170,16 +176,20 @@ export default function VideoTaxonomyPage(){
       setEditor(null);await load();
     }catch(err:any){setError(errorMessage(err,err.message||'保存失败'))}finally{setSaving(false)}
   }
-  async function removeCurrent(){
-    if(!editor?.item||!window.confirm(`删除 ${editor.item.name}?`))return;
-    setSaving(true);setError('');
+  async function removeItem(kind:EditorKind,item:VideoCategoryDefinition|VideoTagGroupDefinition|VideoTaxonomyTag,closeEditor=false){
+    if(deleting||saving||reordering)return;
+    const kindName=kind==='category'?'分类':kind==='group'?'标签组':'公共标签';
+    if(!window.confirm(`确定删除${kindName} "${item.name}"? 此操作不可撤销.`))return;
+    setDeleting({kind,id:item.id});setError('');
     try{
-      if(editor.kind==='category')await videoTaxonomyApi.deleteCategory(editor.item.id);
-      else if(editor.kind==='group')await videoTaxonomyApi.deleteGroup(editor.item.id);
-      else await videoTaxonomyApi.deleteTag(editor.item.id);
-      setEditor(null);await load();
-    }catch(err:any){setError(errorMessage(err,'删除失败'))}finally{setSaving(false)}
+      if(kind==='category')await videoTaxonomyApi.deleteCategory(item.id);
+      else if(kind==='group')await videoTaxonomyApi.deleteGroup(item.id);
+      else await videoTaxonomyApi.deleteTag(item.id);
+      if(closeEditor)setEditor(null);
+      await load();
+    }catch(err:any){setError(errorMessage(err,'删除失败'))}finally{setDeleting(null)}
   }
+  const removeCurrent=()=>{if(editor?.item)void removeItem(editor.kind,editor.item,true)};
   async function mergeCurrent(){
     if(!editor?.item||!mergeTargetId)return;
     const targets=mergeTargets();const target=targets.find(item=>item.id===Number(mergeTargetId));
@@ -267,6 +277,9 @@ export default function VideoTaxonomyPage(){
             onAdd={()=>openCategory(1)}
             onSelect={item=>setSelectedParentId(item.id)}
             onEdit={item=>openCategory(1,item)}
+            onDelete={item=>void removeItem('category',item)}
+            deleteBusy={deleting!==null}
+            deletingId={deleting?.kind==='category'?deleting.id:null}
             onReorder={(sourceId,targetId)=>reorder('parents',sourceId,targetId)}
             onMove={(itemId,direction)=>move('parents',itemId,direction)}
           />
@@ -279,6 +292,9 @@ export default function VideoTaxonomyPage(){
             busy={reordering==='children'}
             onAdd={selectedParentId?()=>openCategory(2):undefined}
             onEdit={item=>openCategory(2,item)}
+            onDelete={item=>void removeItem('category',item)}
+            deleteBusy={deleting!==null}
+            deletingId={deleting?.kind==='category'?deleting.id:null}
             onReorder={(sourceId,targetId)=>reorder('children',sourceId,targetId)}
             onMove={(itemId,direction)=>move('children',itemId,direction)}
           />
@@ -297,6 +313,9 @@ export default function VideoTaxonomyPage(){
             onAdd={()=>openGroup()}
             onSelect={item=>setSelectedGroupId(item.id)}
             onEdit={item=>openGroup(item)}
+            onDelete={item=>void removeItem('group',item)}
+            deleteBusy={deleting!==null}
+            deletingId={deleting?.kind==='group'?deleting.id:null}
             onReorder={(sourceId,targetId)=>reorder('groups',sourceId,targetId)}
             onMove={(itemId,direction)=>move('groups',itemId,direction)}
           />
@@ -310,6 +329,9 @@ export default function VideoTaxonomyPage(){
               busy={reordering==='tags'}
               onAdd={selectedGroupId?()=>openTag():undefined}
               onEdit={item=>openTag(item)}
+              onDelete={item=>void removeItem('tag',item)}
+              deleteBusy={deleting!==null}
+              deletingId={deleting?.kind==='tag'?deleting.id:null}
               onReorder={(sourceId,targetId)=>reorder('tags',sourceId,targetId)}
               onMove={(itemId,direction)=>move('tags',itemId,direction)}
             />
@@ -318,6 +340,6 @@ export default function VideoTaxonomyPage(){
         </div>
       </section>
     </>}
-    {editor&&<div className="fixed inset-0 z-50 grid place-items-center bg-black/40 p-4" role="presentation" onMouseDown={event=>{if(event.target===event.currentTarget)setEditor(null)}}><form className="panel w-full max-w-lg bg-white p-6" onSubmit={submit}><div className="mb-5 flex items-center justify-between"><div><h2 className="text-lg font-medium">{editor.item?'编辑':'新建'}{editor.kind==='category'?'分类':editor.kind==='group'?'标签组':'公共标签'}</h2>{editor.item&&<p className="mt-1 text-xs text-[var(--muted)]">当前使用 {editor.item.usage_count??0} 次</p>}</div><button type="button" className="p-2" onClick={()=>setEditor(null)} aria-label="关闭"><X size={18}/></button></div><div className="space-y-4"><label className="field"><span>名称</span><input autoFocus required value={draft.name} onChange={event=>setDraft({...draft,name:event.target.value})}/></label><label className="field"><span>编码</span><input value={draft.code} onChange={event=>setDraft({...draft,code:event.target.value})} placeholder="留空自动生成"/></label>{editor.kind==='category'&&editor.level===2&&<label className="field"><span>所属一级分类</span><select className="input-select" value={draft.parent_id||''} onChange={event=>setDraft({...draft,parent_id:Number(event.target.value)||null})}>{catalog?.categories.filter(item=>item.parent_id===null).map(item=><option key={item.id} value={item.id}>{item.name}</option>)}</select></label>}{editor.kind==='tag'&&<label className="field"><span>标签组</span><select className="input-select" value={draft.group_id||''} onChange={event=>setDraft({...draft,group_id:Number(event.target.value)||null})}><option value="">请选择标签组</option>{catalog?.groups.filter(item=>item.status==='active').map(item=><option key={item.id} value={item.id}>{item.name}</option>)}</select></label>}{editor.kind!=='category'&&<label className="field"><span>适用范围</span><select className="input-select" value={draft.applies_to} onChange={event=>setDraft({...draft,applies_to:event.target.value as VideoTagAppliesTo})}><option value="both">视频素材和成片</option><option value="material">仅视频素材</option><option value="final_output">仅成片</option></select></label>}{editor.kind==='group'&&<label className="flex min-h-11 items-center gap-3 border border-[var(--border)] px-3 text-sm"><input type="checkbox" checked={draft.inherit_to_final} onChange={event=>setDraft({...draft,inherit_to_final:event.target.checked})}/><span>允许该组公共标签继承到成片</span></label>}<div className="grid grid-cols-2 gap-3"><label className="field"><span>排序</span><input type="number" value={draft.sort_order} onChange={event=>setDraft({...draft,sort_order:Number(event.target.value)})}/></label>{editor.item&&<label className="field"><span>状态</span><select className="input-select" value={draft.status} onChange={event=>setDraft({...draft,status:event.target.value as 'active'|'inactive'})}><option value="active">启用</option><option value="inactive">停用</option></select></label>}</div>{editor.item&&editor.kind!=='group'&&mergeTargets().length>0&&<div className="border-t border-[var(--border)] pt-4"><label className="field"><span>合并到</span><div className="flex gap-2"><select className="input-select" value={mergeTargetId} onChange={event=>setMergeTargetId(event.target.value)}><option value="">请选择目标</option>{mergeTargets().map(item=><option key={item.id} value={item.id}>{item.name}</option>)}</select><button type="button" className="btn-secondary shrink-0" disabled={!mergeTargetId||saving} onClick={mergeCurrent}><ChevronRight size={14}/>合并</button></div></label></div>}</div><div className="mt-6 flex items-center justify-between gap-3"><div>{editor.item&&<button type="button" className="btn-danger" onClick={removeCurrent} disabled={saving}><Trash2 size={14}/>删除</button>}</div><div className="flex gap-2"><button type="button" className="btn-secondary" onClick={()=>setEditor(null)}>取消</button><button className="btn-primary" disabled={saving||!draft.name.trim()}>{saving?<Loader2 size={14} className="animate-spin"/>:<Check size={14}/>}保存</button></div></div></form></div>}
+    {editor&&<div className="fixed inset-0 z-50 grid place-items-center bg-black/40 p-4" role="presentation" onMouseDown={event=>{if(event.target===event.currentTarget)setEditor(null)}}><form className="panel w-full max-w-lg bg-white p-6" onSubmit={submit}><div className="mb-5 flex items-center justify-between"><div><h2 className="text-lg font-medium">{editor.item?'编辑':'新建'}{editor.kind==='category'?'分类':editor.kind==='group'?'标签组':'公共标签'}</h2>{editor.item&&<p className="mt-1 text-xs text-[var(--muted)]">当前使用 {editor.item.usage_count??0} 次</p>}</div><button type="button" className="p-2" onClick={()=>setEditor(null)} aria-label="关闭"><X size={18}/></button></div><div className="space-y-4"><label className="field"><span>名称</span><input autoFocus required value={draft.name} onChange={event=>setDraft({...draft,name:event.target.value})}/></label><label className="field"><span>编码</span><input value={draft.code} onChange={event=>setDraft({...draft,code:event.target.value})} placeholder="留空自动生成"/></label>{editor.kind==='category'&&editor.level===2&&<label className="field"><span>所属一级分类</span><select className="input-select" value={draft.parent_id||''} onChange={event=>setDraft({...draft,parent_id:Number(event.target.value)||null})}>{catalog?.categories.filter(item=>item.parent_id===null).map(item=><option key={item.id} value={item.id}>{item.name}</option>)}</select></label>}{editor.kind==='tag'&&<label className="field"><span>标签组</span><select className="input-select" value={draft.group_id||''} onChange={event=>setDraft({...draft,group_id:Number(event.target.value)||null})}><option value="">请选择标签组</option>{catalog?.groups.filter(item=>item.status==='active').map(item=><option key={item.id} value={item.id}>{item.name}</option>)}</select></label>}{editor.kind!=='category'&&<label className="field"><span>适用范围</span><select className="input-select" value={draft.applies_to} onChange={event=>setDraft({...draft,applies_to:event.target.value as VideoTagAppliesTo})}><option value="both">视频素材和成片</option><option value="material">仅视频素材</option><option value="final_output">仅成片</option></select></label>}{editor.kind==='group'&&<label className="flex min-h-11 items-center gap-3 border border-[var(--border)] px-3 text-sm"><input type="checkbox" checked={draft.inherit_to_final} onChange={event=>setDraft({...draft,inherit_to_final:event.target.checked})}/><span>允许该组公共标签继承到成片</span></label>}<div className="grid grid-cols-2 gap-3"><label className="field"><span>排序</span><input type="number" value={draft.sort_order} onChange={event=>setDraft({...draft,sort_order:Number(event.target.value)})}/></label>{editor.item&&<label className="field"><span>状态</span><select className="input-select" value={draft.status} onChange={event=>setDraft({...draft,status:event.target.value as 'active'|'inactive'})}><option value="active">启用</option><option value="inactive">停用</option></select></label>}</div>{editor.item&&editor.kind!=='group'&&mergeTargets().length>0&&<div className="border-t border-[var(--border)] pt-4"><label className="field"><span>合并到</span><div className="flex gap-2"><select className="input-select" value={mergeTargetId} onChange={event=>setMergeTargetId(event.target.value)}><option value="">请选择目标</option>{mergeTargets().map(item=><option key={item.id} value={item.id}>{item.name}</option>)}</select><button type="button" className="btn-secondary shrink-0" disabled={!mergeTargetId||saving} onClick={mergeCurrent}><ChevronRight size={14}/>合并</button></div></label></div>}</div><div className="mt-6 flex items-center justify-between gap-3"><div>{editor.item&&<button type="button" className="btn-danger" onClick={removeCurrent} disabled={saving||deleting!==null}>{deleting?.kind===editor.kind&&deleting.id===editor.item.id?<Loader2 size={14} className="animate-spin"/>:<Trash2 size={14}/>}删除</button>}</div><div className="flex gap-2"><button type="button" className="btn-secondary" onClick={()=>setEditor(null)}>取消</button><button className="btn-primary" disabled={saving||deleting!==null||!draft.name.trim()}>{saving?<Loader2 size={14} className="animate-spin"/>:<Check size={14}/>}保存</button></div></div></form></div>}
   </div>;
 }

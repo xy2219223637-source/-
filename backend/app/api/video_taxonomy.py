@@ -647,6 +647,8 @@ def update_assets(payload: AssetTaxonomyUpdate, db: Session = Depends(get_db), a
         category = _category(db, auth, payload.category_id)
         if category.status != "active":
             raise HTTPException(422, "不能使用已停用分类")
+        if category.parent_id is None:
+            raise HTTPException(422, "素材只能绑定二级分类")
     if payload.set_category:
         for asset in assets:
             if category is not None and category.object_type != object_type_for_asset(asset):
@@ -658,15 +660,18 @@ def update_assets(payload: AssetTaxonomyUpdate, db: Session = Depends(get_db), a
         VideoTag.tenant_id == auth.tenant_id,
         VideoTag.id.in_(requested_tag_ids),
     ).all() if requested_tag_ids else []
-    allowed_tags = {
+    accessible_tags = {
         row.id: row for row in tags
-        if row.status == "active" and (row.scope == "public" or row.owner_id == auth.user_id)
+        if row.scope == "public" or row.owner_id == auth.user_id
     }
-    if len(allowed_tags) != len(requested_tag_ids):
-        raise HTTPException(422, "部分标签不存在 已停用或无权使用")
+    if len(accessible_tags) != len(requested_tag_ids):
+        raise HTTPException(422, "部分标签不存在或无权使用")
+    for tag_id in payload.add_tag_ids:
+        if accessible_tags[tag_id].status != "active":
+            raise HTTPException(422, "不能添加已停用标签")
     for asset in assets:
         for tag_id in payload.add_tag_ids:
-            if not applies_to_object(allowed_tags[tag_id].applies_to, object_type_for_asset(asset)):
+            if not applies_to_object(accessible_tags[tag_id].applies_to, object_type_for_asset(asset)):
                 raise HTTPException(422, "标签与视频对象类型不匹配")
 
     if payload.remove_tag_ids:

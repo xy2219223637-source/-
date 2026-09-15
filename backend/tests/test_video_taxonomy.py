@@ -9,6 +9,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
 from app.api.video_taxonomy import AssetTaxonomyUpdate, PersonalTagCreate, catalog, create_personal_tag, update_assets
+from app.api.video_library import get_asset
 from app.auth import AuthContext
 from app.database import Base
 from app.models import Product, VideoAsset, VideoAssetTag, VideoCategory, VideoTag
@@ -111,6 +112,52 @@ class VideoTaxonomyTest(unittest.TestCase):
         assignment = self.db.query(VideoAssetTag).filter_by(asset_id=final.id, tag_id=public_tag.id).one()
         self.assertEqual(assignment.source, "inherited")
         self.assertTrue(assignment.confirmed)
+
+    def test_parent_category_is_not_assignable(self) -> None:
+        ensure_default_taxonomy(self.db, self.auth.tenant_id)
+        self.db.commit()
+        asset = self._asset("material-parent")
+        parent = self.db.query(VideoCategory).filter_by(
+            tenant_id="tenant-1", object_type="material", parent_id=None
+        ).first()
+
+        with self.assertRaises(HTTPException) as raised:
+            update_assets(AssetTaxonomyUpdate(
+                asset_ids=[asset.id], set_category=True, category_id=parent.id
+            ), self.db, self.auth)
+        self.assertEqual(raised.exception.status_code, 422)
+        self.assertIsNone(asset.category_id)
+
+    def test_inactive_tag_remains_visible_and_can_only_be_removed(self) -> None:
+        ensure_default_taxonomy(self.db, self.auth.tenant_id)
+        self.db.commit()
+        asset = self._asset("material-inactive-tag")
+        tag = self.db.query(VideoTag).filter_by(
+            tenant_id="tenant-1", scope="public", status="active"
+        ).first()
+        update_assets(AssetTaxonomyUpdate(asset_ids=[asset.id], add_tag_ids=[tag.id]), self.db, self.auth)
+        tag.status = "inactive"
+        self.db.commit()
+
+        serialized = get_asset(asset.id, self.db, self.auth)
+        self.assertEqual(serialized["taxonomy_tags"][0]["status"], "inactive")
+
+        with self.assertRaises(HTTPException) as raised:
+            update_assets(AssetTaxonomyUpdate(asset_ids=[asset.id], add_tag_ids=[tag.id]), self.db, self.auth)
+        self.assertEqual(raised.exception.status_code, 422)
+
+        update_assets(AssetTaxonomyUpdate(asset_ids=[asset.id], remove_tag_ids=[tag.id]), self.db, self.auth)
+        self.assertEqual(self.db.query(VideoAssetTag).filter_by(asset_id=asset.id, tag_id=tag.id).count(), 0)
+
+    def test_asset_detail_is_tenant_scoped(self) -> None:
+        asset = self._asset("material-detail")
+        serialized = get_asset(asset.id, self.db, self.auth)
+        self.assertEqual(serialized["id"], asset.id)
+
+        other_tenant = AuthContext("owner-2", "tenant-2", "owner", "other@example.com", "其他企业")
+        with self.assertRaises(HTTPException) as raised:
+            get_asset(asset.id, self.db, other_tenant)
+        self.assertEqual(raised.exception.status_code, 404)
 
 
 if __name__ == "__main__":

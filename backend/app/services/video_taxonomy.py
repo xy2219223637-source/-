@@ -201,6 +201,7 @@ def load_asset_taxonomy(
             "id": category.id,
             "name": category.name,
             "code": category.code,
+            "status": category.status,
             "parent_id": category.parent_id,
             "parent_name": parent.name if parent else None,
             "path": [value for value in [parent.name if parent else None, category.name] if value],
@@ -214,7 +215,6 @@ def load_asset_taxonomy(
     ).filter(
         VideoAssetTag.tenant_id == tenant_id,
         VideoAssetTag.asset_id.in_(asset_ids),
-        VideoTag.status == "active",
     ).order_by(VideoTag.sort_order, VideoTag.id).all()
     tags_by_asset: dict[int, list[dict]] = defaultdict(list)
     for assignment, tag, group in rows:
@@ -224,6 +224,7 @@ def load_asset_taxonomy(
             "id": tag.id,
             "name": tag.name,
             "scope": tag.scope,
+            "status": tag.status,
             "group_id": tag.group_id,
             "group_name": group.name if group else None,
             "applies_to": tag.applies_to,

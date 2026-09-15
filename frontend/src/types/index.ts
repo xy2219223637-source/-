@@ -89,7 +89,7 @@ export interface VideoTaxonomyTag {
   sort_order:number;status:'active'|'inactive';usage_count:number;
 }
 export interface VideoTagAssignment extends Omit<VideoTaxonomyTag,'code'|'sort_order'|'status'|'usage_count'> {
-  group_name:string|null;source:'manual'|'inherited'|'ai';confidence:number;confirmed:boolean;
+  group_name:string|null;status:'active'|'inactive';source:'manual'|'inherited'|'ai';confidence:number;confirmed:boolean;
 }
 export interface VideoFilterPreset {
   id:number;object_type:VideoObjectType;name:string;filters:Record<string,unknown>;created_at:string;updated_at:string;
@@ -115,7 +115,7 @@ export interface AutoEditAsset {
 }
 export interface VideoLibraryAsset {
   id:number;asset_id:string;product_id:number;filename:string;source:string;library_type:'semi_finished'|'finished';asset_kind:'material'|'final_output';generation_depth:number;origin_asset_ids:string[];reusable_status:VideoReusableStatus;burned_subtitles:boolean;has_background_music:boolean;object_url:string;duration_seconds:number;width:number;height:number;fps:number;has_audio:boolean;status:string;excluded:boolean;duplicate?:boolean;
-  category_id:number|null;category:null|{id:number;name:string;code:string;parent_id:number|null;parent_name:string|null;path:string[]};
+  category_id:number|null;category:null|{id:number;name:string;code:string;status:'active'|'inactive';parent_id:number|null;parent_name:string|null;path:string[]};
   created_at:string;
   ai_tags:string[];manual_tags:string[];removed_ai_tags:string[];effective_tags:string[];
   taxonomy_tags:VideoTagAssignment[];public_tags:VideoTagAssignment[];personal_tags:VideoTagAssignment[];

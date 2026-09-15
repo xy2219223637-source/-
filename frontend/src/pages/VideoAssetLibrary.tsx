@@ -3,7 +3,7 @@ import {
   Ban,
   CheckCircle2,
   CheckSquare2,
-  ChevronDown,
+  Eye,
   FileVideo,
   Loader2,
   Pencil,
@@ -13,8 +13,11 @@ import {
   Upload,
   X,
 } from 'lucide-react';
+import {useNavigate} from 'react-router-dom';
 import {mediaUrl,productApi,videoLibraryApi,videoTaxonomyApi} from '../api/client';
 import {matchesVideoTaxonomy,VideoBatchTaxonomyBar,VideoTaxonomyFilters} from '../components/VideoTaxonomyFilters';
+import {VideoTaxonomySummary} from '../components/VideoTaxonomyEditor';
+import VideoUploadDialog from '../components/VideoUploadDialog';
 import type {
   Product,
   VideoLibraryAsset,
@@ -41,21 +44,14 @@ function businessStatus(asset:VideoLibraryAsset){
   return'review';
 }
 
-function formatSize(bytes:number){
-  return bytes>=1024**3?`${(bytes/1024**3).toFixed(2)} GB`:`${(bytes/1024**2).toFixed(1)} MB`;
-}
-
 export default function VideoAssetLibrary({libraryType,title,description}:Props){
+  const navigate=useNavigate();
   const isFinished=libraryType==='finished';
   const [products,setProducts]=useState<Product[]>([]);
   const [productId,setProductId]=useState('');
   const [assets,setAssets]=useState<VideoLibraryAsset[]>([]);
-  const [files,setFiles]=useState<File[]>([]);
   const [busy,setBusy]=useState('');
   const [error,setError]=useState('');
-  const [dragging,setDragging]=useState(false);
-  const [selectionError,setSelectionError]=useState('');
-  const [uploadProgress,setUploadProgress]=useState({loaded:0,total:0,percent:0,processing:false});
   const [tagFilter,setTagFilter]=useState('全部');
   const [statusFilter,setStatusFilter]=useState('all');
   const [durationFilter,setDurationFilter]=useState('all');
@@ -103,21 +99,6 @@ export default function VideoAssetLibrary({libraryType,title,description}:Props)
     finally{if(request===loadRequest.current&&!silent)setBusy('')}
   }
 
-  async function upload(){
-    if(!files.length||!productId)return;
-    setBusy('upload');setError('');
-    setUploadProgress({loaded:0,total:selectedBytes,percent:0,processing:false});
-    try{
-      await videoLibraryApi.upload(
-        Number(productId),files,'manual_upload',
-        (loaded,total,percent)=>setUploadProgress({loaded,total,percent,processing:percent>=100}),
-        libraryType,
-      );
-      setFiles([]);await load();
-    }catch{setError('上传失败, 请检查网络 OSS 和 FFmpeg 配置')}
-    finally{setBusy('');setUploadProgress({loaded:0,total:0,percent:0,processing:false})}
-  }
-
   async function exclude(asset:VideoLibraryAsset){
     setBusy(String(asset.id));
     try{await videoLibraryApi.exclude(asset.id,!asset.excluded);await load(true)}finally{setBusy('')}
@@ -160,19 +141,6 @@ export default function VideoAssetLibrary({libraryType,title,description}:Props)
     setTagDraft('');
   }
 
-  function addFiles(incoming:File[]){
-    const videos=incoming.filter(file=>file.type.startsWith('video/')||/\.(mp4|mov|m4v|webm|mkv|avi)$/i.test(file.name));
-    const merged=[...files];
-    videos.forEach(file=>{
-      if(!merged.some(existing=>existing.name===file.name&&existing.size===file.size&&existing.lastModified===file.lastModified))merged.push(file);
-    });
-    setFiles(merged.slice(0,30));
-    const messages:string[]=[];
-    if(incoming.length-videos.length)messages.push(`已忽略 ${incoming.length-videos.length} 个非视频文件`);
-    if(merged.length>30)messages.push('单批最多保留 30 条视频');
-    setSelectionError(messages.join('; '));
-  }
-
   function applyPreset(filters:Record<string,unknown>){
     if(typeof filters.status_filter==='string')setStatusFilter(filters.status_filter);
     if(typeof filters.duration_filter==='string')setDurationFilter(filters.duration_filter);
@@ -180,7 +148,6 @@ export default function VideoAssetLibrary({libraryType,title,description}:Props)
     if(typeof filters.product_id==='number'&&products.some(product=>product.id===filters.product_id))setProductId(String(filters.product_id));
   }
 
-  const selectedBytes=files.reduce((total,file)=>total+file.size,0);
   const allTags=useMemo(()=>Array.from(new Set(assets.flatMap(asset=>asset.effective_tags||[]))).sort(),[assets]);
   const stats=useMemo(()=>({
     total:assets.length,
@@ -223,17 +190,11 @@ export default function VideoAssetLibrary({libraryType,title,description}:Props)
         {isFinished&&<label className="field min-w-36"><span>状态</span><select className="input-select" value={statusFilter} onChange={event=>setStatusFilter(event.target.value)}><option value="all">全部状态</option><option value="processing">处理中</option><option value="review">待确认</option><option value="reusable">可混剪</option><option value="excluded">已排除</option><option value="blocked">禁止复用</option><option value="failed">分析失败</option></select></label>}
         <label className="field min-w-36"><span>时长</span><select className="input-select" value={durationFilter} onChange={event=>setDurationFilter(event.target.value)}><option value="all">全部时长</option><option value="under-15">15 秒内</option><option value="15-30">15-30 秒</option><option value="30-60">30-60 秒</option><option value="over-60">60 秒以上</option></select></label>
         <label className="field min-w-36"><span>AI 分析标签</span><select className="input-select" value={tagFilter} onChange={event=>setTagFilter(event.target.value)}><option value="全部">全部标签</option>{allTags.map(tag=><option key={tag} value={tag}>{tag}</option>)}</select></label>
-        <button className="btn-primary h-[42px]" onClick={()=>setUploadOpen(open=>!open)}><Upload size={15}/>上传视频<ChevronDown size={14} className={`transition-transform ${uploadOpen?'rotate-180':''}`}/></button>
+        <button className="btn-primary h-[42px]" disabled={!productId||!catalog} onClick={()=>setUploadOpen(true)}><Upload size={15}/>上传视频</button>
       </div>
     </section>
 
-    {uploadOpen&&<section className="panel p-5">
-      <div onDragEnter={event=>{event.preventDefault();setDragging(true)}} onDragOver={event=>{event.preventDefault();event.dataTransfer.dropEffect='copy';setDragging(true)}} onDragLeave={event=>{event.preventDefault();if(!event.currentTarget.contains(event.relatedTarget as Node))setDragging(false)}} onDrop={event=>{event.preventDefault();setDragging(false);addFiles(Array.from(event.dataTransfer.files))}} className={`border-2 border-dashed p-8 text-center transition-colors ${dragging?'border-blue-500 bg-blue-50':'border-[var(--border)] bg-[#faf9f7]'}`}>
-        <Upload className={`mx-auto ${dragging?'text-blue-600':'text-[var(--muted)]'}`} size={28}/><div className="mt-3 font-medium">{dragging?'松开即可加入素材':'上传视频文件'}</div><label className="btn-secondary mt-4 inline-flex cursor-pointer"><FileVideo size={15}/>选择视频<input hidden multiple type="file" accept="video/*,.mp4,.mov,.m4v,.webm,.mkv,.avi" onChange={event=>{addFiles(Array.from(event.target.files||[]));event.currentTarget.value=''}}/></label>
-      </div>
-      {selectionError&&<div className="mt-3 text-xs text-amber-700">{selectionError}</div>}
-      {files.length>0&&<div className="mt-4 border border-[var(--border)]"><div className="flex items-center justify-between bg-[#f6f5f2] px-4 py-3 text-sm"><span>待上传 {files.length} 条 - {formatSize(selectedBytes)}</span><div className="flex gap-2"><button className="btn-secondary" onClick={()=>{setFiles([]);setSelectionError('')}} disabled={!!busy}>清空</button><button className="btn-primary" disabled={!productId||!!busy} onClick={upload}>{busy==='upload'?<Loader2 size={15} className="animate-spin"/>:<Upload size={15}/>}上传并分析</button></div></div>{busy==='upload'&&<div className="border-b border-[var(--border)] bg-blue-50 px-4 py-3"><div className="mb-2 flex justify-between text-xs"><span>{uploadProgress.processing?'服务器正在校验并存储':'正在上传视频'}</span><span>{uploadProgress.percent}% - {formatSize(uploadProgress.loaded)} / {formatSize(uploadProgress.total||selectedBytes)}</span></div><div className="h-2 overflow-hidden rounded-full bg-blue-100"><div className={`h-full bg-blue-600 transition-[width] ${uploadProgress.processing?'animate-pulse':''}`} style={{width:`${uploadProgress.percent}%`}}/></div></div>}<div className="max-h-56 divide-y divide-[var(--border)] overflow-auto">{files.map((file,index)=><div className="flex justify-between gap-3 px-4 py-2 text-xs" key={`${file.name}-${file.size}-${file.lastModified}`}><div className="min-w-0"><span className="block truncate">{file.name}</span><span className="text-[var(--muted)]">{formatSize(file.size)}</span></div><button onClick={()=>setFiles(current=>current.filter((_,itemIndex)=>itemIndex!==index))} disabled={!!busy} className="p-1 text-[var(--muted)] hover:text-black" aria-label={`移除 ${file.name}`}><X size={14}/></button></div>)}</div></div>}
-    </section>}
+    {uploadOpen&&catalog&&productId&&<VideoUploadDialog libraryType={libraryType} productId={Number(productId)} productName={products.find(product=>product.id===Number(productId))?.name||'未命名商品'} catalog={catalog} onClose={()=>setUploadOpen(false)} onCatalogRefresh={refreshCatalog} onUploaded={async()=>{await Promise.all([load(true),refreshCatalog()])}}/>}
 
     {catalog&&<VideoTaxonomyFilters objectType="material" catalog={catalog} value={taxonomyFilter} onChange={setTaxonomyFilter} onRefresh={refreshCatalog} presetFilters={{product_id:Number(productId)||null,library_type:libraryType,status_filter:statusFilter,duration_filter:durationFilter,ai_tag_filter:tagFilter}} onApplyPreset={applyPreset}/>}
     {catalog&&<VideoBatchTaxonomyBar catalog={catalog} selectedIds={selectedIds} onClear={()=>setSelectedIds([])} onDone={async()=>{await Promise.all([load(true),refreshCatalog()])}}/>}
@@ -255,12 +216,11 @@ export default function VideoAssetLibrary({libraryType,title,description}:Props)
         return <article key={asset.id} className={`panel overflow-hidden ${selected?'border-black ring-1 ring-black':''} ${state==='excluded'||state==='blocked'?'opacity-60':''}`}>
           <div className="relative"><video className="aspect-video w-full bg-black object-cover" src={mediaUrl(asset.object_url)} controls preload="metadata"/><label className="absolute right-3 top-3 grid h-9 w-9 cursor-pointer place-items-center bg-white shadow" aria-label={`选择 ${asset.filename}`}><input className="sr-only" type="checkbox" checked={selected} onChange={()=>toggleSelection(asset.id)}/>{selected?<CheckSquare2 size={19}/>:<Square size={19}/>}</label>{isFinished&&<span className={`absolute left-3 top-3 px-2 py-1 text-[11px] font-medium shadow ${state==='reusable'?'bg-emerald-600 text-white':state==='review'?'bg-amber-400 text-black':state==='failed'||state==='blocked'?'bg-red-600 text-white':state==='processing'?'bg-blue-600 text-white':'bg-black/75 text-white'}`}>{businessStatusText[state]}</span>}</div>
           <div className="p-4"><div className="flex justify-between gap-2"><b className="truncate" title={asset.filename}>{asset.filename}</b>{!isFinished&&<span className={`shrink-0 text-xs ${asset.status==='analyzed'?'text-emerald-700':asset.status==='analysis_failed'?'text-red-600':'text-blue-600'}`}>{statusText[asset.status]||asset.status}</span>}</div><div className="mt-2 text-xs text-[var(--muted)]">{asset.duration_seconds.toFixed(1)} 秒 - {asset.width} x {asset.height}{asset.burned_subtitles?' - 烧录字幕':''}{asset.has_background_music?' - 原 BGM':''}</div>
-            {asset.category&&<div className="mt-3 text-xs"><span className="text-[var(--muted)]">分类 </span>{asset.category.path.join(' / ')}</div>}
-            {asset.taxonomy_tags.length>0&&<div className="mt-3 flex flex-wrap gap-1.5">{asset.taxonomy_tags.map(tag=><span key={tag.id} className={`border px-2 py-1 text-[11px] ${tag.scope==='personal'?'border-amber-200 bg-amber-50 text-amber-800':'border-emerald-200 bg-emerald-50 text-emerald-800'}`}>{tag.name}{tag.source==='inherited'?' - 继承':''}</span>)}</div>}
+            <div className="mt-3"><VideoTaxonomySummary asset={asset} compact/></div>
             {(asset.status==='queued_for_analysis'||asset.status==='analyzing')&&<div className="mt-3 border border-blue-100 bg-blue-50 p-3"><div className="flex items-center gap-2 text-xs text-blue-800"><Loader2 size={13} className="animate-spin"/>{asset.status==='queued_for_analysis'?'等待分析':'正在分析视频内容'}</div></div>}
             <p className="mt-3 min-h-10 text-sm leading-5">{asset.analysis?.summary||'等待 AI 生成内容摘要'}</p>
             {isFinished&&asset.status==='analyzed'&&<div className="mt-3 bg-[#f6f5f2] px-3 py-2 text-xs"><b>{asset.highlights.length} 个可用片段</b><span className="ml-2 text-[var(--muted)]">合计 {usableSeconds.toFixed(1)} 秒</span></div>}
-            {asset.effective_tags.length>0&&<div className="mt-3 flex flex-wrap gap-1.5">{asset.effective_tags.map(tag=><span key={tag} className={`border px-2 py-1 text-[11px] ${asset.manual_tags.includes(tag)?'border-blue-300 bg-blue-50 text-blue-800':'border-[var(--border)] bg-[#f6f5f2]'}`}>{tag}{asset.manual_tags.includes(tag)&&<span className="ml-1 opacity-60">人工</span>}</span>)}</div>}
+            <button className="btn-secondary mt-4 w-full justify-center" onClick={()=>navigate(`/${libraryType==='finished'?'finished-video-assets':'semi-finished-assets'}/${asset.id}`)}><Eye size={14}/>查看详情与标签</button>
             {editingId===asset.id&&<div className="mt-4 border border-blue-200 bg-blue-50 p-3"><div className="text-xs font-medium">修正 AI 分析标签</div><div className="mt-2 flex flex-wrap gap-1.5">{asset.effective_tags.map(tag=><button key={tag} onClick={()=>removeLegacyTag(asset,tag)} disabled={!!busy} className="inline-flex items-center gap-1 border border-blue-200 bg-white px-2 py-1 text-[11px]">{tag}<X size={11}/></button>)}</div><div className="mt-3 flex gap-2"><input className="min-w-0 flex-1 border border-blue-200 px-2 py-1.5 text-xs" value={tagDraft} onChange={event=>setTagDraft(event.target.value)} onKeyDown={event=>{if(event.key==='Enter'){event.preventDefault();addManualTags(asset)}}} placeholder="输入标签, 使用逗号分隔"/><button className="btn-secondary" onClick={()=>addManualTags(asset)} disabled={!tagDraft.trim()||!!busy}><Tag size={13}/>添加</button></div>{asset.removed_ai_tags.length>0&&<div className="mt-3 text-xs"><span className="text-[var(--muted)]">已隐藏 </span>{asset.removed_ai_tags.map(tag=><button className="ml-2 underline" key={tag} onClick={()=>restoreLegacyTag(asset,tag)}>{tag}</button>)}</div>}</div>}
             {isFinished?<div className="mt-4 flex flex-wrap gap-2">{state==='review'&&asset.generation_depth<=1&&<><button className="btn-primary" disabled={!!busy} onClick={()=>setReusable(asset,'reusable')}><CheckCircle2 size={14}/>确认可混剪</button><button className="btn-secondary" disabled={!!busy} onClick={()=>setReusable(asset,'excluded')}><Ban size={14}/>排除</button></>}{state==='reusable'&&<button className="btn-secondary" disabled={!!busy} onClick={()=>setReusable(asset,'excluded')}><Ban size={14}/>排除</button>}{state==='excluded'&&asset.generation_depth<=1&&<button className="btn-secondary" disabled={!!busy} onClick={()=>setReusable(asset,'review_required')}><CheckCircle2 size={14}/>恢复待确认</button>}{state==='failed'&&<button className="btn-secondary" onClick={()=>reanalyze(asset)} disabled={!!busy}><RefreshCw size={14}/>重新分析</button>}{asset.status==='analyzed'&&<button className="btn-secondary" onClick={()=>{setEditingId(editingId===asset.id?null:asset.id);setTagDraft('')}}><Pencil size={14}/>AI 标签</button>}</div>:<div className="mt-4 flex justify-between"><div className="flex flex-wrap gap-2"><button className="btn-secondary" onClick={()=>exclude(asset)} disabled={!!busy}>{asset.excluded?<><CheckCircle2 size={14}/>恢复</>:<><Ban size={14}/>排除</>}</button><button className="btn-secondary" onClick={()=>{setEditingId(editingId===asset.id?null:asset.id);setTagDraft('')}}><Pencil size={14}/>AI 标签</button></div>{asset.status==='analysis_failed'&&<button className="btn-secondary" onClick={()=>reanalyze(asset)} disabled={!!busy}><RefreshCw size={14}/>重新分析</button>}</div>}
           </div>

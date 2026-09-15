@@ -404,6 +404,17 @@ def list_assets(product_id: Optional[int] = None, library_type: Optional[str] = 
     ) for asset in assets]
 
 
+@router.get("/{asset_id}")
+def get_asset(asset_id: int, db: Session = Depends(get_db), auth: AuthContext = Depends(current_auth)):
+    asset = db.query(VideoAsset).filter(
+        VideoAsset.id == asset_id,
+        VideoAsset.tenant_id == auth.tenant_id,
+    ).first()
+    if not asset:
+        raise HTTPException(404, "素材不存在")
+    return _serialize(db, asset, user_id=auth.user_id)
+
+
 @router.post("")
 async def upload_assets(product_id: int = Form(...), source: str = Form("manual_upload"),
                         library_type: str = Form("semi_finished"),
