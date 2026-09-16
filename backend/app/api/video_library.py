@@ -24,6 +24,7 @@ from app.services.llm import LLMClient
 from app.services.storage import get_storage
 from app.services.transcription import transcribe_media
 from app.services.video_analysis_queue import enqueue_video_analysis
+from app.services.video_taxonomy import load_asset_taxonomy
 
 router = APIRouter(prefix="/video-assets", tags=["video-library"])
 PROMPT_VERSION = "video-library-v3-whisper-timestamps"
@@ -60,14 +61,20 @@ _NOT_LOADED = object()
 
 
 def _serialize(db: Session, asset: VideoAsset, analysis: Any = _NOT_LOADED,
-               highlights: Any = _NOT_LOADED) -> dict[str, Any]:
+               highlights: Any = _NOT_LOADED, taxonomy_category: Any = _NOT_LOADED,
+               taxonomy_tags: Any = _NOT_LOADED, user_id: str = "") -> dict[str, Any]:
     if analysis is _NOT_LOADED:
         analysis = db.query(VideoAssetAnalysis).filter(VideoAssetAnalysis.asset_id == asset.id).order_by(VideoAssetAnalysis.id.desc()).first()
     if highlights is _NOT_LOADED:
         highlights = db.query(VideoHighlight).filter(VideoHighlight.asset_id == asset.id).order_by(VideoHighlight.start_seconds).all()
+    if taxonomy_category is _NOT_LOADED or taxonomy_tags is _NOT_LOADED:
+        categories, tags = load_asset_taxonomy(db, [asset], asset.tenant_id, user_id)
+        taxonomy_category = categories.get(asset.id)
+        taxonomy_tags = tags.get(asset.id, [])
     effective_tags = list(dict.fromkeys([tag for tag in (asset.ai_tags or []) if tag not in (asset.removed_ai_tags or [])] + (asset.manual_tags or [])))
     return {"id": asset.id, "asset_id": asset.asset_id, "product_id": asset.product_id, "filename": asset.filename,
             "source": asset.source, "library_type": asset.library_type, "asset_kind": asset.asset_kind,
+            "category_id": asset.category_id, "category": taxonomy_category,
             "generation_depth": asset.generation_depth,
             "origin_asset_ids": asset.origin_asset_ids or [], "reusable_status": asset.reusable_status,
             "burned_subtitles": asset.burned_subtitles, "has_background_music": bool(asset.has_background_music),
@@ -77,6 +84,9 @@ def _serialize(db: Session, asset: VideoAsset, analysis: Any = _NOT_LOADED,
             "created_at": asset.created_at.replace(tzinfo=timezone.utc).isoformat(),
             "ai_tags": asset.ai_tags or [],
             "manual_tags": asset.manual_tags or [], "removed_ai_tags": asset.removed_ai_tags or [], "effective_tags": effective_tags,
+            "taxonomy_tags": taxonomy_tags,
+            "public_tags": [tag for tag in taxonomy_tags if tag["scope"] == "public"],
+            "personal_tags": [tag for tag in taxonomy_tags if tag["scope"] == "personal"],
             "analysis": None if not analysis else {"id": analysis.id, "status": analysis.status, "summary": analysis.summary,
                 "model": analysis.model, "prompt_version": analysis.prompt_version, "analysis_json": analysis.analysis_json,
                 "request_count": analysis.request_count, "retry_count": analysis.retry_count, "error_message": analysis.error_message},
@@ -353,7 +363,7 @@ async def complete_multipart(payload: MultipartComplete, db: Session = Depends(g
             ).first()
         if not asset:
             raise HTTPException(409, "上传已完成，但关联素材记录不存在")
-        return _serialize(db, asset)
+        return _serialize(db, asset, user_id=auth.user_id)
     url, size, etag = await get_storage().complete_multipart(session.object_key, session.multipart_upload_id)
     if size != session.size_bytes: raise HTTPException(422, "OSS 文件大小与上传文件不一致")
     asset = VideoAsset(tenant_id=auth.tenant_id, project_id=None, product_id=session.product_id,
@@ -366,7 +376,7 @@ async def complete_multipart(payload: MultipartComplete, db: Session = Depends(g
     session.status = "completed"; session.completed_at = datetime.utcnow(); db.commit(); db.refresh(asset)
     _link_asset_to_matching_projects(db, asset)
     db.commit(); enqueue_video_analysis()
-    return _serialize(db, asset)
+    return _serialize(db, asset, user_id=auth.user_id)
 
 
 @router.get("")
@@ -387,7 +397,22 @@ def list_assets(product_id: Optional[int] = None, library_type: Optional[str] = 
     highlights_by_asset: dict[int, list[VideoHighlight]] = {asset_id: [] for asset_id in asset_ids}
     for highlight in db.query(VideoHighlight).filter(VideoHighlight.asset_id.in_(asset_ids)).order_by(VideoHighlight.asset_id, VideoHighlight.start_seconds).all():
         highlights_by_asset[highlight.asset_id].append(highlight)
-    return [_serialize(db, asset, latest_analysis.get(asset.id), highlights_by_asset[asset.id]) for asset in assets]
+    categories_by_asset, tags_by_asset = load_asset_taxonomy(db, assets, auth.tenant_id, auth.user_id)
+    return [_serialize(
+        db, asset, latest_analysis.get(asset.id), highlights_by_asset[asset.id],
+        categories_by_asset.get(asset.id), tags_by_asset.get(asset.id, []), auth.user_id,
+    ) for asset in assets]
+
+
+@router.get("/{asset_id}")
+def get_asset(asset_id: int, db: Session = Depends(get_db), auth: AuthContext = Depends(current_auth)):
+    asset = db.query(VideoAsset).filter(
+        VideoAsset.id == asset_id,
+        VideoAsset.tenant_id == auth.tenant_id,
+    ).first()
+    if not asset:
+        raise HTTPException(404, "素材不存在")
+    return _serialize(db, asset, user_id=auth.user_id)
 
 
 @router.post("")
@@ -405,7 +430,7 @@ async def upload_assets(product_id: int = Form(...), source: str = Form("manual_
         existing = db.query(VideoAsset).filter(VideoAsset.tenant_id == auth.tenant_id,
             VideoAsset.content_hash == digest, VideoAsset.library_type == library_type).first()
         if existing:
-            result.append({**_serialize(db, existing), "duplicate": True}); continue
+            result.append({**_serialize(db, existing, user_id=auth.user_id), "duplicate": True}); continue
         suffix = Path(file.filename or "video.mp4").suffix or ".mp4"
         with tempfile.NamedTemporaryFile(suffix=suffix) as temp:
             temp.write(raw); temp.flush(); media = _probe(Path(temp.name))
@@ -420,7 +445,7 @@ async def upload_assets(product_id: int = Form(...), source: str = Form("manual_
         db.add(asset); db.commit(); db.refresh(asset); enqueue_video_analysis()
         _link_asset_to_matching_projects(db, asset)
         db.commit()
-        result.append(_serialize(db, asset))
+        result.append(_serialize(db, asset, user_id=auth.user_id))
     return result
 
 
@@ -428,7 +453,7 @@ async def upload_assets(product_id: int = Form(...), source: str = Form("manual_
 def set_excluded(asset_id: int, payload: ExcludeUpdate, db: Session = Depends(get_db), auth: AuthContext = Depends(current_auth)):
     asset = db.query(VideoAsset).filter(VideoAsset.id == asset_id, VideoAsset.tenant_id == auth.tenant_id).first()
     if not asset: raise HTTPException(404, "素材不存在")
-    asset.excluded = payload.excluded; db.commit(); db.refresh(asset); return _serialize(db, asset)
+    asset.excluded = payload.excluded; db.commit(); db.refresh(asset); return _serialize(db, asset, user_id=auth.user_id)
 
 
 @router.put("/{asset_id}/tags")
@@ -438,7 +463,7 @@ def update_tags(asset_id: int, payload: TagsUpdate, db: Session = Depends(get_db
     clean = lambda values: list(dict.fromkeys(value.strip() for value in values if value.strip()))[:30]
     asset.manual_tags = clean(payload.manual_tags)
     asset.removed_ai_tags = [tag for tag in clean(payload.removed_ai_tags) if tag in (asset.ai_tags or [])]
-    db.commit(); db.refresh(asset); return _serialize(db, asset)
+    db.commit(); db.refresh(asset); return _serialize(db, asset, user_id=auth.user_id)
 
 
 @router.put("/{asset_id}/reusable-status")
@@ -457,7 +482,7 @@ def update_reusable_status(asset_id: int, payload: ReusableStatusUpdate,
     if payload.reusable_status == "reusable":
         _link_asset_to_matching_projects(db, asset)
     db.commit(); db.refresh(asset)
-    return _serialize(db, asset)
+    return _serialize(db, asset, user_id=auth.user_id)
 
 
 @router.post("/{asset_id}/reanalyze")
@@ -466,4 +491,4 @@ def reanalyze(asset_id: int, db: Session = Depends(get_db), auth: AuthContext = 
     if not asset: raise HTTPException(404, "素材不存在")
     if asset.status == "analyzing": raise HTTPException(409, "素材正在分析")
     asset.status = "queued_for_analysis"; db.commit(); enqueue_video_analysis()
-    return _serialize(db, asset)
+    return _serialize(db, asset, user_id=auth.user_id)

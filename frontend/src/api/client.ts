@@ -48,6 +48,7 @@ export const authApi = {
   login: (email: string, password: string) => api.post('/auth/login', { email, password }).then((r) => r.data),
   register: (payload: { tenant_name: string; tenant_code: string; name: string; email: string; password: string }) =>
     api.post('/auth/register', payload).then((r) => r.data),
+  me: () => api.get<{user_id:string;email:string;role:string;tenant_id:string;tenant_name:string}>('/auth/me').then((r) => r.data),
 };
 
 export function mediaUrl(path: string): string {
@@ -139,19 +140,22 @@ export const videoApi = {
 };
 
 export const autoEditApi = {
-  list: (editMode?:'smart_compose'|'finished_remix') => api.get<import('../types').AutoEditProject[]>('/auto-edit-projects',{params:editMode?{edit_mode:editMode}:undefined}).then(r=>r.data),
+  list: (editMode?:'smart_compose'|'finished_remix'|'manual_compose') => api.get<import('../types').AutoEditProject[]>('/auto-edit-projects',{params:editMode?{edit_mode:editMode}:undefined}).then(r=>r.data),
   get: (id:number) => api.get<import('../types').AutoEditProject>(`/auto-edit-projects/${id}`).then(r=>r.data),
-  create: (data:{product_id:number;name?:string;target_duration_seconds:number;variant_count:number;aspect_ratio:string;objective:string;edit_mode:'smart_compose'|'finished_remix';constraints?:string[]}) =>
+  create: (data:{product_id:number;name?:string;target_duration_seconds:number;variant_count:number;aspect_ratio:string;objective:string;edit_mode:'smart_compose'|'finished_remix'|'manual_compose';constraints?:string[];structure?:Array<Record<string,unknown>>}) =>
     api.post<import('../types').AutoEditProject>('/auto-edit-projects',data).then(r=>r.data),
   updateDuration: (id:number,target_duration_seconds:number) =>
     api.patch<import('../types').AutoEditProject>(`/auto-edit-projects/${id}/duration`,{target_duration_seconds}).then(r=>r.data),
   uploadAssets: async (id:number,files:File[]) => { const form=new FormData(); files.forEach(file=>form.append('files',file)); return api.post<import('../types').AutoEditProject>(`/auto-edit-projects/${id}/assets`,form,{timeout:600000}).then(r=>r.data); },
   generatePlan: (id:number) => api.post<import('../types').AutoEditProject>(`/auto-edit-projects/${id}/plan`,undefined,{timeout:180000}).then(r=>r.data),
   render: (id:number) => api.post<import('../types').AutoEditProject>(`/auto-edit-projects/${id}/render`,undefined,{timeout:1200000}).then(r=>r.data),
+  saveManualPlan: (id:number,sections:Array<{id:string;role:string;title:string;objective:string;required:boolean;asset_ids:string[]}>) =>
+    api.put<import('../types').AutoEditProject>(`/auto-edit-projects/${id}/manual-plan`,{sections}).then(r=>r.data),
 };
 
 export const videoLibraryApi = {
   list: (productId?:number,libraryType?:'semi_finished'|'finished',assetKind:'material'|'final_output'='material') => api.get<import('../types').VideoLibraryAsset[]>('/video-assets',{params:{...(productId?{product_id:productId}:{}),...(libraryType?{library_type:libraryType}:{}),asset_kind:assetKind}}).then(r=>r.data),
+  get: (id:number) => api.get<import('../types').VideoLibraryAsset>(`/video-assets/${id}`).then(r=>r.data),
   upload: async (productId:number,files:File[],source='manual_upload',onProgress?:(loaded:number,total:number,percent:number)=>void,libraryType:'semi_finished'|'finished'='semi_finished') => {
     const total=files.reduce((sum,file)=>sum+file.size,0);let completedBytes=0;const results:import('../types').VideoLibraryAsset[]=[];
     for(const file of files){
@@ -171,6 +175,26 @@ export const videoLibraryApi = {
     api.put<import('../types').VideoLibraryAsset>(`/video-assets/${id}/reusable-status`,{reusable_status}).then(r=>r.data),
   updateTags: (id:number,data:{manual_tags:string[];removed_ai_tags:string[]}) => api.put<import('../types').VideoLibraryAsset>(`/video-assets/${id}/tags`,data).then(r=>r.data),
   reanalyze: (id:number) => api.post<import('../types').VideoLibraryAsset>(`/video-assets/${id}/reanalyze`).then(r=>r.data),
+};
+
+export const videoTaxonomyApi = {
+  catalog: (objectType:import('../types').VideoObjectType,includeInactive=false) => api.get<import('../types').VideoTaxonomyCatalog>('/video-taxonomy/catalog',{params:{object_type:objectType,include_inactive:includeInactive}}).then(r=>r.data),
+  createCategory: (data:{object_type:import('../types').VideoObjectType;name:string;code?:string;parent_id:number|null;sort_order?:number}) => api.post<import('../types').VideoCategoryDefinition>('/video-taxonomy/categories',data).then(r=>r.data),
+  updateCategory: (id:number,data:Partial<{name:string;code:string;parent_id:number|null;sort_order:number;status:'active'|'inactive'}>) => api.put<import('../types').VideoCategoryDefinition>(`/video-taxonomy/categories/${id}`,data).then(r=>r.data),
+  deleteCategory: (id:number) => api.delete(`/video-taxonomy/categories/${id}`).then(r=>r.data),
+  mergeCategory: (id:number,targetId:number) => api.post(`/video-taxonomy/categories/${id}/merge`,{target_id:targetId}).then(r=>r.data),
+  createGroup: (data:{name:string;code?:string;applies_to:import('../types').VideoTagAppliesTo;inherit_to_final:boolean;sort_order?:number}) => api.post<import('../types').VideoTagGroupDefinition>('/video-taxonomy/groups',data).then(r=>r.data),
+  updateGroup: (id:number,data:Partial<{name:string;code:string;applies_to:import('../types').VideoTagAppliesTo;inherit_to_final:boolean;sort_order:number;status:'active'|'inactive'}>) => api.put<import('../types').VideoTagGroupDefinition>(`/video-taxonomy/groups/${id}`,data).then(r=>r.data),
+  deleteGroup: (id:number) => api.delete(`/video-taxonomy/groups/${id}`).then(r=>r.data),
+  createPublicTag: (data:{name:string;code?:string;group_id:number;applies_to:import('../types').VideoTagAppliesTo;sort_order?:number}) => api.post<import('../types').VideoTaxonomyTag>('/video-taxonomy/tags',data).then(r=>r.data),
+  createPersonalTag: (data:{name:string;applies_to:import('../types').VideoTagAppliesTo}) => api.post<import('../types').VideoTaxonomyTag>('/video-taxonomy/personal-tags',data).then(r=>r.data),
+  updateTag: (id:number,data:Partial<{name:string;code:string;group_id:number|null;applies_to:import('../types').VideoTagAppliesTo;sort_order:number;status:'active'|'inactive'}>) => api.put<import('../types').VideoTaxonomyTag>(`/video-taxonomy/tags/${id}`,data).then(r=>r.data),
+  deleteTag: (id:number) => api.delete(`/video-taxonomy/tags/${id}`).then(r=>r.data),
+  mergeTag: (id:number,targetId:number) => api.post(`/video-taxonomy/tags/${id}/merge`,{target_id:targetId}).then(r=>r.data),
+  updateAssets: (data:{asset_ids:number[];set_category?:boolean;category_id?:number|null;add_tag_ids?:number[];remove_tag_ids?:number[]}) => api.put<{updated_asset_ids:number[];added_assignments:number}>('/video-taxonomy/assets/batch',data).then(r=>r.data),
+  createPreset: (data:{object_type:import('../types').VideoObjectType;name:string;filters:Record<string,unknown>}) => api.post<import('../types').VideoFilterPreset>('/video-taxonomy/presets',data).then(r=>r.data),
+  updatePreset: (id:number,data:{name?:string;filters?:Record<string,unknown>}) => api.put<import('../types').VideoFilterPreset>(`/video-taxonomy/presets/${id}`,data).then(r=>r.data),
+  deletePreset: (id:number) => api.delete(`/video-taxonomy/presets/${id}`).then(r=>r.data),
 };
 
 function directorProjectRows(payload: unknown): DirectorProject[] {

@@ -8,9 +8,11 @@ from unittest.mock import MagicMock
 
 from app.api.auto_edit import (
     _starts_with_dangling_anaphor,
+    _manual_plan,
     _validate_plan,
     asset_eligible_for_project,
     finished_clip_ffmpeg_command,
+    manual_clip_ffmpeg_command,
     finished_output_metadata,
     origin_ids_from_variant,
     remix_render_adds_public_bgm,
@@ -63,6 +65,8 @@ class VideoWorkflowTests(unittest.TestCase):
         review = SimpleNamespace(tenant_id="t1", product_id=1, status="analyzed", excluded=False, asset_kind="material",
                                  library_type="finished", reusable_status="review_required", generation_depth=1)
         self.assertTrue(asset_eligible_for_project(semi, "t1", 1, "smart_compose"))
+        self.assertFalse(asset_eligible_for_project(semi, "t1", 1, "manual_compose"))
+        self.assertTrue(asset_eligible_for_project(finished, "t1", 1, "manual_compose"))
         self.assertFalse(asset_eligible_for_project(finished, "t1", 1, "smart_compose"))
         self.assertTrue(asset_eligible_for_project(finished, "t1", 1, "finished_remix"))
         self.assertFalse(asset_eligible_for_project(semi, "t1", 1, "finished_remix"))
@@ -73,6 +77,19 @@ class VideoWorkflowTests(unittest.TestCase):
                                        asset_kind="final_output", library_type="finished",
                                        reusable_status="reusable", generation_depth=1)
         self.assertFalse(asset_eligible_for_project(final_output, "t1", 1, "finished_remix"))
+
+    def test_manual_plan_uses_whole_assets_in_selected_order(self):
+        project = SimpleNamespace(id=7, structure=[
+            {"id": "hook", "role": "hook", "title": "开场", "asset_ids": ["a2"]},
+            {"id": "proof", "role": "proof", "title": "证明", "asset_ids": ["a1"]},
+        ])
+        assets = [SimpleNamespace(asset_id="a1", filename="one.mp4", duration_seconds=4.5),
+                  SimpleNamespace(asset_id="a2", filename="two.mp4", duration_seconds=3.0)]
+        variant = _manual_plan(project, assets)
+        self.assertEqual([clip["asset_id"] for clip in variant["narrative_segments"]], ["a2", "a1"])
+        self.assertEqual(variant["narrative_segments"][0]["source_range"], {"start": 0.0, "end": 3.0})
+        self.assertEqual(variant["actual_duration_seconds"], 7.5)
+        self.assertEqual(variant["structure_snapshot"][1]["title"], "证明")
 
     def test_transition_scoring_and_anaphors(self):
         role_rank = {"hook": 0, "selling_point": 1, "pain_point": 2}
@@ -143,6 +160,9 @@ class VideoWorkflowTests(unittest.TestCase):
         self.assertNotIn("-an", command)
         self.assertIn("-c:a", command)
         self.assertTrue(any("loudnorm" in str(part) for part in command))
+        silent = manual_clip_ffmpeg_command("in.mp4", 4.0, "out.mp4", 1080, 1920, False)
+        self.assertIn("anullsrc=r=48000:cl=stereo", silent)
+        self.assertIn("1:a:0", silent)
 
     def test_recover_interrupted_analysis_requeues_analyzing_rows(self):
         db = MagicMock()

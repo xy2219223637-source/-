@@ -28,6 +28,7 @@ from app.services.storage import get_storage
 from app.services.tts import synthesize_speech
 from app.services.llm import LLMClient
 from app.services.video_analysis_queue import enqueue_video_analysis
+from app.services.video_taxonomy import inherit_public_tags_to_final
 
 router = APIRouter(prefix="/auto-edit-projects", tags=["auto-edit"])
 logger = logging.getLogger(__name__)
@@ -72,7 +73,7 @@ DANGLING_ANAPHORS = ("所以", "它", "这个", "这种", "然后", "但是")
 
 
 def library_type_for_edit_mode(edit_mode: str) -> str:
-    return "finished" if edit_mode == "finished_remix" else "semi_finished"
+    return "finished" if edit_mode in {"finished_remix", "manual_compose"} else "semi_finished"
 
 
 def asset_eligible_for_project(asset: Any, tenant_id: str, product_id: int, edit_mode: str) -> bool:
@@ -86,7 +87,7 @@ def asset_eligible_for_project(asset: Any, tenant_id: str, product_id: int, edit
         return False
     if getattr(asset, "asset_kind", "material") != "material":
         return False
-    if edit_mode != "finished_remix":
+    if edit_mode == "smart_compose":
         return True
     return getattr(asset, "reusable_status", None) == "reusable" and int(getattr(asset, "generation_depth", 0) or 0) <= 1
 
@@ -130,7 +131,7 @@ def _eligible_assets_query(db: Session, tenant_id: str, edit_mode: str, product_
             VideoEditProjectAsset.included.is_(True),
             VideoEditProjectAsset.tenant_id == tenant_id,
         )
-    if edit_mode == "finished_remix":
+    if edit_mode in {"finished_remix", "manual_compose"}:
         query = query.filter(VideoAsset.reusable_status == "reusable", VideoAsset.generation_depth <= 1)
     return query
 
@@ -159,13 +160,26 @@ class ProjectCreate(BaseModel):
     variant_count: int = Field(default=3, ge=1, le=5)
     aspect_ratio: str = Field(default="9:16", pattern="^(9:16|16:9|1:1)$")
     objective: str = "live_stream"
-    edit_mode: str = Field(default="smart_compose", pattern="^(smart_compose|finished_remix)$")
+    edit_mode: str = Field(default="smart_compose", pattern="^(smart_compose|finished_remix|manual_compose)$")
     structure: Optional[list[dict[str, Any]]] = None
     constraints: list[str] = Field(default_factory=list)
 
 
 class ProjectDurationUpdate(BaseModel):
     target_duration_seconds: int = Field(ge=60, le=120)
+
+
+class ManualSection(BaseModel):
+    id: str = Field(min_length=1, max_length=64)
+    role: str = Field(min_length=1, max_length=64)
+    title: str = Field(min_length=1, max_length=120)
+    objective: str = Field(default="", max_length=500)
+    required: bool = True
+    asset_ids: list[str] = Field(default_factory=list)
+
+
+class ManualPlanUpdate(BaseModel):
+    sections: list[ManualSection] = Field(min_length=1, max_length=30)
 
 
 def _project(db: Session, auth: AuthContext, project_id: int) -> VideoEditProject:
@@ -270,11 +284,14 @@ def create_project(payload: ProjectCreate, db: Session = Depends(get_db), auth: 
     if not product:
         raise HTTPException(404, "商品不存在")
     row = VideoEditProject(tenant_id=auth.tenant_id, product_id=product.id,
-        name=payload.name.strip() or f"{product.name} · AI 自动剪辑", target_duration_seconds=payload.target_duration_seconds,
+        name=payload.name.strip() or (f"{product.name} · 视频编排" if payload.edit_mode == "manual_compose" else f"{product.name} · AI 自动剪辑"),
+        target_duration_seconds=payload.target_duration_seconds,
         variant_count=payload.variant_count, aspect_ratio=payload.aspect_ratio, objective=payload.objective,
         edit_mode=payload.edit_mode,
-        structure=payload.structure or [{"role": role, "objective": ROLE_OBJECTIVES[role], "required": True}
-                                        for role in OBJECTIVE_ROLE_ORDERS.get(payload.objective, OBJECTIVE_ROLE_ORDERS["live_stream"])],
+        structure=payload.structure if payload.structure is not None else [{"id": f"section-{index + 1}", "role": role,
+                                         "title": ROLE_OBJECTIVES[role].split(" ")[0],
+                                         "objective": ROLE_OBJECTIVES[role], "required": True, "asset_ids": []}
+                                        for index, role in enumerate(OBJECTIVE_ROLE_ORDERS.get(payload.objective, OBJECTIVE_ROLE_ORDERS["live_stream"]))],
         constraints=payload.constraints)
     db.add(row); db.commit(); db.refresh(row)
     reusable = _eligible_assets_query(db, auth.tenant_id, payload.edit_mode, product_id=product.id).all()
@@ -284,6 +301,66 @@ def create_project(payload: ProjectCreate, db: Session = Depends(get_db), auth: 
         row.status = "ready_to_plan"
     db.commit(); db.refresh(row)
     return _serialize(db, row)
+
+
+@router.put("/{project_id}/manual-plan")
+def save_manual_plan(project_id: int, payload: ManualPlanUpdate,
+                     db: Session = Depends(get_db), auth: AuthContext = Depends(current_auth)):
+    project = _project(db, auth, project_id)
+    if project.edit_mode != "manual_compose":
+        raise HTTPException(409, "当前项目不是人工视频编排项目")
+    public_ids = [asset_id for section in payload.sections for asset_id in section.asset_ids]
+    if len(public_ids) != len(set(public_ids)):
+        raise HTTPException(422, "同一素材不能在一个视频中重复使用")
+    assets = _eligible_assets_query(db, auth.tenant_id, project.edit_mode, product_id=project.product_id).all()
+    asset_map = {asset.asset_id: asset for asset in assets}
+    missing = [asset_id for asset_id in public_ids if asset_id not in asset_map]
+    if missing:
+        raise HTTPException(422, "部分素材不存在、尚未分析完成或不可使用")
+    project.structure = [section.model_dump() for section in payload.sections]
+    project.target_duration_seconds = max(1, round(sum(asset_map[asset_id].duration_seconds for asset_id in public_ids)))
+    project.status = "ready_to_render" if public_ids else "draft"
+    project.error_message = ""
+    linked_ids = {link.asset_id for link in db.query(VideoEditProjectAsset).filter(
+        VideoEditProjectAsset.project_id == project.id,
+        VideoEditProjectAsset.tenant_id == auth.tenant_id,
+    ).all()}
+    for asset in assets:
+        if asset.id not in linked_ids:
+            db.add(VideoEditProjectAsset(tenant_id=auth.tenant_id, project_id=project.id,
+                                         asset_id=asset.id, included=True))
+    db.commit(); db.refresh(project)
+    return _serialize(db, project)
+
+
+def _manual_plan(project: VideoEditProject, assets: list[VideoAsset]) -> dict[str, Any]:
+    asset_map = {asset.asset_id: asset for asset in assets}
+    clips: list[dict[str, Any]] = []
+    cursor = 0.0
+    for section_index, section in enumerate(project.structure or []):
+        for asset_index, asset_id in enumerate(section.get("asset_ids") or []):
+            asset = asset_map.get(asset_id)
+            if not asset:
+                raise HTTPException(422, f"素材 {asset_id} 不可使用")
+            duration = float(asset.duration_seconds or 0)
+            if duration <= 0:
+                raise HTTPException(422, f"素材 {asset.filename} 时长无效")
+            clips.append({
+                "segment_id": f"manual-{section_index + 1}-{asset_index + 1}", "order": len(clips) + 1,
+                "asset_id": asset.asset_id, "highlight_id": "", "speaker_id": "",
+                "source_range": {"start": 0.0, "end": duration},
+                "timeline_range": {"start": cursor, "end": cursor + duration},
+                "duration_seconds": duration, "content_role": section.get("role", "custom"),
+                "section_id": section.get("id"), "section_title": section.get("title"),
+                "speech_text": "", "reason": "运营人工选择完整素材", "audio_strategy": "keep_original",
+            })
+            cursor += duration
+    if not clips:
+        raise HTTPException(409, "请先为至少一个段落选择素材")
+    return {"variant_id": "V1", "name": "人工编排成片", "edit_mode": "manual_compose",
+            "target_duration_seconds": cursor, "actual_duration_seconds": cursor,
+            "narrative_segments": clips, "video_track": [],
+            "structure_snapshot": project.structure}
 
 
 @router.get("/{project_id}")
@@ -1087,6 +1164,19 @@ def finished_clip_ffmpeg_command(source: Union[Path, str], start: float, duratio
     ]
 
 
+def manual_clip_ffmpeg_command(source: Union[Path, str], duration: float, output: Union[Path, str],
+                               width: int, height: int, has_audio: bool) -> list[str]:
+    command = ["ffmpeg", "-y", "-i", str(source)]
+    if not has_audio:
+        command += ["-f", "lavfi", "-t", str(duration), "-i", "anullsrc=r=48000:cl=stereo"]
+    command += ["-map", "0:v:0", "-map", "0:a:0" if has_audio else "1:a:0",
+        "-vf", f"scale={width}:{height}:force_original_aspect_ratio=increase,crop={width}:{height},fps=30,format=yuv420p",
+        "-c:v", "libx264", "-preset", "veryfast", "-crf", "22", "-c:a", "aac", "-ar", "48000", "-ac", "2",
+        "-af", "loudnorm=I=-16:LRA=7:TP=-1.5,aresample=async=1:first_pts=0",
+        "-t", str(duration), "-movflags", "+faststart", str(output)]
+    return command
+
+
 def remix_render_uses_system_captions(edit_mode: str) -> bool:
     return edit_mode != "finished_remix"
 
@@ -1100,20 +1190,23 @@ def _render_variant(plan: dict[str, Any], assets: list[VideoAsset], output: Path
     storage = get_storage()
     width, height = {"9:16": (1080, 1920), "16:9": (1920, 1080), "1:1": (1080, 1080)}[aspect_ratio]
     edit_mode = str(plan.get("edit_mode") or "")
-    if edit_mode == "finished_remix":
+    if edit_mode in {"finished_remix", "manual_compose"}:
         av_segments: list[Path] = []
         for index, clip in enumerate(plan["narrative_segments"]):
             asset = asset_map[clip["asset_id"]]
             source = storage.local_path(asset.object_url)
             if not source:
                 raise RuntimeError(f"无法下载素材 {asset.filename}")
-            if not asset.has_audio:
+            if edit_mode == "finished_remix" and not asset.has_audio:
                 raise RuntimeError(f"成品片段缺少完整音轨：{asset.filename}")
             start, end = clip["source_range"]["start"], clip["source_range"]["end"]
             segment = output.parent / f"av-{index:03d}.mp4"
             av_segments.append(segment)
+            command = (finished_clip_ffmpeg_command(source, start, end - start, segment, width, height)
+                       if edit_mode == "finished_remix"
+                       else manual_clip_ffmpeg_command(source, end - start, segment, width, height, asset.has_audio))
             subprocess.run(
-                finished_clip_ffmpeg_command(source, start, end - start, segment, width, height),
+                command,
                 capture_output=True, text=True, timeout=300, check=True,
             )
         concat_list = output.parent / "av-concat.txt"
@@ -1190,10 +1283,17 @@ def _render_variant(plan: dict[str, Any], assets: list[VideoAsset], output: Path
 async def render(project_id: int, db: Session = Depends(get_db), auth: AuthContext = Depends(current_auth)):
     project = _project(db, auth, project_id)
     record = db.query(EditingPlanVersion).filter(EditingPlanVersion.project_id == project.id, EditingPlanVersion.tenant_id == auth.tenant_id).order_by(EditingPlanVersion.version.desc()).first()
-    if not record or record.validation_status != "valid": raise HTTPException(409, "请先生成有效的剪辑方案")
     assets = _eligible_assets_query(
         db, auth.tenant_id, project.edit_mode, product_id=project.product_id, project_id=project.id
     ).all()
+    if project.edit_mode == "manual_compose":
+        variant = _manual_plan(project, assets)
+        version = (db.query(func.max(EditingPlanVersion.version)).filter(EditingPlanVersion.project_id == project.id).scalar() or 0) + 1
+        record = EditingPlanVersion(tenant_id=auth.tenant_id, project_id=project.id, version=version,
+                                    plan_json={"schema_version": "manual-v1", "variants": [variant]},
+                                    model="manual", validation_status="valid", validation_errors=[])
+        db.add(record); db.commit(); db.refresh(record)
+    if not record or record.validation_status != "valid": raise HTTPException(409, "请先生成有效的剪辑方案")
     asset_by_public_id = {asset.asset_id: asset for asset in assets}
     db.query(VideoRenderJob).filter(VideoRenderJob.project_id == project.id, VideoRenderJob.tenant_id == auth.tenant_id).delete(synchronize_session=False)
     project.status = "rendering"; db.commit()
@@ -1216,7 +1316,8 @@ async def render(project_id: int, db: Session = Depends(get_db), auth: AuthConte
                 generated_asset = VideoAsset(
                     tenant_id=auth.tenant_id, project_id=project.id, product_id=project.product_id,
                     asset_id=f"asset-{uuid.uuid4().hex[:12]}", filename=f"{project.name}-{variant['variant_id']}.mp4",
-                    source="smart_compose_output" if project.edit_mode == "smart_compose" else "finished_remix_output",
+                    source=({"smart_compose": "smart_compose_output", "finished_remix": "finished_remix_output"}
+                            .get(project.edit_mode, "manual_compose_output")),
                     library_type="finished", asset_kind="final_output",
                     generation_depth=metadata["generation_depth"],
                     origin_asset_ids=metadata["origin_asset_ids"],
@@ -1230,6 +1331,7 @@ async def render(project_id: int, db: Session = Depends(get_db), auth: AuthConte
                     fps=30, has_audio=True, status="queued_for_analysis", excluded=False,
                 )
                 db.add(generated_asset)
+                inherit_public_tags_to_final(db, generated_asset, source_assets, auth.user_id)
             job.status = "completed"; job.output_url = url; job.duration_seconds = duration
         except Exception as exc:
             job.status = "failed"; job.error_message = str(exc)[:1000]
