@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Optional
 
-from sqlalchemy import DateTime, Float, ForeignKey, Integer, String, Text, JSON, UniqueConstraint
+from sqlalchemy import DateTime, Float, ForeignKey, Integer, String, Text, JSON, UniqueConstraint, Index, text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.database import Base
@@ -115,6 +115,12 @@ class ShootingTask(Base):
     """A script assignment sent to an external shooting team."""
 
     __tablename__ = "shooting_tasks"
+    __table_args__ = (
+        Index("uq_shooting_notification_uuid", "tenant_id", "notification_uuid", unique=True),
+        Index("uq_shooting_active_recipient", "tenant_id", "project_id", "recipient_type", "recipient_id", unique=True,
+              postgresql_where=text("recipient_id <> '' AND status IN ('pending', 'in_progress')"),
+              sqlite_where=text("recipient_id <> '' AND status IN ('pending', 'in_progress')")),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
     tenant_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
@@ -128,6 +134,17 @@ class ShootingTask(Base):
     note: Mapped[str] = mapped_column(Text, nullable=False, default="")
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="pending", index=True)
     created_by: Mapped[str] = mapped_column(String(64), nullable=False)
+    recipient_type: Mapped[str] = mapped_column(String(16), nullable=False, default="")
+    recipient_id: Mapped[str] = mapped_column(String(128), nullable=False, default="")
+    recipient_name: Mapped[str] = mapped_column(String(256), nullable=False, default="")
+    notification_status: Mapped[str] = mapped_column(String(16), nullable=False, default="not_sent")
+    notification_uuid: Mapped[Optional[str]] = mapped_column(String(36), nullable=True)
+    notification_app_id: Mapped[str] = mapped_column(String(128), nullable=False, default="")
+    notification_payload: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    feishu_message_id: Mapped[str] = mapped_column(String(128), nullable=False, default="")
+    notification_error: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    notification_started_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    notified_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 

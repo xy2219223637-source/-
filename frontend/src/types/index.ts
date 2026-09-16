@@ -220,14 +220,20 @@ export interface DirectorProject {
   collected_count?: number;
 }
 
-export interface ShootingDirectory {
+export interface FeishuRecipient {
   id: string;
   name: string;
-  departments: Array<{
-    id: string;
-    name: string;
-    members: Array<{ id: string; name: string }>;
-  }>;
+  department_name: string;
+  department_id?: string;
+}
+
+export interface ShootingDirectory {
+  configured: boolean;
+  type: 'user' | 'chat';
+  items: FeishuRecipient[];
+  refreshed_at: string;
+  can_send?: boolean;
+  send_blocked_reason?: string;
 }
 
 export interface ShootingTask {
@@ -244,6 +250,15 @@ export interface ShootingTask {
   assignee_name: string;
   note: string;
   status: 'pending' | 'in_progress' | 'completed';
+  recipient_type: 'user' | 'chat' | '';
+  recipient_id: string;
+  recipient_name: string;
+  notification_status: 'not_sent' | 'sending' | 'sent' | 'failed' | 'unknown';
+  notification_uuid: string | null;
+  feishu_message_id: string;
+  notification_error: string;
+  notified_at: string | null;
+  can_retry_notification: boolean;
   created_at: string;
   updated_at: string;
 }

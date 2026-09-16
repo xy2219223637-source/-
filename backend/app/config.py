@@ -86,6 +86,13 @@ class Settings(BaseSettings):
     auth_secret: str = "change-this-secret-in-production"
     access_token_hours: int = 24
 
+    # Unset means enabled when credentials are present; False is an explicit off switch.
+    feishu_enabled: bool | None = None
+    feishu_app_id: str = ""
+    feishu_app_secret: str = ""
+    feishu_system_tenant_id: str = ""
+    app_public_base_url: str = ""
+
     host: str = "0.0.0.0"
     port: int = 8000
     debug: bool = True

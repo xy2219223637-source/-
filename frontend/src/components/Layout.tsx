@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { loginUrl } from '../lib/loginReturn';
 import { NavLink, Outlet, useLocation } from 'react-router-dom';
 import {
   LayoutDashboard,
@@ -121,7 +122,7 @@ export default function Layout() {
   const isDirectorWorkspace = /^\/director-inspiration\/\d+\/workspace/.test(location.pathname);
 
   if (!localStorage.getItem('access_token')) {
-    window.location.href = '/login';
+    window.location.href = loginUrl();
     return null;
   }
 
