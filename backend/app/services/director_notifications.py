@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session
 
 from app.models import DirectorProject, DirectorSection, ShootingTask, User
 from app.services.feishu import FeishuError, get_feishu_client, public_script_url
+from app.services.feishu_logging import trace_context
 
 logger = logging.getLogger(__name__)
 SEND_LEASE_SECONDS = 300
@@ -38,6 +39,11 @@ def _same_request(row, project_id, payload):
 
 
 def create_notification(db, auth, project_id, payload):
+    with trace_context(tenant_id=auth.tenant_id, project_id=project_id, notification_uuid=str(payload.request_id)):
+        return _create_notification(db, auth, project_id, payload)
+
+
+def _create_notification(db, auth, project_id, payload):
     client = get_feishu_client(auth.tenant_id, db=db)
     request_id = str(payload.request_id)
     previous = db.query(ShootingTask).filter_by(tenant_id=auth.tenant_id, notification_uuid=request_id).first()
@@ -97,6 +103,11 @@ def create_notification(db, auth, project_id, payload):
 
 
 def retry_notification(db, auth, task_id):
+    with trace_context(tenant_id=auth.tenant_id, task_id=task_id):
+        return _retry_notification(db, auth, task_id)
+
+
+def _retry_notification(db, auth, task_id):
     client = get_feishu_client(auth.tenant_id, db=db)
     row = db.query(ShootingTask).filter_by(id=task_id, tenant_id=auth.tenant_id).first()
     if not row:
@@ -123,6 +134,12 @@ def retry_notification(db, auth, task_id):
 
 
 def _deliver(db, row, client):
+    with trace_context(tenant_id=row.tenant_id, task_id=row.id, project_id=row.project_id,
+                       notification_uuid=row.notification_uuid):
+        return _deliver_traced(db, row, client)
+
+
+def _deliver_traced(db, row, client):
     task_id = row.id
     try:
         message_id = client.send(row.recipient_type, row.recipient_id, row.notification_payload["text"], row.notification_uuid)

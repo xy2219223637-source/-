@@ -92,6 +92,8 @@ class Settings(BaseSettings):
     feishu_app_secret: str = ""
     feishu_system_tenant_id: str = ""
     app_public_base_url: str = ""
+    feishu_log_dir: str = ""
+    feishu_log_raw: bool = True
 
     host: str = "0.0.0.0"
     port: int = 8000

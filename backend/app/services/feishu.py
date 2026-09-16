@@ -4,8 +4,10 @@ from __future__ import annotations
 import copy
 import hashlib
 import json
+import logging
 import threading
 import time
+import uuid
 from datetime import datetime
 from typing import TYPE_CHECKING
 from urllib.parse import quote, urlsplit
@@ -13,6 +15,7 @@ from urllib.parse import quote, urlsplit
 import httpx
 
 from app.config import get_settings
+from app.services.feishu_logging import log_event, trace_fields
 
 if TYPE_CHECKING:
     from sqlalchemy.orm import Session
@@ -83,18 +86,68 @@ class FeishuClient:
         self.settings = settings
         self.tenant_id = tenant_id
         self.transport = transport
+        self.trace_id = trace_fields().get("request_id") or uuid.uuid4().hex
         # Credential rotation invalidates all cached tokens and directory entries.
         self.key = (tenant_id, settings.feishu_app_id, hashlib.sha256(settings.feishu_app_secret.encode()).hexdigest())
 
     def _request(self, method, path, *, params=None, payload=None, token=None, sending=False):
         headers = {"Authorization": f"Bearer {token}"} if token else {}
+        operation = ("获取应用令牌" if path.startswith("/auth/") else "发送消息" if sending
+                     else "读取授权范围" if path.endswith("/scopes") else "读取群列表" if path == "/im/v1/chats"
+                     else "读取部门" if "/departments/" in path else "读取员工")
+        fields = {"request_id": trace_fields().get("request_id", self.trace_id), "call_id": uuid.uuid4().hex,
+                  "tenant_id": self.tenant_id, "app_id": self.settings.feishu_app_id,
+                  "method": method, "path": path, "operation": operation}
+        secrets = (self.settings.feishu_app_secret, token)
+        log_event("feishu.http.started", f"飞书：{operation}，开始请求", secrets=secrets, **fields,
+                  request={"url": API_BASE + path, "params": params, "headers": headers, "body": payload})
+        started = time.perf_counter()
         try:
             with httpx.Client(timeout=httpx.Timeout(15, connect=5), transport=self.transport) as client:
                 response = client.request(method, API_BASE + path, params=params, json=payload, headers=headers)
         except (httpx.ConnectError, httpx.ConnectTimeout, httpx.PoolTimeout) as exc:
+            log_event("feishu.http.failed", f"飞书：{operation}，连接失败，未获得 HTTP 响应",
+                      level=logging.ERROR, **fields, http_status=None, error_type=type(exc).__name__,
+                      duration_ms=round((time.perf_counter() - started) * 1000), uncertain=False)
             raise FeishuError("无法连接飞书，请稍后重试") from exc
         except httpx.RequestError as exc:
+            log_event("feishu.http.failed", f"飞书：{operation}，请求中断；发送结果可能不确定，请先核对消息",
+                      level=logging.ERROR, **fields, http_status=None, error_type=type(exc).__name__,
+                      duration_ms=round((time.perf_counter() - started) * 1000), uncertain=sending)
             raise FeishuError("飞书请求中断，请核对是否收到消息" if sending else "飞书查询超时，请重试", uncertain=sending) from exc
+        try:
+            raw_result = response.json()
+        except ValueError:
+            raw_result = response.text
+        code = raw_result.get("code") if isinstance(raw_result, dict) else None
+        valid_code = type(code) is int
+        format_error = "" if valid_code else "缺少有效业务码"
+        if valid_code and code == 0:
+            if path.startswith("/auth/"):
+                access_token, expire = raw_result.get("tenant_access_token"), raw_result.get("expire")
+                if not isinstance(access_token, str) or not access_token or not isinstance(expire, (int, float)) or expire <= 0:
+                    format_error = "缺少有效应用令牌或有效期"
+            elif not isinstance(raw_result.get("data"), dict):
+                format_error = "缺少有效 data 对象"
+            elif sending:
+                message_id = raw_result["data"].get("message_id")
+                if not isinstance(message_id, str) or not message_id:
+                    format_error = "缺少有效消息编号，发送结果待确认"
+        successful = response.is_success and valid_code and code == 0 and not format_error
+        response_headers = {key: value for key, value in response.headers.items()
+                            if key in {"content-type", "x-tt-logid", "x-request-id", "x-lark-request-id", "retry-after"}}
+        upstream_id = response_headers.get("x-tt-logid") or response_headers.get("x-request-id") or response_headers.get("x-lark-request-id")
+        remark = ("飞书返回业务成功" if successful else "飞书 HTTP 请求失败，请查看状态码及原始响应" if not response.is_success
+                  else f"飞书响应格式异常：{format_error}，请查看原始响应" if format_error
+                  else "飞书业务拒绝：HTTP 成功不代表业务成功，请查看业务码和 msg")
+        level = (logging.INFO if successful else logging.ERROR
+                 if response.status_code >= 500 or (response.is_success and format_error) else logging.WARNING)
+        log_event("feishu.http.completed", f"{operation}：{remark}", level=level,
+                  secrets=secrets, **fields, http_status=response.status_code, business_code=code if valid_code else None,
+                  business_message=str(raw_result.get("msg", ""))[:2000] if isinstance(raw_result, dict) else "非 JSON 响应",
+                  upstream_request_id=upstream_id, duration_ms=round((time.perf_counter() - started) * 1000),
+                  uncertain=bool(sending and (response.status_code >= 500 or response.status_code == 408 or (response.is_success and format_error))),
+                  response={"headers": response_headers, "body": raw_result})
         if response.status_code >= 500 or response.status_code == 408:
             raise FeishuError("飞书服务暂时不可用", uncertain=sending)
         if response.status_code == 429:
@@ -102,8 +155,8 @@ class FeishuClient:
         if not response.is_success:
             raise FeishuError(f"飞书请求被拒绝（HTTP {response.status_code}），请检查应用权限")
         try:
-            result = response.json()
-            if not isinstance(result, dict) or not isinstance(result.get("code"), int):
+            result = raw_result
+            if not isinstance(result, dict) or type(result.get("code")) is not int:
                 raise ValueError
         except (ValueError, TypeError) as exc:
             raise FeishuError("飞书返回内容异常，请核对发送结果" if sending else "飞书返回内容异常", uncertain=sending) from exc

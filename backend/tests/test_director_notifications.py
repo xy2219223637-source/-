@@ -4,6 +4,7 @@ from datetime import datetime, timedelta
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
+import httpx
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
@@ -15,7 +16,8 @@ from app.api import director
 from app.auth import AuthContext, current_auth
 from app.database import Base, get_db
 from app.models import DirectorProject, DirectorSection, ShootingTask
-from app.services.feishu import FeishuError
+from app.services.feishu import FeishuClient, FeishuError, _cache
+from app.services.feishu_logging import RequestTraceMiddleware
 
 
 class DirectorNotificationTests(unittest.TestCase):
@@ -25,6 +27,7 @@ class DirectorNotificationTests(unittest.TestCase):
         self.sessions = sessionmaker(bind=self.engine)
         self.auth = AuthContext("user", "tenant", "owner", "director@example.com", "Company")
         app = FastAPI()
+        app.add_middleware(RequestTraceMiddleware)
         app.include_router(director.router, prefix="/api")
 
         def session():
@@ -89,6 +92,42 @@ class DirectorNotificationTests(unittest.TestCase):
         self.assertEqual(row["assignee_id"], "")
         self.assertEqual(row["department_id"], "")
         self.assertEqual(self.feishu.send.call_args.args[:2], ("chat", "oc_group"))
+
+    def test_http_success_and_notification_failure_are_correlated_in_logs(self):
+        _cache.clear()
+        def respond(request):
+            if "/auth/" in request.url.path:
+                return httpx.Response(200, json={"code": 0, "tenant_access_token": "trace-test-token", "expire": 3600})
+            return httpx.Response(200, headers={"x-tt-logid": "trace-test-upstream"}, json={"code": 230002, "msg": "permission denied"})
+        settings = SimpleNamespace(feishu_app_id="cli_trace_test", feishu_app_secret="trace-test-secret")
+        client = FeishuClient(settings, "tenant", transport=httpx.MockTransport(respond))
+        self.feishu.send.side_effect = client.send
+        payload = self.payload()
+        with self.assertLogs("app.feishu", level="INFO") as captured:
+            response = self.client.post(f"/api/director-projects/{self.project_id}/shooting-tasks", json=payload,
+                                        headers={"x-request-id": "notification-trace"})
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["notification_status"], "failed")
+        events = [record.feishu_event for record in captured.records]
+        self.assertTrue(all(event["request_id"] == "notification-trace" for event in events))
+        upstream = next(event for event in events if event.get("business_code") == 230002)
+        self.assertEqual(upstream["notification_uuid"], payload["request_id"])
+        self.assertEqual(upstream["task_id"], response.json()["id"])
+        self.assertEqual(upstream["upstream_request_id"], "trace-test-upstream")
+        self.assertEqual(len(events), 4)  # Only token and message HTTP request/response pairs.
+        self.assertEqual({event["event"] for event in events}, {"feishu.http.started", "feishu.http.completed"})
+
+    def test_local_task_creation_read_replay_and_validation_do_not_write_feishu_logs(self):
+        # Mocked client does no upstream HTTP: internal business work must be silent.
+        with self.assertNoLogs("app.feishu", level="INFO"):
+            payload = self.payload()
+            first = self.create(payload)
+            self.assertEqual(first.status_code, 200)
+            self.assertEqual(self.create(payload).json()["id"], first.json()["id"])
+            self.assertEqual(len(self.tasks()), 1)
+            self.feishu.settings.app_public_base_url = "http://127.0.0.1"
+            self.assertEqual(self.create().status_code, 503)
+        self.assertEqual(self.feishu.send.call_count, 1)
 
     def test_directory_preserves_recipients_and_reports_script_link_readiness(self):
         directory = {"type": "user", "items": [{"id": "ou_employee", "name": "Employee"}]}

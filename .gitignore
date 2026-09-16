@@ -21,6 +21,8 @@ htmlcov/
 *.swp
 deploy/logs/
 output/
+backend/log/
+backend/logs/
 
 # Browser automation artifacts
 .playwright-cli/

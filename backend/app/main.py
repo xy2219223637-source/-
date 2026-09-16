@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import time
-import uuid
 from datetime import datetime, timedelta
 
 from fastapi import FastAPI
@@ -14,6 +13,7 @@ from app.models import AuditLog, CreativeBatchJob, CreativeGeneration
 from app.services.production_queue import start_worker, stop_worker
 from app.services.video_analysis_queue import start_video_analysis_worker, stop_video_analysis_worker
 from app.services.redis_client import get_redis
+from app.services.feishu_logging import RequestTraceMiddleware, trace_fields
 
 settings = get_settings()
 
@@ -29,12 +29,13 @@ app.add_middleware(
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+    expose_headers=["X-Request-ID", "X-Notification-Outcome"],
 )
 
 
 @app.middleware("http")
 async def audit_requests(request, call_next):
-    request_id = request.headers.get("x-request-id") or uuid.uuid4().hex
+    request_id = trace_fields()["request_id"]
     started = time.perf_counter()
     response = await call_next(request)
     duration_ms = int((time.perf_counter() - started) * 1000)
@@ -47,6 +48,8 @@ async def audit_requests(request, call_next):
         finally:
             db.close()
     return response
+
+app.add_middleware(RequestTraceMiddleware)
 
 app.include_router(products.router, prefix="/api")
 app.include_router(auth.router, prefix="/api")
