@@ -1,6 +1,7 @@
 import { useState, type FormEvent } from 'react';
 import { authApi } from '../api/client';
 import IcpFiling from '../components/IcpFiling';
+import { safeReturnPath } from '../lib/loginReturn';
 
 export default function Login() {
   const [registering, setRegistering] = useState(false);
@@ -12,7 +13,7 @@ export default function Login() {
     try {
       const result = registering ? await authApi.register(form) : await authApi.login(form.email, form.password);
       localStorage.setItem('access_token', result.access_token);
-      window.location.href = '/';
+      window.location.href = safeReturnPath(new URLSearchParams(window.location.search).get('returnTo'));
     } catch (err: any) {
       setError(err.response?.data?.detail || '操作失败');
     }

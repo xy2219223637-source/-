@@ -52,6 +52,33 @@ def get_db() -> Generator[Session, None, None]:
         db.close()
 
 
+def migrate_feishu_notifications(bind: Engine) -> None:
+    """Keep old simulated assignments unsent; nullable UUIDs allow legacy rows."""
+    with bind.begin() as connection:
+        columns = _table_columns(connection, "shooting_tasks")
+        if not columns:
+            return
+        json_type = "JSONB NOT NULL DEFAULT '{}'::jsonb" if bind.dialect.name == "postgresql" else "JSON NOT NULL DEFAULT '{}'"
+        additions = {
+            "recipient_type": "VARCHAR(16) NOT NULL DEFAULT ''",
+            "recipient_id": "VARCHAR(128) NOT NULL DEFAULT ''",
+            "recipient_name": "VARCHAR(256) NOT NULL DEFAULT ''",
+            "notification_status": "VARCHAR(16) NOT NULL DEFAULT 'not_sent'",
+            "notification_uuid": "VARCHAR(36) NULL",
+            "notification_app_id": "VARCHAR(128) NOT NULL DEFAULT ''",
+            "notification_payload": json_type,
+            "feishu_message_id": "VARCHAR(128) NOT NULL DEFAULT ''",
+            "notification_error": "TEXT NOT NULL DEFAULT ''",
+            "notification_started_at": "TIMESTAMP NULL",
+            "notified_at": "TIMESTAMP NULL",
+        }
+        for name, definition in additions.items():
+            if name not in columns:
+                connection.execute(text(f"ALTER TABLE shooting_tasks ADD COLUMN {name} {definition}"))
+        connection.execute(text("CREATE UNIQUE INDEX IF NOT EXISTS uq_shooting_notification_uuid ON shooting_tasks (tenant_id, notification_uuid)"))
+        connection.execute(text("CREATE UNIQUE INDEX IF NOT EXISTS uq_shooting_active_recipient ON shooting_tasks (tenant_id, project_id, recipient_type, recipient_id) WHERE recipient_id <> '' AND status IN ('pending', 'in_progress')"))
+
+
 def _table_columns(connection, table_name: str) -> set[str]:
     inspector = inspect(connection)
     try:
@@ -153,3 +180,4 @@ def init_db() -> None:
                     SELECT 1 FROM video_edit_project_assets link
                     WHERE link.project_id = video_assets.project_id AND link.asset_id = video_assets.id)"""))
     migrate_legacy_schema(engine)
+    migrate_feishu_notifications(engine)

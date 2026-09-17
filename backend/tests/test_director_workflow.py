@@ -351,63 +351,11 @@ class DirectorCaptureApiTests(unittest.TestCase):
             db.query(DirectorProject).delete()
             db.commit()
 
-    def test_script_can_be_assigned_to_simulated_feishu_member_and_deleted(self):
-        with self.session_factory() as db:
-            project = DirectorProject(
-                tenant_id="test-tenant",
-                name="测试拍摄脚本",
-                mode="original",
-                source_kind="prompt",
-                status="ready",
-            )
-            db.add(project)
-            db.flush()
-            db.add(
-                DirectorSection(
-                    tenant_id="test-tenant",
-                    project_id=project.id,
-                    sort_order=0,
-                    title="开场",
-                    script_lines=[{"id": "line-1", "text": "测试台词"}],
-                )
-            )
-            db.commit()
-            project_id = project.id
-
-        directory_response = self.client.get("/api/director-projects/shooting-directory")
-        self.assertEqual(directory_response.status_code, 200)
-        self.assertEqual(directory_response.json()[0]["departments"][0]["members"][0]["name"], "张三")
-
-        create_response = self.client.post(
-            f"/api/director-projects/{project_id}/shooting-tasks",
-            json={
-                "channel_id": "feishu",
-                "department_id": "shooting-department-1",
-                "assignee_id": "zhang-san",
-                "note": "按脚本完成拍摄",
-            },
-        )
-        self.assertEqual(create_response.status_code, 200)
-        created = create_response.json()
-        self.assertEqual(created["project_name"], "测试拍摄脚本")
-        self.assertEqual(created["channel_name"], "飞书")
-        self.assertEqual(created["department_name"], "拍摄部1")
-        self.assertEqual(created["assignee_name"], "张三")
-        self.assertEqual(self.client.get("/api/director-projects/shooting-tasks").json()[0]["id"], created["id"])
-
-        duplicate_response = self.client.post(
-            f"/api/director-projects/{project_id}/shooting-tasks",
-            json={
-                "channel_id": "feishu",
-                "department_id": "shooting-department-1",
-                "assignee_id": "zhang-san",
-            },
-        )
-        self.assertEqual(duplicate_response.status_code, 409)
-
-        delete_response = self.client.delete(f"/api/director-projects/{project_id}")
-        self.assertEqual(delete_response.status_code, 200)
-        self.assertEqual(self.client.get("/api/director-projects/shooting-tasks").json(), [])
+    def test_unconfigured_feishu_directory_does_not_return_simulated_people(self):
+        with patch("app.services.feishu.get_settings", return_value=SimpleNamespace(feishu_enabled=False)):
+            response = self.client.get("/api/director-projects/shooting-directory")
+        self.assertEqual(response.status_code, 503)
+        self.assertNotIn("张三", response.text)
 
     def test_capture_session_uploads_once_and_queues_existing_workflow(self):
         create_response = self.client.post(

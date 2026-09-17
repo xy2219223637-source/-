@@ -1,4 +1,5 @@
 import axios from 'axios';
+import { loginUrl } from '../lib/loginReturn';
 import type {
   DashboardStats,
   DesignSkill,
@@ -38,7 +39,7 @@ api.interceptors.request.use((config) => {
 api.interceptors.response.use(undefined, (error) => {
   if (error.response?.status === 401 && !window.location.pathname.startsWith('/login')) {
     localStorage.removeItem('access_token');
-    window.location.href = '/login';
+    window.location.href = loginUrl();
   }
   return Promise.reject(error);
 });
@@ -211,9 +212,10 @@ export const directorApi = {
   list: () => api.get<unknown>('/director-projects').then((r) => directorProjectRows(r.data)),
   get: (id: number) => api.get<DirectorProject>(`/director-projects/${id}`).then((r) => r.data),
   remove: (id: number) => api.delete<{ ok: boolean }>(`/director-projects/${id}`).then((r) => r.data),
-  shootingDirectory: () => api.get<ShootingDirectory[]>('/director-projects/shooting-directory').then((r) => r.data),
-  shootingTasks: () => api.get<ShootingTask[]>('/director-projects/shooting-tasks').then((r) => r.data),
-  createShootingTask: (id: number, data: { channel_id: string; department_id: string; assignee_id: string; note: string }) =>
+  shootingDirectory: (type: 'user' | 'chat', refresh = false) => api.get<ShootingDirectory>('/director-projects/shooting-directory', { params: { type, refresh } }).then((r) => r.data),
+  shootingTasks: (projectId?: number) => api.get<ShootingTask[]>('/director-projects/shooting-tasks', { params: { project_id: projectId } }).then((r) => r.data),
+  retryNotification: (taskId: number) => api.post<ShootingTask>(`/director-projects/shooting-tasks/${taskId}/retry-notification`).then((r) => r.data),
+  createShootingTask: (id: number, data: { recipient_type: 'user' | 'chat'; recipient_id: string; request_id: string; note: string }) =>
     api.post<ShootingTask>(`/director-projects/${id}/shooting-tasks`, data).then((r) => r.data),
   upload: async (file: File, name = '') => {
     const form = new FormData();
