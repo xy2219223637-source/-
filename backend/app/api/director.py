@@ -407,7 +407,7 @@ def shooting_directory(type: Literal["user", "chat"] = "user", refresh: bool = F
 
 
 @router.get("/shooting-tasks")
-def list_shooting_tasks(project_id: int | None = None, db: Session = Depends(get_db), auth: AuthContext = Depends(current_auth)):
+def list_shooting_tasks(project_id: Optional[int] = None, db: Session = Depends(get_db), auth: AuthContext = Depends(current_auth)):
     query = (
         db.query(ShootingTask)
         .filter_by(tenant_id=auth.tenant_id)

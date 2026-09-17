@@ -23,6 +23,8 @@ import {
   Menu,
   X,
   Tags,
+  Building2,
+  UsersRound,
 } from 'lucide-react';
 import IcpFiling from './IcpFiling';
 import dirovoLogo from '../assets/dirovo-logo.svg';
@@ -127,10 +129,11 @@ export default function Layout() {
   const [plannedOpen, setPlannedOpen] = useState(false);
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const [role, setRole] = useState('');
+  const [isPlatformAdmin, setIsPlatformAdmin] = useState(false);
   const isDirectorWorkspace = /^\/director-inspiration\/\d+\/workspace/.test(location.pathname);
 
   useEffect(() => {
-    authApi.me().then((result) => setRole(result.role)).catch(() => setRole(''));
+    authApi.me().then((result) => { setRole(result.role); setIsPlatformAdmin(result.is_platform_admin); }).catch(() => setRole(''));
   }, []);
 
   if (!localStorage.getItem('access_token')) {
@@ -196,6 +199,13 @@ export default function Layout() {
               </div>
             </div>
           ))}
+          {(role === 'owner' || role === 'admin' || isPlatformAdmin) && <div className="pt-3">
+            <div className="px-3 pb-1.5 text-[10px] font-medium tracking-[0.12em] text-[var(--muted)] opacity-70">系统管理</div>
+            <div className="space-y-1">
+              {(role === 'owner' || role === 'admin') && <NavLink to="/tenant-admin" onClick={closeMobileNav} className={navClassName}><UsersRound size={18}/>企业管理后台</NavLink>}
+              {isPlatformAdmin && <NavLink to="/platform-admin" onClick={closeMobileNav} className={navClassName}><Building2 size={18}/>平台管理后台</NavLink>}
+            </div>
+          </div>}
           <div className="pt-4 mt-4 border-t border-[var(--border)]">
             <button
               type="button"

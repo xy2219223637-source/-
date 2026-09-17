@@ -45,10 +45,35 @@ api.interceptors.response.use(undefined, (error) => {
 });
 
 export const authApi = {
-  login: (email: string, password: string) => api.post('/auth/login', { email, password }).then((r) => r.data),
+  login: (phone: string, password: string) => api.post('/auth/login', { phone, password }).then((r) => r.data),
   register: (payload: { tenant_name: string; tenant_code: string; name: string; email: string; password: string }) =>
     api.post('/auth/register', payload).then((r) => r.data),
-  me: () => api.get<{user_id:string;email:string;role:string;tenant_id:string;tenant_name:string}>('/auth/me').then((r) => r.data),
+  me: () => api.get<{user_id:string;phone:string;role:string;tenant_id:string;tenant_name:string;is_platform_admin:boolean}>('/auth/me').then((r) => r.data),
+  changePassword: (current_password: string, new_password: string) => api.post('/auth/change-password', { current_password, new_password }).then((r) => r.data),
+};
+
+export const platformAdminApi = {
+  listTenants: () => api.get('/platform-admin/tenants').then((r) => r.data),
+  createTenant: (data: any) => api.post('/platform-admin/tenants', data).then((r) => r.data),
+  updateTenant: (id: string, data: any) => api.patch(`/platform-admin/tenants/${id}`, data).then((r) => r.data),
+  updateUser: (id: string, data: any) => api.patch(`/platform-admin/users/${id}`, data).then((r) => r.data),
+  resetPassword: (userId: string, new_password: string) => api.post(`/platform-admin/users/${userId}/reset-password`, { new_password }).then((r) => r.data),
+};
+
+export const tenantAdminApi = {
+  listTeams: () => api.get('/tenant-admin/teams').then((r) => r.data),
+  createTeam: (name: string) => api.post('/tenant-admin/teams', { name }).then((r) => r.data),
+  renameTeam: (id: number, name: string) => api.patch(`/tenant-admin/teams/${id}`, { name }).then((r) => r.data),
+  deleteTeam: (id: number) => api.delete(`/tenant-admin/teams/${id}`).then((r) => r.data),
+  listGroups: (teamId?: number) => api.get('/tenant-admin/groups', { params: teamId ? { team_id: teamId } : {} }).then((r) => r.data),
+  createGroup: (team_id: number, name: string) => api.post('/tenant-admin/groups', { team_id, name }).then((r) => r.data),
+  renameGroup: (id: number, name: string) => api.patch(`/tenant-admin/groups/${id}`, { name }).then((r) => r.data),
+  deleteGroup: (id: number) => api.delete(`/tenant-admin/groups/${id}`).then((r) => r.data),
+  listMembers: (params: any) => api.get('/tenant-admin/members', { params }).then((r) => r.data),
+  createMember: (data: any) => api.post('/tenant-admin/members', data).then((r) => r.data),
+  updateMember: (id: number, data: any) => api.patch(`/tenant-admin/members/${id}`, data).then((r) => r.data),
+  resetPassword: (id: number, new_password: string) => api.post(`/tenant-admin/members/${id}/reset-password`, { new_password }).then((r) => r.data),
+  deleteMember: (id: number) => api.delete(`/tenant-admin/members/${id}`).then((r) => r.data),
 };
 
 export function mediaUrl(path: string): string {

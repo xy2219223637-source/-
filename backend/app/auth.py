@@ -48,6 +48,8 @@ class AuthContext:
     role: str
     email: str
     tenant_name: str
+    phone: str = ""
+    is_platform_admin: bool = False
 
 
 def current_auth(credentials: Optional[HTTPAuthorizationCredentials] = Depends(bearer), db: Session = Depends(get_db)) -> AuthContext:
@@ -65,4 +67,4 @@ def current_auth(credentials: Optional[HTTPAuthorizationCredentials] = Depends(b
     user = db.query(User).filter_by(id=payload["sub"], status="active").first()
     tenant = db.query(Tenant).filter_by(id=payload["tenant_id"], status="active").first()
     if not member or not user or not tenant: raise HTTPException(status_code=401, detail="无权访问企业")
-    return AuthContext(user.id, tenant.id, member.role, user.email, tenant.name)
+    return AuthContext(user.id, tenant.id, member.role, user.email, tenant.name, user.phone or "", user.is_platform_admin)

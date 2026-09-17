@@ -398,8 +398,13 @@ class RegisterRequest(BaseModel):
 
 
 class LoginRequest(BaseModel):
-    email: str
+    phone: str = Field(..., pattern=r"^1\d{10}$")
     password: str
+
+
+class ChangePasswordRequest(BaseModel):
+    current_password: str
+    new_password: str = Field(..., min_length=8, max_length=128)
 
 
 class AuthOut(BaseModel):

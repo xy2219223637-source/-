@@ -1033,8 +1033,13 @@ class User(Base):
     __tablename__ = "users"
     id: Mapped[str] = mapped_column(String(64), primary_key=True)
     email: Mapped[str] = mapped_column(String(320), nullable=False, unique=True, index=True)
+    phone: Mapped[Optional[str]] = mapped_column(String(20), nullable=True, unique=True, index=True)
     name: Mapped[str] = mapped_column(String(200), nullable=False)
     password_hash: Mapped[str] = mapped_column(String(512), nullable=False)
+    is_platform_admin: Mapped[bool] = mapped_column(nullable=False, default=False)
+    must_change_password: Mapped[bool] = mapped_column(nullable=False, default=False)
+    job_title: Mapped[str] = mapped_column(String(120), nullable=False, default="")
+    employee_no: Mapped[str] = mapped_column(String(100), nullable=False, default="")
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="active")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
@@ -1047,3 +1052,26 @@ class TenantMember(Base):
     user_id: Mapped[str] = mapped_column(ForeignKey("users.id"), nullable=False, index=True)
     role: Mapped[str] = mapped_column(String(32), nullable=False, default="member")
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="active")
+    team_id: Mapped[Optional[int]] = mapped_column(ForeignKey("teams.id"), nullable=True, index=True)
+    group_id: Mapped[Optional[int]] = mapped_column(ForeignKey("member_groups.id"), nullable=True, index=True)
+
+
+class Team(Base):
+    __tablename__ = "teams"
+    __table_args__ = (UniqueConstraint("tenant_id", "name", name="uq_tenant_team_name"),)
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    tenant_id: Mapped[str] = mapped_column(ForeignKey("tenants.id"), nullable=False, index=True)
+    name: Mapped[str] = mapped_column(String(120), nullable=False)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="active")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
+class MemberGroup(Base):
+    __tablename__ = "member_groups"
+    __table_args__ = (UniqueConstraint("team_id", "name", name="uq_team_group_name"),)
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    tenant_id: Mapped[str] = mapped_column(ForeignKey("tenants.id"), nullable=False, index=True)
+    team_id: Mapped[int] = mapped_column(ForeignKey("teams.id"), nullable=False, index=True)
+    name: Mapped[str] = mapped_column(String(120), nullable=False)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="active")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)

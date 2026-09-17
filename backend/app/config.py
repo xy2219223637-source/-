@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from functools import lru_cache
 from pathlib import Path
+from typing import Optional
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -87,7 +88,7 @@ class Settings(BaseSettings):
     access_token_hours: int = 24
 
     # Unset means enabled when credentials are present; False is an explicit off switch.
-    feishu_enabled: bool | None = None
+    feishu_enabled: Optional[bool] = None
     feishu_app_id: str = ""
     feishu_app_secret: str = ""
     feishu_system_tenant_id: str = ""

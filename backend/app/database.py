@@ -108,6 +108,32 @@ def init_db() -> None:
     # the old project_id constraint or add the new bookkeeping columns.
     # inspect must run after create_all, and must tolerate missing legacy tables.
     with engine.begin() as connection:
+        user_columns = _table_columns(connection, "users")
+        user_additions = {
+            "phone": "VARCHAR(20) NULL",
+            "is_platform_admin": "BOOLEAN NOT NULL DEFAULT FALSE",
+            "must_change_password": "BOOLEAN NOT NULL DEFAULT FALSE",
+            "job_title": "VARCHAR(120) NOT NULL DEFAULT ''",
+            "employee_no": "VARCHAR(100) NOT NULL DEFAULT ''",
+        }
+        for name, definition in user_additions.items():
+            if name not in user_columns:
+                connection.execute(text(f"ALTER TABLE users ADD COLUMN {name} {definition}"))
+        if user_columns:
+            connection.execute(text("CREATE UNIQUE INDEX IF NOT EXISTS uq_users_phone ON users (phone) WHERE phone IS NOT NULL"))
+        member_columns = _table_columns(connection, "tenant_members")
+        for name in ("team_id", "group_id"):
+            if member_columns and name not in member_columns:
+                connection.execute(text(f"ALTER TABLE tenant_members ADD COLUMN {name} INTEGER NULL"))
+                connection.execute(text(f"CREATE INDEX IF NOT EXISTS ix_tenant_members_{name} ON tenant_members ({name})"))
+        # Preserve the original user's identity and tenant ownership while switching
+        # the login identifier to a phone number. This migration is idempotent.
+        if user_columns:
+            connection.execute(text("""UPDATE users SET phone = '15271933010', is_platform_admin = TRUE
+                WHERE lower(email) = '345983950@qq.com' AND (phone IS NULL OR phone = '15271933010')
+                AND NOT EXISTS (SELECT 1 FROM users other WHERE other.phone = '15271933010' AND other.id <> users.id)"""))
+            connection.execute(text("""UPDATE tenant_members SET role = 'owner', status = 'active'
+                WHERE user_id IN (SELECT id FROM users WHERE lower(email) = '345983950@qq.com')"""))
         json_default = _json_column_sql(connection)
         columns = _table_columns(connection, "video_assets")
         if columns:
