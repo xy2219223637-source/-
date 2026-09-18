@@ -282,6 +282,26 @@ class VideoAsset(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
 
+class VideoLineageSegment(Base):
+    __tablename__ = "video_lineage_segments"
+    __table_args__ = (UniqueConstraint("target_asset_id", "segment_index", name="uq_video_lineage_segment"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    tenant_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    source_asset_id: Mapped[int] = mapped_column(ForeignKey("video_assets.id"), nullable=False, index=True)
+    original_asset_id: Mapped[Optional[int]] = mapped_column(ForeignKey("video_assets.id"), nullable=True, index=True)
+    target_asset_id: Mapped[int] = mapped_column(ForeignKey("video_assets.id"), nullable=False, index=True)
+    # Snapshot identifiers intentionally do not depend on replaceable render jobs.
+    plan_version_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    variant_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    segment_index: Mapped[int] = mapped_column(Integer, nullable=False)
+    source_start: Mapped[float] = mapped_column(Float, nullable=False)
+    source_end: Mapped[float] = mapped_column(Float, nullable=False)
+    target_start: Mapped[float] = mapped_column(Float, nullable=False)
+    target_end: Mapped[float] = mapped_column(Float, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
 class VideoCategory(Base):
     __tablename__ = "video_categories"
     __table_args__ = (
