@@ -5,6 +5,10 @@ services:
       context: ./backend
     env_file:
       - ${APP_ENV_FILE:-./backend/.env}
+    environment:
+      FEISHU_LOG_DIR: /app/logs
+    volumes:
+      - feishu_logs:/app/logs
     restart: unless-stopped
     ports:
       - "${BACKEND_BIND:-127.0.0.1}:${BACKEND_PORT:-8000}:8000"
@@ -28,3 +32,6 @@ services:
     restart: unless-stopped
     ports:
       - "${FRONTEND_BIND:-127.0.0.1}:${FRONTEND_PORT:-8080}:80"
+
+volumes:
+  feishu_logs:

@@ -9,6 +9,7 @@ const ProductsPage = lazy(() => import('./pages/Products'));
 const ProductDetail = lazy(() => import('./pages/ProductDetail'));
 const KnowledgePage = lazy(() => import('./pages/Knowledge'));
 const Login = lazy(() => import('./pages/Login'));
+const ChangePassword = lazy(() => import('./pages/ChangePassword'));
 const DesignSkillsPage = lazy(() => import('./pages/DesignSkills'));
 const CreativeProjectsPage = lazy(() => import('./pages/CreativeProjects'));
 const CreativeCanvasPage = lazy(() => import('./pages/CreativeCanvas'));
@@ -33,6 +34,9 @@ const FinalVideoLibrary = lazy(() => import('./pages/FinalVideoLibrary'));
 const FinalVideoDetail = lazy(() => import('./pages/FinalVideoDetail'));
 const ManualComposeProjects = lazy(() => import('./pages/ManualComposeProjects'));
 const ManualComposeWorkspace = lazy(() => import('./pages/ManualComposeWorkspace'));
+const PlatformAdmin = lazy(() => import('./pages/PlatformAdmin'));
+const TenantAdmin = lazy(() => import('./pages/TenantAdmin'));
+const TenantRoles = lazy(() => import('./pages/TenantRoles'));
 
 function PageLoading() {
   return <div className="min-h-screen grid place-items-center bg-[var(--bg)] text-[var(--muted)]"><div className="flex items-center gap-2 text-sm"><Loader2 size={18} className="animate-spin text-[var(--accent)]" />页面加载中…</div></div>;
@@ -44,6 +48,7 @@ export default function App() {
       <Suspense fallback={<PageLoading />}>
         <Routes>
           <Route path="login" element={<Login />} />
+          <Route path="change-password" element={<ChangePassword />} />
           <Route element={<Layout />}>
             <Route index element={<Dashboard />} />
             <Route path="products/new" element={<ProductCreate />} />
@@ -74,6 +79,9 @@ export default function App() {
             <Route path="final-videos/:id" element={<FinalVideoDetail />} />
             <Route path="manual-video-compose" element={<ManualComposeProjects />} />
             <Route path="manual-video-compose/:id" element={<ManualComposeWorkspace />} />
+            <Route path="platform-admin" element={<PlatformAdmin />} />
+            <Route path="tenant-admin" element={<TenantAdmin />} />
+            <Route path="tenant-admin/roles" element={<TenantRoles />} />
             <Route path="smart-video-compose" element={<PerformanceVideoProjectsPage editMode="smart_compose" title="智能成片" description="只用半成品素材，按 Hook→卖点→品牌信任→痛点→展示→使用→效果→直播间 CTA 生成成片，并自动进入成片库。" />} />
             <Route path="smart-video-compose/:id" element={<AutoEditWorkspace />} />
             <Route path="finished-video-remix" element={<PerformanceVideoProjectsPage editMode="finished_remix" title="成品混剪" description="只用已审核可复用的成品素材，保留原声、原画面和原字幕，按相邻语义衔接生成多个去重版本。" />} />

@@ -30,6 +30,8 @@ from app.services.director_workflow import (
     render_ai_material_video,
 )
 from app.services.image_generation import get_image_provider
+from app.services.feishu import FeishuError, get_feishu_client, public_script_url
+from app.services.director_notifications import create_notification, retry_notification, notification_state, locked_project
 from app.services.llm import LLMClient
 from app.services.storage import get_storage
 from app.services.video_capture import (
@@ -143,25 +145,10 @@ class DirectorShotUpdate(BaseModel):
 
 
 class ShootingTaskCreate(BaseModel):
-    channel_id: Literal["feishu"] = "feishu"
-    department_id: Literal["shooting-department-1"] = "shooting-department-1"
-    assignee_id: Literal["zhang-san"] = "zhang-san"
+    recipient_type: Literal["user", "chat"]
+    recipient_id: str = Field(min_length=4, max_length=128, pattern=r"^(ou_|oc_)[a-zA-Z0-9_-]+$")
+    request_id: uuid.UUID
     note: str = Field(default="", max_length=2000)
-
-
-SIMULATED_SHOOTING_DIRECTORY = [
-    {
-        "id": "feishu",
-        "name": "飞书",
-        "departments": [
-            {
-                "id": "shooting-department-1",
-                "name": "拍摄部1",
-                "members": [{"id": "zhang-san", "name": "张三"}],
-            }
-        ],
-    }
-]
 
 
 def _project(db: Session, tenant_id: str, project_id: int) -> DirectorProject:
@@ -341,6 +328,15 @@ def _shooting_task_out(db: Session, row: ShootingTask) -> dict[str, Any]:
         "assignee_name": row.assignee_name,
         "note": row.note,
         "status": row.status,
+        "recipient_type": row.recipient_type,
+        "recipient_id": row.recipient_id,
+        "recipient_name": row.recipient_name,
+        "notification_status": notification_state(row),
+        "notification_uuid": row.notification_uuid,
+        "feishu_message_id": row.feishu_message_id,
+        "notification_error": row.notification_error or ("发送结果待确认，请核对飞书消息" if notification_state(row) == "unknown" else ""),
+        "notified_at": row.notified_at,
+        "can_retry_notification": row.notification_status == "failed" and row.status != "completed" and bool(row.notification_uuid),
         "created_at": row.created_at,
         "updated_at": row.updated_at,
     }
@@ -396,18 +392,29 @@ def list_projects(db: Session = Depends(get_db), auth: AuthContext = Depends(cur
 
 
 @router.get("/shooting-directory")
-def shooting_directory(auth: AuthContext = Depends(current_auth)):
-    return SIMULATED_SHOOTING_DIRECTORY
+def shooting_directory(type: Literal["user", "chat"] = "user", refresh: bool = False, db: Session = Depends(get_db), auth: AuthContext = Depends(current_auth)):
+    try:
+        client = get_feishu_client(auth.tenant_id, db=db)
+        result = dict(client.directory(type, refresh=refresh))
+        try:
+            public_script_url(client.settings, 0)
+            result.update(can_send=True, send_blocked_reason="")
+        except FeishuError:
+            result.update(can_send=False, send_blocked_reason="系统脚本地址尚未配置为可访问的 HTTPS 地址，请管理员配置后再推送")
+        return result
+    except FeishuError as exc:
+        raise HTTPException(exc.status, str(exc)) from exc
 
 
 @router.get("/shooting-tasks")
-def list_shooting_tasks(db: Session = Depends(get_db), auth: AuthContext = Depends(current_auth)):
-    rows = (
+def list_shooting_tasks(project_id: Optional[int] = None, db: Session = Depends(get_db), auth: AuthContext = Depends(current_auth)):
+    query = (
         db.query(ShootingTask)
         .filter_by(tenant_id=auth.tenant_id)
-        .order_by(ShootingTask.created_at.desc())
-        .all()
     )
+    if project_id is not None:
+        query = query.filter_by(project_id=project_id)
+    rows = query.order_by(ShootingTask.created_at.desc()).all()
     return [_shooting_task_out(db, row) for row in rows]
 
 
@@ -418,38 +425,20 @@ def create_shooting_task(
     db: Session = Depends(get_db),
     auth: AuthContext = Depends(current_auth),
 ):
-    project = _project(db, auth.tenant_id, project_id)
-    if not db.query(DirectorSection).filter_by(project_id=project.id).first():
-        raise HTTPException(status_code=409, detail="脚本暂无可推送的内容")
-    existing = (
-        db.query(ShootingTask)
-        .filter_by(
-            tenant_id=auth.tenant_id,
-            project_id=project.id,
-            assignee_id=payload.assignee_id,
-            status="pending",
-        )
-        .first()
-    )
-    if existing:
-        raise HTTPException(status_code=409, detail="该脚本已推送给张三, 请勿重复推送")
-    row = ShootingTask(
-        tenant_id=auth.tenant_id,
-        project_id=project.id,
-        channel_id="feishu",
-        channel_name="飞书",
-        department_id="shooting-department-1",
-        department_name="拍摄部1",
-        assignee_id="zhang-san",
-        assignee_name="张三",
-        note=payload.note.strip(),
-        status="pending",
-        created_by=auth.user_id,
-    )
-    db.add(row)
-    db.commit()
-    db.refresh(row)
-    return _shooting_task_out(db, row)
+    try:
+        row = create_notification(db, auth, project_id, payload)
+        return _shooting_task_out(db, row)
+    except FeishuError as exc:
+        # Delivery errors are persisted by create_notification; these errors precede task creation.
+        raise HTTPException(exc.status, str(exc), headers={"X-Notification-Outcome": "not_started"}) from exc
+
+
+@router.post("/shooting-tasks/{task_id}/retry-notification")
+def retry_shooting_notification(task_id: int, db: Session = Depends(get_db), auth: AuthContext = Depends(current_auth)):
+    try:
+        return _shooting_task_out(db, retry_notification(db, auth, task_id))
+    except FeishuError as exc:
+        raise HTTPException(exc.status, str(exc)) from exc
 
 
 @router.post("/upload")
@@ -781,7 +770,10 @@ def get_project(project_id: int, db: Session = Depends(get_db), auth: AuthContex
 
 @router.delete("/{project_id}")
 def delete_project(project_id: int, db: Session = Depends(get_db), auth: AuthContext = Depends(current_auth)):
-    project = _project(db, auth.tenant_id, project_id)
+    project = locked_project(db, auth.tenant_id, project_id)
+    tasks = db.query(ShootingTask).filter_by(project_id=project.id, tenant_id=auth.tenant_id).all()
+    if any(notification_state(task) == "sending" for task in tasks):
+        raise HTTPException(409, "飞书通知正在发送，请等待发送完成后删除")
     db.query(DirectorCaptureSession).filter_by(project_id=project.id).delete(synchronize_session=False)
     db.query(ShootingTask).filter_by(project_id=project.id).delete(synchronize_session=False)
     db.delete(project)

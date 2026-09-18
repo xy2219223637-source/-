@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from functools import lru_cache
 from pathlib import Path
+from typing import Optional
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -85,6 +86,15 @@ class Settings(BaseSettings):
     whisper_compute_type: str = "int8"
     auth_secret: str = "change-this-secret-in-production"
     access_token_hours: int = 24
+
+    # Unset means enabled when credentials are present; False is an explicit off switch.
+    feishu_enabled: Optional[bool] = None
+    feishu_app_id: str = ""
+    feishu_app_secret: str = ""
+    feishu_system_tenant_id: str = ""
+    app_public_base_url: str = ""
+    feishu_log_dir: str = ""
+    feishu_log_raw: bool = True
 
     host: str = "0.0.0.0"
     port: int = 8000
