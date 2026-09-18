@@ -19,9 +19,9 @@ from app.api.auto_edit import _probe
 from app.auth import AuthContext, current_auth
 from app.config import get_settings
 from app.database import SessionLocal, get_db
-from app.models import Product, VideoAsset, VideoAssetAnalysis, VideoEditProject, VideoEditProjectAsset, VideoHighlight, VideoUploadSession
+from app.models import Product, Tenant, VideoAsset, VideoAssetAnalysis, VideoEditProject, VideoEditProjectAsset, VideoHighlight, VideoUploadSession
 from app.services.llm import LLMClient
-from app.services.storage import get_storage
+from app.services.storage import get_storage_by_name, get_storage_for_url, get_video_storage
 from app.services.transcription import transcribe_media
 from app.services.video_analysis_queue import enqueue_video_analysis
 from app.services.video_taxonomy import load_asset_taxonomy
@@ -61,6 +61,16 @@ class MultipartComplete(BaseModel):
 _NOT_LOADED = object()
 
 
+def _tenant_video_storage(db: Session, tenant_id: str):
+    tenant = db.query(Tenant).filter(Tenant.id == tenant_id).first()
+    return get_video_storage(tenant_id, tenant.code if tenant else "")
+
+
+def _asset_storage(asset: VideoAsset):
+    provider = getattr(asset, "storage_provider", "")
+    return get_storage_by_name(provider) if provider else get_storage_for_url(asset.object_url)
+
+
 def _serialize(db: Session, asset: VideoAsset, analysis: Any = _NOT_LOADED,
                highlights: Any = _NOT_LOADED, taxonomy_category: Any = _NOT_LOADED,
                taxonomy_tags: Any = _NOT_LOADED, user_id: str = "",
@@ -83,7 +93,8 @@ def _serialize(db: Session, asset: VideoAsset, analysis: Any = _NOT_LOADED,
             "generation_depth": asset.generation_depth,
             "origin_asset_ids": asset.origin_asset_ids or [], "reusable_status": asset.reusable_status,
             "burned_subtitles": asset.burned_subtitles, "has_background_music": bool(asset.has_background_music),
-            "object_url": asset.object_url, "duration_seconds": asset.duration_seconds,
+            "object_url": asset.object_url, "storage_provider": asset.storage_provider,
+            "duration_seconds": asset.duration_seconds,
             "width": asset.width, "height": asset.height, "fps": asset.fps, "has_audio": asset.has_audio,
             "status": asset.status, "excluded": asset.excluded,
             "created_at": asset.created_at.replace(tzinfo=timezone.utc).isoformat(),
@@ -247,7 +258,7 @@ async def analyze_video_asset(asset_db_id: int, force: bool = False) -> None:
         transcript_error = ""
         if asset.has_audio and get_settings().whisper_enabled:
             try:
-                source = get_storage().local_path(asset.object_url)
+                source = _asset_storage(asset).local_path(asset.object_url)
                 if not source: raise RuntimeError("无法从 OSS 获取音频转写源文件")
                 product = db.query(Product).filter(Product.id == asset.product_id).first()
                 vocabulary = f"品牌和商品专有词：{product.name if product else ''}。美妆、素颜霜、精华霜、遮瑕、妆效、持妆、促销、直播间。"
@@ -273,13 +284,13 @@ content_role 使用 hook、pain_point、selling_point、brand_trust、usage、pr
 有口型但声音不匹配、句子残缺的片段标记 reject。a_roll 必须保留完整 speech_text 和稳定 speaker_id。不要虚构看不清或听不清的信息。"""
                 if attempt == 0:
                     # Prefer the complete video so motion and speech can be understood.
-                    signed = get_storage().signed_url(asset.object_url)
+                    signed = _asset_storage(asset).signed_url(asset.object_url)
                     result = await LLMClient().chat_json([{"role": "user", "content": [
                         {"type": "text", "text": prompt}, {"type": "video_url", "video_url": {"url": signed}}
                     ]}], temperature=.2, max_tokens=4096)
                 else:
                     # Compatibility fallback for endpoints without video_url support.
-                    source = get_storage().local_path(asset.object_url)
+                    source = _asset_storage(asset).local_path(asset.object_url)
                     if not source: raise RuntimeError("无法从 OSS 获取视频")
                     with tempfile.TemporaryDirectory(prefix=f"analyze-{asset.id}-") as directory:
                         frames = _extract_frames(source, asset.duration_seconds, Path(directory))
@@ -316,7 +327,7 @@ def validate_video_asset(asset_db_id: int) -> None:
         if not asset:
             return
         try:
-            media = _probe(get_storage().signed_url(asset.object_url))
+            media = _probe(_asset_storage(asset).signed_url(asset.object_url))
             max_duration = get_settings().video_library_max_duration_seconds
             if media["duration"] > max_duration + .05:
                 raise ValueError(f"视频超过 {max_duration / 60:g} 分钟限制")
@@ -356,12 +367,14 @@ async def start_multipart(payload: MultipartStart, db: Session = Depends(get_db)
     part_size = 16 * 1024 * 1024
     part_count = (payload.size_bytes + part_size - 1) // part_size
     if part_count > 10000: raise HTTPException(413, "文件过大")
-    key, upload_id = await get_storage().begin_multipart(payload.filename, f"video-library/{product.id}/source", payload.content_type)
+    storage = _tenant_video_storage(db, auth.tenant_id)
+    key, upload_id = await storage.begin_multipart(payload.filename, f"video-library/{product.id}/source", payload.content_type)
     session = VideoUploadSession(id=uuid.uuid4().hex, tenant_id=auth.tenant_id, product_id=product.id, library_type=payload.library_type,
         filename=payload.filename, content_type=payload.content_type, size_bytes=payload.size_bytes, object_key=key,
-        multipart_upload_id=upload_id, part_size=part_size, part_count=part_count, status="uploading")
+        multipart_upload_id=upload_id, storage_provider=storage.name,
+        part_size=part_size, part_count=part_count, status="uploading")
     db.add(session); db.commit()
-    urls = [get_storage().signed_part_url(key, upload_id, number) for number in range(1, part_count + 1)]
+    urls = [storage.signed_part_url(key, upload_id, number) for number in range(1, part_count + 1)]
     return {"session_id": session.id, "part_size": part_size, "part_count": part_count, "part_urls": urls}
 
 
@@ -378,12 +391,14 @@ async def complete_multipart(payload: MultipartComplete, db: Session = Depends(g
         if not asset:
             raise HTTPException(409, "上传已完成，但关联素材记录不存在")
         return _serialize(db, asset, user_id=auth.user_id)
-    url, size, etag = await get_storage().complete_multipart(session.object_key, session.multipart_upload_id)
+    storage = get_storage_by_name(session.storage_provider)
+    url, size, etag = await storage.complete_multipart(session.object_key, session.multipart_upload_id)
     if size != session.size_bytes: raise HTTPException(422, "OSS 文件大小与上传文件不一致")
     asset = VideoAsset(tenant_id=auth.tenant_id, project_id=None, product_id=session.product_id,
         asset_id=f"asset-{uuid.uuid4().hex[:12]}", filename=session.filename, source="manual_upload",
         library_type=session.library_type, reusable_status="review_required", object_url=url,
-        content_hash=f"oss:{etag}", duration_seconds=0, width=0, height=0, fps=0, has_audio=False,
+        storage_provider=storage.name, content_hash=f"{storage.name}:{etag}",
+        duration_seconds=0, width=0, height=0, fps=0, has_audio=False,
         status="validating", excluded=False)
     db.add(asset); db.flush()
     session.video_asset_id = asset.id
@@ -452,11 +467,13 @@ async def upload_assets(product_id: int = Form(...), source: str = Form("manual_
             temp.write(raw); temp.flush(); media = _probe(Path(temp.name))
         max_duration = get_settings().video_library_max_duration_seconds
         if media["duration"] > max_duration + .05: raise HTTPException(422, f"{file.filename} 超过 {max_duration / 60:g} 分钟限制")
-        url = await get_storage().upload(raw, file.filename or "video.mp4", f"video-library/{product.id}/source")
+        storage = _tenant_video_storage(db, auth.tenant_id)
+        url = await storage.upload(raw, file.filename or "video.mp4", f"video-library/{product.id}/source")
         asset = VideoAsset(tenant_id=auth.tenant_id, project_id=None, product_id=product.id,
             asset_id=f"asset-{uuid.uuid4().hex[:12]}", filename=file.filename or "video.mp4", source=source,
             library_type=library_type, asset_kind="material", reusable_status="review_required",
-            object_url=url, content_hash=digest, duration_seconds=media["duration"], width=media["width"], height=media["height"],
+            object_url=url, storage_provider=storage.name, content_hash=digest,
+            duration_seconds=media["duration"], width=media["width"], height=media["height"],
             fps=media["fps"], has_audio=media["has_audio"], status="queued_for_analysis", excluded=False)
         db.add(asset); db.commit(); db.refresh(asset); enqueue_video_analysis()
         _link_asset_to_matching_projects(db, asset)

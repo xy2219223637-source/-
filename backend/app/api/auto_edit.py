@@ -24,7 +24,7 @@ from app.database import get_db
 from app.models import (EditingPlanVersion, Product, VideoAsset,
                         VideoAssetAnalysis, VideoEditProject, VideoEditProjectAsset, VideoHighlight,
                         VideoRenderJob)
-from app.services.storage import get_storage
+from app.services.storage import get_storage, get_storage_for_url
 from app.services.tts import synthesize_speech
 from app.services.llm import LLMClient
 from app.services.video_analysis_queue import enqueue_video_analysis
@@ -1195,7 +1195,7 @@ def _render_variant(plan: dict[str, Any], assets: list[VideoAsset], output: Path
         av_segments: list[Path] = []
         for index, clip in enumerate(plan["narrative_segments"]):
             asset = asset_map[clip["asset_id"]]
-            source = storage.local_path(asset.object_url)
+            source = get_storage_for_url(asset.object_url).local_path(asset.object_url)
             if not source:
                 raise RuntimeError(f"无法下载素材 {asset.filename}")
             if edit_mode == "finished_remix" and not asset.has_audio:
@@ -1221,7 +1221,7 @@ def _render_variant(plan: dict[str, Any], assets: list[VideoAsset], output: Path
     video_segments: list[Path] = []; audio_segments: list[Path] = []
     for index, clip in enumerate(plan["video_track"]):
         asset = asset_map[clip["asset_id"]]
-        source = storage.local_path(asset.object_url)
+        source = get_storage_for_url(asset.object_url).local_path(asset.object_url)
         if not source: raise RuntimeError(f"无法下载素材 {asset.filename}")
         start, end = clip["source_range"]["start"], clip["source_range"]["end"]
         duration = end - start
@@ -1238,7 +1238,7 @@ def _render_variant(plan: dict[str, Any], assets: list[VideoAsset], output: Path
         else:
             asset = asset_map[clip["asset_id"]]
             if not asset.has_audio: raise RuntimeError(f"原声片段缺少音轨：{asset.filename}")
-            source = storage.local_path(asset.object_url)
+            source = get_storage_for_url(asset.object_url).local_path(asset.object_url)
             start, end = clip["source_range"]["start"], clip["source_range"]["end"]
         segment = output.parent / f"audio-{index:03d}.wav"; audio_segments.append(segment)
         subprocess.run(["ffmpeg", "-y", "-ss", str(start), "-t", str(end-start), "-i", str(source), "-vn",

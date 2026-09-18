@@ -107,6 +107,15 @@ fi
 
 cd "$REPO_DIR"
 export APP_ENV_FILE="$ENV_FILE"
+PRIVATE_VIDEO_S3_HOST_FILE="$SHARED_DIR/hz.env"
+if grep -Eq '^PRIVATE_VIDEO_S3_ENV_FILE=/run/secrets/dlr-hz\.env[[:space:]]*$' "$ENV_FILE" \
+  && [[ ! -f "$PRIVATE_VIDEO_S3_HOST_FILE" ]]; then
+  fail "缺少 DLR 私有存储配置文件：$PRIVATE_VIDEO_S3_HOST_FILE"
+fi
+if [[ -f "$PRIVATE_VIDEO_S3_HOST_FILE" ]]; then
+  chmod 600 "$PRIVATE_VIDEO_S3_HOST_FILE"
+  export PRIVATE_VIDEO_S3_HOST_FILE
+fi
 OLD_BACKEND="$(compose ps -q backend 2>/dev/null || true)"
 OLD_FRONTEND="$(compose ps -q frontend 2>/dev/null || true)"
 OLD_BACKEND_IMAGE=""

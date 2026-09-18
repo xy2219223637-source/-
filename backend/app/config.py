@@ -117,6 +117,15 @@ class Settings(BaseSettings):
     aliyun_oss_access_key_secret: str = ""
     aliyun_oss_bucket_name: str = ""
     aliyun_oss_prefix: str = "enrui-ai-commerce-agent/"
+    private_video_tenants: str = ""
+    private_video_s3_env_file: str = ""
+    private_video_s3_endpoint: str = ""
+    private_video_s3_public_endpoint: str = ""
+    private_video_s3_access_key_id: str = ""
+    private_video_s3_access_key_secret: str = ""
+    private_video_s3_bucket_name: str = ""
+    private_video_s3_region: str = "us-east-1"
+    private_video_s3_prefix: str = "enrui-ai-commerce-agent/"
     storage_cache_dir: str = ""
     storage_cache_max_gb: float = 20.0
     storage_cache_ttl_hours: float = 24.0
