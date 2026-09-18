@@ -72,7 +72,7 @@
 .lineage-ui .filters input,.lineage-ui .filters select{height:35px;border:1px solid var(--line);border-radius:3px;background:white;padding:0 10px;font-size:11px;min-width:0}
 .lineage-ui .filters input[type=search]{flex:1;min-width:150px}
 .lineage-ui .filters button{font-size:11px;height:35px}
-.lineage-ui .grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:16px}
+.lineage-ui .pane > .grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:16px}
 .lineage-ui .video-card{border:1px solid var(--line);border-radius:4px;overflow:hidden;background:#fff}
 .lineage-ui .card-relation{font-size:10px;padding:9px 11px;color:var(--muted);border-bottom:1px solid #eee;background:#fbfbf9}
 .lineage-ui .card-cover{display:block;position:relative;height:152px;width:100%;border:0;padding:0;border-radius:0;background:#eae9e2;overflow:hidden}
@@ -135,7 +135,7 @@
 @media(max-width:1050px){
 .lineage-ui .overview{grid-template-columns:280px 1fr}
 .lineage-ui .metadata{padding:22px}
-.lineage-ui .grid{grid-template-columns:repeat(2,minmax(0,1fr))}
+.lineage-ui .pane > .grid{grid-template-columns:repeat(2,minmax(0,1fr))}
 .lineage-ui .source-table .optional{display:none}
 .lineage-ui h1{font-size:23px}
 }
@@ -160,7 +160,7 @@
 .lineage-ui .card-cover{height:138px}
 .lineage-ui .card-id{display:none}
 .lineage-ui .card-body{padding:10px}
-.lineage-ui .grid{gap:10px}
+.lineage-ui .pane > .grid{gap:10px}
 .lineage-ui .card-bottom{flex-wrap:wrap;gap:8px}
 .lineage-ui .metrics{grid-template-columns:repeat(2,1fr)}
 .lineage-ui .bottom-note{line-height:1.8}
