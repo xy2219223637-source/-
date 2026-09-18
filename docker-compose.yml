@@ -9,6 +9,7 @@ services:
       FEISHU_LOG_DIR: /app/logs
     volumes:
       - feishu_logs:/app/logs
+      - "${PRIVATE_VIDEO_S3_HOST_FILE:-./deploy/empty-private-video.env}:/run/secrets/dlr-hz.env:ro"
     restart: unless-stopped
     ports:
       - "${BACKEND_BIND:-127.0.0.1}:${BACKEND_PORT:-8000}:8000"

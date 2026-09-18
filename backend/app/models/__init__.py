@@ -267,6 +267,7 @@ class VideoAsset(Base):
     burned_subtitles: Mapped[bool] = mapped_column(nullable=False, default=False)
     has_background_music: Mapped[bool] = mapped_column(nullable=False, default=False)
     object_url: Mapped[str] = mapped_column(String(1024), nullable=False)
+    storage_provider: Mapped[str] = mapped_column(String(32), nullable=False, default="aliyun_oss")
     content_hash: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
     duration_seconds: Mapped[float] = mapped_column(Float, nullable=False, default=0)
     width: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
@@ -280,6 +281,26 @@ class VideoAsset(Base):
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="uploaded")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class VideoLineageSegment(Base):
+    __tablename__ = "video_lineage_segments"
+    __table_args__ = (UniqueConstraint("target_asset_id", "segment_index", name="uq_video_lineage_segment"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    tenant_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    source_asset_id: Mapped[int] = mapped_column(ForeignKey("video_assets.id"), nullable=False, index=True)
+    original_asset_id: Mapped[Optional[int]] = mapped_column(ForeignKey("video_assets.id"), nullable=True, index=True)
+    target_asset_id: Mapped[int] = mapped_column(ForeignKey("video_assets.id"), nullable=False, index=True)
+    # Snapshot identifiers intentionally do not depend on replaceable render jobs.
+    plan_version_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    variant_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    segment_index: Mapped[int] = mapped_column(Integer, nullable=False)
+    source_start: Mapped[float] = mapped_column(Float, nullable=False)
+    source_end: Mapped[float] = mapped_column(Float, nullable=False)
+    target_start: Mapped[float] = mapped_column(Float, nullable=False)
+    target_end: Mapped[float] = mapped_column(Float, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
 
 class VideoCategory(Base):
@@ -422,6 +443,7 @@ class VideoUploadSession(Base):
     content_type: Mapped[str] = mapped_column(String(128), nullable=False, default="application/octet-stream")
     size_bytes: Mapped[int] = mapped_column(Integer, nullable=False)
     object_key: Mapped[str] = mapped_column(String(1024), nullable=False, unique=True)
+    storage_provider: Mapped[str] = mapped_column(String(32), nullable=False, default="aliyun_oss")
     multipart_upload_id: Mapped[str] = mapped_column(String(256), nullable=False)
     part_size: Mapped[int] = mapped_column(Integer, nullable=False)
     part_count: Mapped[int] = mapped_column(Integer, nullable=False)

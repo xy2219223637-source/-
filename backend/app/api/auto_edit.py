@@ -24,7 +24,7 @@ from app.database import get_db
 from app.models import (EditingPlanVersion, Product, VideoAsset,
                         VideoAssetAnalysis, VideoEditProject, VideoEditProjectAsset, VideoHighlight,
                         VideoRenderJob)
-from app.services.storage import get_storage
+from app.services.storage import get_storage, get_storage_for_url
 from app.services.tts import synthesize_speech
 from app.services.llm import LLMClient
 from app.services.video_analysis_queue import enqueue_video_analysis
@@ -394,7 +394,8 @@ async def upload_assets(project_id: int, files: list[UploadFile] = File(...), db
             raise HTTPException(413, f"{file.filename} 文件过大")
         digest = hashlib.sha256(raw).hexdigest()
         duplicate = db.query(VideoAsset).filter(
-            VideoAsset.tenant_id == auth.tenant_id, VideoAsset.project_id == project.id, VideoAsset.content_hash == digest
+            VideoAsset.tenant_id == auth.tenant_id, VideoAsset.project_id == project.id,
+            VideoAsset.asset_kind == "material", VideoAsset.content_hash == digest
         ).first()
         if duplicate:
             continue
@@ -1194,7 +1195,7 @@ def _render_variant(plan: dict[str, Any], assets: list[VideoAsset], output: Path
         av_segments: list[Path] = []
         for index, clip in enumerate(plan["narrative_segments"]):
             asset = asset_map[clip["asset_id"]]
-            source = storage.local_path(asset.object_url)
+            source = get_storage_for_url(asset.object_url).local_path(asset.object_url)
             if not source:
                 raise RuntimeError(f"无法下载素材 {asset.filename}")
             if edit_mode == "finished_remix" and not asset.has_audio:
@@ -1220,7 +1221,7 @@ def _render_variant(plan: dict[str, Any], assets: list[VideoAsset], output: Path
     video_segments: list[Path] = []; audio_segments: list[Path] = []
     for index, clip in enumerate(plan["video_track"]):
         asset = asset_map[clip["asset_id"]]
-        source = storage.local_path(asset.object_url)
+        source = get_storage_for_url(asset.object_url).local_path(asset.object_url)
         if not source: raise RuntimeError(f"无法下载素材 {asset.filename}")
         start, end = clip["source_range"]["start"], clip["source_range"]["end"]
         duration = end - start
@@ -1237,7 +1238,7 @@ def _render_variant(plan: dict[str, Any], assets: list[VideoAsset], output: Path
         else:
             asset = asset_map[clip["asset_id"]]
             if not asset.has_audio: raise RuntimeError(f"原声片段缺少音轨：{asset.filename}")
-            source = storage.local_path(asset.object_url)
+            source = get_storage_for_url(asset.object_url).local_path(asset.object_url)
             start, end = clip["source_range"]["start"], clip["source_range"]["end"]
         segment = output.parent / f"audio-{index:03d}.wav"; audio_segments.append(segment)
         subprocess.run(["ffmpeg", "-y", "-ss", str(start), "-t", str(end-start), "-i", str(source), "-vn",
@@ -1330,8 +1331,11 @@ async def render(project_id: int, db: Session = Depends(get_db), auth: AuthConte
                     height=1920 if project.aspect_ratio == "9:16" else 1080,
                     fps=30, has_audio=True, status="queued_for_analysis", excluded=False,
                 )
-                db.add(generated_asset)
-                inherit_public_tags_to_final(db, generated_asset, source_assets, auth.user_id)
+                from app.services.video_lineage import record_render_lineage
+                with db.begin_nested():
+                    db.add(generated_asset)
+                    record_render_lineage(db, generated_asset, variant, assets, record.id)
+                    inherit_public_tags_to_final(db, generated_asset, source_assets, auth.user_id)
             job.status = "completed"; job.output_url = url; job.duration_seconds = duration
         except Exception as exc:
             job.status = "failed"; job.error_message = str(exc)[:1000]

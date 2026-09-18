@@ -6,7 +6,14 @@ import unittest
 import os
 from pathlib import Path
 
-from app.services.storage import AliyunOSSProvider
+from unittest.mock import patch
+
+from app.services.storage import (
+    AliyunOSSProvider,
+    _provider_object_url,
+    object_ref,
+    private_video_enabled,
+)
 
 
 class StorageCacheCleanupTests(unittest.TestCase):
@@ -52,6 +59,23 @@ class StorageCacheCleanupTests(unittest.TestCase):
 
             self.assertFalse(oldest.exists())
             self.assertTrue(newest.exists())
+
+
+class StorageRoutingTests(unittest.TestCase):
+    def test_legacy_object_url_defaults_to_aliyun(self) -> None:
+        url = _provider_object_url("aliyun_oss", "video/a.mp4")
+        self.assertEqual(object_ref(url), ("aliyun_oss", "video/a.mp4"))
+
+    def test_private_object_url_carries_provider(self) -> None:
+        url = _provider_object_url("private_s3", "video/a.mp4")
+        self.assertEqual(object_ref(url), ("private_s3", "video/a.mp4"))
+
+    def test_private_video_tenant_matches_id_or_code_only(self) -> None:
+        settings = type("Settings", (), {"private_video_tenants": "dlr, tenant-2"})()
+        with patch("app.services.storage.get_settings", return_value=settings):
+            self.assertTrue(private_video_enabled("tenant-1", "DLR"))
+            self.assertTrue(private_video_enabled("tenant-2", "other"))
+            self.assertFalse(private_video_enabled("tenant-3", "other"))
 
 
 if __name__ == "__main__":

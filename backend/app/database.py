@@ -156,6 +156,7 @@ def init_db() -> None:
                 "reusable_status": "VARCHAR(32) NOT NULL DEFAULT 'review_required'",
                 "burned_subtitles": "BOOLEAN NOT NULL DEFAULT FALSE",
                 "has_background_music": "BOOLEAN NOT NULL DEFAULT FALSE",
+                "storage_provider": "VARCHAR(32) NOT NULL DEFAULT 'aliyun_oss'",
             }
             for name, definition in additions.items():
                 if name not in columns:
@@ -182,6 +183,8 @@ def init_db() -> None:
             connection.execute(text("ALTER TABLE video_upload_sessions ADD COLUMN library_type VARCHAR(32) NOT NULL DEFAULT 'semi_finished'"))
         if upload_columns and "video_asset_id" not in upload_columns:
             connection.execute(text("ALTER TABLE video_upload_sessions ADD COLUMN video_asset_id INTEGER NULL"))
+        if upload_columns and "storage_provider" not in upload_columns:
+            connection.execute(text("ALTER TABLE video_upload_sessions ADD COLUMN storage_provider VARCHAR(32) NOT NULL DEFAULT 'aliyun_oss'"))
         highlight_columns = _table_columns(connection, "video_highlights")
         highlight_additions = {
             "content_role": "VARCHAR(64) NOT NULL DEFAULT 'core_content'",

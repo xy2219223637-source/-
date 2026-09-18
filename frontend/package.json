@@ -4,6 +4,7 @@
   "version": "1.0.0",
   "type": "module",
   "scripts": {
+    "test:lineage": "vitest run --config vitest.config.ts",
     "build:extension": "node scripts/build-extension.mjs",
     "predev": "npm run build:extension",
     "dev": "vite",
@@ -25,12 +26,16 @@
   },
   "devDependencies": {
     "@tailwindcss/vite": "^4.0.0",
+    "@testing-library/react": "^16.3.3",
+    "@types/node": "^22.20.3",
     "@types/react": "^19.2.18",
     "@types/react-dom": "^19.2.4",
     "@vitejs/plugin-react": "^4.3.4",
     "fflate": "^0.8.2",
+    "jsdom": "^26.1.0",
     "tailwindcss": "^4.0.0",
     "typescript": "~5.7.2",
-    "vite": "^6.0.6"
+    "vite": "^6.0.6",
+    "vitest": "^3.2.7"
   }
 }
