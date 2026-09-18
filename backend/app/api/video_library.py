@@ -25,6 +25,7 @@ from app.services.storage import get_storage
 from app.services.transcription import transcribe_media
 from app.services.video_analysis_queue import enqueue_video_analysis
 from app.services.video_taxonomy import load_asset_taxonomy
+from app.services.video_lineage import reference_counts
 
 router = APIRouter(prefix="/video-assets", tags=["video-library"])
 PROMPT_VERSION = "video-library-v3-whisper-timestamps"
@@ -62,7 +63,10 @@ _NOT_LOADED = object()
 
 def _serialize(db: Session, asset: VideoAsset, analysis: Any = _NOT_LOADED,
                highlights: Any = _NOT_LOADED, taxonomy_category: Any = _NOT_LOADED,
-               taxonomy_tags: Any = _NOT_LOADED, user_id: str = "") -> dict[str, Any]:
+               taxonomy_tags: Any = _NOT_LOADED, user_id: str = "",
+               reference_count: Any = _NOT_LOADED) -> dict[str, Any]:
+    if reference_count is _NOT_LOADED:
+        reference_count = reference_counts(db, asset.tenant_id, [asset.id]).get(asset.id, 0)
     if analysis is _NOT_LOADED:
         analysis = db.query(VideoAssetAnalysis).filter(VideoAssetAnalysis.asset_id == asset.id).order_by(VideoAssetAnalysis.id.desc()).first()
     if highlights is _NOT_LOADED:
@@ -74,6 +78,7 @@ def _serialize(db: Session, asset: VideoAsset, analysis: Any = _NOT_LOADED,
     effective_tags = list(dict.fromkeys([tag for tag in (asset.ai_tags or []) if tag not in (asset.removed_ai_tags or [])] + (asset.manual_tags or [])))
     return {"id": asset.id, "asset_id": asset.asset_id, "product_id": asset.product_id, "filename": asset.filename,
             "source": asset.source, "library_type": asset.library_type, "asset_kind": asset.asset_kind,
+            "reference_count": reference_count,
             "category_id": asset.category_id, "category": taxonomy_category,
             "generation_depth": asset.generation_depth,
             "origin_asset_ids": asset.origin_asset_ids or [], "reusable_status": asset.reusable_status,
@@ -315,6 +320,15 @@ def validate_video_asset(asset_db_id: int) -> None:
             max_duration = get_settings().video_library_max_duration_seconds
             if media["duration"] > max_duration + .05:
                 raise ValueError(f"视频超过 {max_duration / 60:g} 分钟限制")
+            if asset.library_type == "finished":
+                local = get_storage().local_path(asset.object_url)
+                if not local:
+                    raise ValueError("无法读取成品素材")
+                digest = hashlib.sha256()
+                with Path(local).open("rb") as handle:
+                    for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                        digest.update(chunk)
+                asset.content_hash = digest.hexdigest()
             asset.duration_seconds = media["duration"]; asset.width = media["width"]; asset.height = media["height"]
             asset.fps = media["fps"]; asset.has_audio = media["has_audio"]; asset.status = "queued_for_analysis"
         except Exception as exc:
@@ -398,9 +412,10 @@ def list_assets(product_id: Optional[int] = None, library_type: Optional[str] = 
     for highlight in db.query(VideoHighlight).filter(VideoHighlight.asset_id.in_(asset_ids)).order_by(VideoHighlight.asset_id, VideoHighlight.start_seconds).all():
         highlights_by_asset[highlight.asset_id].append(highlight)
     categories_by_asset, tags_by_asset = load_asset_taxonomy(db, assets, auth.tenant_id, auth.user_id)
+    counts = reference_counts(db, auth.tenant_id, asset_ids)
     return [_serialize(
         db, asset, latest_analysis.get(asset.id), highlights_by_asset[asset.id],
-        categories_by_asset.get(asset.id), tags_by_asset.get(asset.id, []), auth.user_id,
+        categories_by_asset.get(asset.id), tags_by_asset.get(asset.id, []), auth.user_id, counts.get(asset.id, 0),
     ) for asset in assets]
 
 
@@ -428,6 +443,7 @@ async def upload_assets(product_id: int = Form(...), source: str = Form("manual_
         digest = hashlib.sha256(raw).hexdigest()
         if library_type not in {"semi_finished", "finished"}: raise HTTPException(422, "素材库类型无效")
         existing = db.query(VideoAsset).filter(VideoAsset.tenant_id == auth.tenant_id,
+            VideoAsset.product_id == product.id, VideoAsset.asset_kind == "material",
             VideoAsset.content_hash == digest, VideoAsset.library_type == library_type).first()
         if existing:
             result.append({**_serialize(db, existing, user_id=auth.user_id), "duplicate": True}); continue

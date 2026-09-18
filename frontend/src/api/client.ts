@@ -153,6 +153,7 @@ export const autoEditApi = {
 };
 
 export const videoLibraryApi = {
+  lineage: (id:number,params:{direction:'sources'|'used';q?:string;sort?:string;start_date?:string;end_date?:string;page?:number;page_size?:number}) => api.get<import('../types').VideoLineageResult>(`/video-assets/${id}/lineage`,{params}).then(r=>r.data),
   list: (productId?:number,libraryType?:'semi_finished'|'finished',assetKind:'material'|'final_output'='material') => api.get<import('../types').VideoLibraryAsset[]>('/video-assets',{params:{...(productId?{product_id:productId}:{}),...(libraryType?{library_type:libraryType}:{}),asset_kind:assetKind}}).then(r=>r.data),
   get: (id:number) => api.get<import('../types').VideoLibraryAsset>(`/video-assets/${id}`).then(r=>r.data),
   upload: async (productId:number,files:File[],source='manual_upload',onProgress?:(loaded:number,total:number,percent:number)=>void,libraryType:'semi_finished'|'finished'='semi_finished') => {

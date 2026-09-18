@@ -14,6 +14,7 @@ from app.models import AuditLog, CreativeBatchJob, CreativeGeneration
 from app.services.production_queue import start_worker, stop_worker
 from app.services.video_analysis_queue import start_video_analysis_worker, stop_video_analysis_worker
 from app.services.redis_client import get_redis
+from app.api import video_lineage
 
 settings = get_settings()
 
@@ -65,6 +66,7 @@ app.include_router(director.router, prefix="/api")
 app.include_router(auto_edit.router, prefix="/api")
 app.include_router(video_library.router, prefix="/api")
 app.include_router(video_taxonomy.router, prefix="/api")
+app.include_router(video_lineage.router, prefix="/api")
 
 @app.on_event("startup")
 def on_startup() -> None:

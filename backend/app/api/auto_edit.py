@@ -394,7 +394,8 @@ async def upload_assets(project_id: int, files: list[UploadFile] = File(...), db
             raise HTTPException(413, f"{file.filename} 文件过大")
         digest = hashlib.sha256(raw).hexdigest()
         duplicate = db.query(VideoAsset).filter(
-            VideoAsset.tenant_id == auth.tenant_id, VideoAsset.project_id == project.id, VideoAsset.content_hash == digest
+            VideoAsset.tenant_id == auth.tenant_id, VideoAsset.project_id == project.id,
+            VideoAsset.asset_kind == "material", VideoAsset.content_hash == digest
         ).first()
         if duplicate:
             continue
@@ -1330,8 +1331,11 @@ async def render(project_id: int, db: Session = Depends(get_db), auth: AuthConte
                     height=1920 if project.aspect_ratio == "9:16" else 1080,
                     fps=30, has_audio=True, status="queued_for_analysis", excluded=False,
                 )
-                db.add(generated_asset)
-                inherit_public_tags_to_final(db, generated_asset, source_assets, auth.user_id)
+                from app.services.video_lineage import record_render_lineage
+                with db.begin_nested():
+                    db.add(generated_asset)
+                    record_render_lineage(db, generated_asset, variant, assets, record.id)
+                    inherit_public_tags_to_final(db, generated_asset, source_assets, auth.user_id)
             job.status = "completed"; job.output_url = url; job.duration_seconds = duration
         except Exception as exc:
             job.status = "failed"; job.error_message = str(exc)[:1000]
