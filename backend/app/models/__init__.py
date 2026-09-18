@@ -1054,6 +1054,20 @@ class TenantMember(Base):
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="active")
     team_id: Mapped[Optional[int]] = mapped_column(ForeignKey("teams.id"), nullable=True, index=True)
     group_id: Mapped[Optional[int]] = mapped_column(ForeignKey("member_groups.id"), nullable=True, index=True)
+    role_id: Mapped[Optional[int]] = mapped_column(ForeignKey("tenant_roles.id"), nullable=True, index=True)
+
+
+class TenantRole(Base):
+    __tablename__ = "tenant_roles"
+    __table_args__ = (UniqueConstraint("tenant_id", "name", name="uq_tenant_role_name"),)
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    tenant_id: Mapped[str] = mapped_column(ForeignKey("tenants.id"), nullable=False, index=True)
+    name: Mapped[str] = mapped_column(String(120), nullable=False)
+    code: Mapped[str] = mapped_column(String(64), nullable=False, default="custom")
+    permissions: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
+    is_system: Mapped[bool] = mapped_column(nullable=False, default=False)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="active")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
 
 class Team(Base):

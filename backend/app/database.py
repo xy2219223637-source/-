@@ -122,7 +122,7 @@ def init_db() -> None:
         if user_columns:
             connection.execute(text("CREATE UNIQUE INDEX IF NOT EXISTS uq_users_phone ON users (phone) WHERE phone IS NOT NULL"))
         member_columns = _table_columns(connection, "tenant_members")
-        for name in ("team_id", "group_id"):
+        for name in ("team_id", "group_id", "role_id"):
             if member_columns and name not in member_columns:
                 connection.execute(text(f"ALTER TABLE tenant_members ADD COLUMN {name} INTEGER NULL"))
                 connection.execute(text(f"CREATE INDEX IF NOT EXISTS ix_tenant_members_{name} ON tenant_members ({name})"))
@@ -207,3 +207,28 @@ def init_db() -> None:
                     WHERE link.project_id = video_assets.project_id AND link.asset_id = video_assets.id)"""))
     migrate_legacy_schema(engine)
     migrate_feishu_notifications(engine)
+    _ensure_default_tenant_roles()
+
+
+def _ensure_default_tenant_roles() -> None:
+    from app.models import Tenant, TenantMember, TenantRole
+    from app.permissions import ALL_ADMIN_PERMISSIONS, ALL_USER_PERMISSIONS
+
+    db = SessionLocal()
+    try:
+        for tenant in db.query(Tenant).all():
+            employee = db.query(TenantRole).filter_by(tenant_id=tenant.id, code="employee", status="active").first()
+            if not employee:
+                employee = TenantRole(tenant_id=tenant.id, name="普通员工", code="employee", permissions=ALL_USER_PERMISSIONS, is_system=True)
+                db.add(employee); db.flush()
+            administrator = db.query(TenantRole).filter_by(tenant_id=tenant.id, code="administrator", status="active").first()
+            if not administrator:
+                administrator = TenantRole(tenant_id=tenant.id, name="企业管理员", code="administrator",
+                                           permissions=ALL_USER_PERMISSIONS + ALL_ADMIN_PERMISSIONS, is_system=True)
+                db.add(administrator); db.flush()
+            for member in db.query(TenantMember).filter_by(tenant_id=tenant.id).all():
+                if member.role_id is None and member.role != "owner":
+                    member.role_id = administrator.id if member.role == "admin" else employee.id
+        db.commit()
+    finally:
+        db.close()

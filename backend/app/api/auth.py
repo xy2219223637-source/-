@@ -32,7 +32,9 @@ def login(payload: LoginRequest, db: Session = Depends(get_db)) -> AuthOut:
 
 @router.get("/me")
 def me(auth: AuthContext = Depends(current_auth)) -> dict:
-    return {"user_id": auth.user_id, "phone": auth.phone, "role": auth.role, "tenant_id": auth.tenant_id, "tenant_name": auth.tenant_name, "is_platform_admin": auth.is_platform_admin}
+    return {"user_id": auth.user_id, "phone": auth.phone, "role": auth.role, "tenant_id": auth.tenant_id,
+            "tenant_name": auth.tenant_name, "is_platform_admin": auth.is_platform_admin,
+            "permissions": list(auth.permissions)}
 
 
 @router.post("/change-password")

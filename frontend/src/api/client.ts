@@ -48,7 +48,7 @@ export const authApi = {
   login: (phone: string, password: string) => api.post('/auth/login', { phone, password }).then((r) => r.data),
   register: (payload: { tenant_name: string; tenant_code: string; name: string; email: string; password: string }) =>
     api.post('/auth/register', payload).then((r) => r.data),
-  me: () => api.get<{user_id:string;phone:string;role:string;tenant_id:string;tenant_name:string;is_platform_admin:boolean}>('/auth/me').then((r) => r.data),
+  me: () => api.get<{user_id:string;phone:string;role:string;tenant_id:string;tenant_name:string;is_platform_admin:boolean;permissions:string[]}>('/auth/me').then((r) => r.data),
   changePassword: (current_password: string, new_password: string) => api.post('/auth/change-password', { current_password, new_password }).then((r) => r.data),
 };
 
@@ -74,6 +74,12 @@ export const tenantAdminApi = {
   updateMember: (id: number, data: any) => api.patch(`/tenant-admin/members/${id}`, data).then((r) => r.data),
   resetPassword: (id: number, new_password: string) => api.post(`/tenant-admin/members/${id}/reset-password`, { new_password }).then((r) => r.data),
   deleteMember: (id: number) => api.delete(`/tenant-admin/members/${id}`).then((r) => r.data),
+  permissionCatalog: () => api.get('/tenant-admin/permission-catalog').then((r) => r.data),
+  listRoles: () => api.get('/tenant-admin/roles').then((r) => r.data),
+  createRole: (data: {name:string;permissions:string[]}) => api.post('/tenant-admin/roles', data).then((r) => r.data),
+  updateRole: (id: number, data: {name:string;permissions:string[]}) => api.patch(`/tenant-admin/roles/${id}`, data).then((r) => r.data),
+  duplicateRole: (id: number) => api.post(`/tenant-admin/roles/${id}/duplicate`).then((r) => r.data),
+  deleteRole: (id: number) => api.delete(`/tenant-admin/roles/${id}`).then((r) => r.data),
 };
 
 export function mediaUrl(path: string): string {

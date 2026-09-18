@@ -12,7 +12,8 @@ from sqlalchemy.orm import Session
 
 from app.auth import AuthContext, current_auth, hash_password
 from app.database import get_db
-from app.models import MemberGroup, Team, Tenant, TenantMember, User
+from app.models import MemberGroup, Team, Tenant, TenantMember, TenantRole, User
+from app.permissions import ADMIN_PERMISSION_GROUPS, ALL_ADMIN_PERMISSIONS, ALL_USER_PERMISSIONS, USER_PERMISSION_GROUPS, permission_codes, require_permission
 
 platform_router = APIRouter(prefix="/platform-admin", tags=["platform-admin"])
 tenant_router = APIRouter(prefix="/tenant-admin", tags=["tenant-admin"])
@@ -27,7 +28,7 @@ def platform_admin(auth: AuthContext = Depends(current_auth)) -> AuthContext:
 
 
 def tenant_admin(auth: AuthContext = Depends(current_auth)) -> AuthContext:
-    if auth.role not in {"owner", "admin"}:
+    if auth.role != "owner" and not any(code in auth.permissions for code in ALL_ADMIN_PERMISSIONS):
         raise HTTPException(status_code=403, detail="仅企业管理员可访问")
     return auth
 
@@ -76,6 +77,7 @@ class MemberCreate(BaseModel):
     initial_password: str = Field(min_length=8, max_length=128)
     team_id: int
     group_id: Optional[int] = None
+    role_id: Optional[int] = None
     is_admin: bool = False
     job_title: str = Field(default="", max_length=120)
     employee_no: str = Field(default="", max_length=100)
@@ -86,17 +88,24 @@ class MemberUpdate(BaseModel):
     phone: Optional[str] = None
     team_id: Optional[int] = None
     group_id: Optional[int] = None
+    role_id: Optional[int] = None
     is_admin: Optional[bool] = None
     status: Optional[str] = None
     job_title: Optional[str] = Field(default=None, max_length=120)
     employee_no: Optional[str] = Field(default=None, max_length=100)
 
 
-def member_dict(member: TenantMember, user: User, team: Optional[Team], group: Optional[MemberGroup]) -> dict:
+class TenantRolePayload(BaseModel):
+    name: str = Field(min_length=1, max_length=120)
+    permissions: list[str] = Field(default_factory=list)
+
+
+def member_dict(member: TenantMember, user: User, team: Optional[Team], group: Optional[MemberGroup], assigned_role: Optional[TenantRole]) -> dict:
     return {
         "id": member.id, "user_id": user.id, "name": user.name, "phone": user.phone or "",
         "job_title": user.job_title, "employee_no": user.employee_no, "status": member.status,
         "is_admin": member.role in {"owner", "admin"}, "is_owner": member.role == "owner",
+        "role_id": member.role_id, "role_name": "企业主管理员" if member.role == "owner" else (assigned_role.name if assigned_role else ""),
         "team_id": member.team_id, "team_name": team.name if team else "",
         "group_id": member.group_id, "group_name": group.name if group else "",
         "created_at": user.created_at,
@@ -131,6 +140,10 @@ def create_tenant(payload: TenantCreate, _: AuthContext = Depends(platform_admin
                 password_hash=hash_password(payload.initial_password), must_change_password=True)
     db.add_all([tenant, user]); db.flush()
     db.add(TenantMember(tenant_id=tenant.id, user_id=user.id, role="owner", status="active"))
+    db.add_all([
+        TenantRole(tenant_id=tenant.id, name="普通员工", code="employee", permissions=ALL_USER_PERMISSIONS, is_system=True),
+        TenantRole(tenant_id=tenant.id, name="企业管理员", code="administrator", permissions=ALL_USER_PERMISSIONS + ALL_ADMIN_PERMISSIONS, is_system=True),
+    ])
     db.commit()
     return {"id": tenant.id, "owner_user_id": user.id}
 
@@ -180,7 +193,7 @@ def list_teams(auth: AuthContext = Depends(tenant_admin), db: Session = Depends(
 
 
 @tenant_router.post("/teams")
-def create_team(payload: NamedPayload, auth: AuthContext = Depends(tenant_admin), db: Session = Depends(get_db)) -> dict:
+def create_team(payload: NamedPayload, auth: AuthContext = Depends(require_permission("tenant_teams.manage")), db: Session = Depends(get_db)) -> dict:
     name = payload.name.strip()
     if db.query(Team).filter_by(tenant_id=auth.tenant_id, name=name, status="active").first(): raise HTTPException(409, "团队名称已存在")
     row = Team(tenant_id=auth.tenant_id, name=name); db.add(row); db.commit(); db.refresh(row)
@@ -188,14 +201,14 @@ def create_team(payload: NamedPayload, auth: AuthContext = Depends(tenant_admin)
 
 
 @tenant_router.patch("/teams/{team_id}")
-def rename_team(team_id: int, payload: NamedPayload, auth: AuthContext = Depends(tenant_admin), db: Session = Depends(get_db)) -> dict:
+def rename_team(team_id: int, payload: NamedPayload, auth: AuthContext = Depends(require_permission("tenant_teams.manage")), db: Session = Depends(get_db)) -> dict:
     row = db.query(Team).filter_by(id=team_id, tenant_id=auth.tenant_id, status="active").first()
     if not row: raise HTTPException(404, "团队不存在")
     row.name = payload.name.strip(); db.commit(); return {"ok": True}
 
 
 @tenant_router.delete("/teams/{team_id}")
-def delete_team(team_id: int, auth: AuthContext = Depends(tenant_admin), db: Session = Depends(get_db)) -> dict:
+def delete_team(team_id: int, auth: AuthContext = Depends(require_permission("tenant_teams.manage")), db: Session = Depends(get_db)) -> dict:
     row = db.query(Team).filter_by(id=team_id, tenant_id=auth.tenant_id, status="active").first()
     if not row: raise HTTPException(404, "团队不存在")
     if db.query(TenantMember).filter_by(tenant_id=auth.tenant_id, team_id=team_id, status="active").count(): raise HTTPException(409, "请先转移团队中的用户")
@@ -213,7 +226,7 @@ def list_groups(team_id: Optional[int] = None, auth: AuthContext = Depends(tenan
 
 
 @tenant_router.post("/groups")
-def create_group(payload: GroupCreate, auth: AuthContext = Depends(tenant_admin), db: Session = Depends(get_db)) -> dict:
+def create_group(payload: GroupCreate, auth: AuthContext = Depends(require_permission("tenant_teams.manage")), db: Session = Depends(get_db)) -> dict:
     team = db.query(Team).filter_by(id=payload.team_id, tenant_id=auth.tenant_id, status="active").first()
     if not team: raise HTTPException(404, "团队不存在")
     name = payload.name.strip()
@@ -223,14 +236,14 @@ def create_group(payload: GroupCreate, auth: AuthContext = Depends(tenant_admin)
 
 
 @tenant_router.patch("/groups/{group_id}")
-def rename_group(group_id: int, payload: NamedPayload, auth: AuthContext = Depends(tenant_admin), db: Session = Depends(get_db)) -> dict:
+def rename_group(group_id: int, payload: NamedPayload, auth: AuthContext = Depends(require_permission("tenant_teams.manage")), db: Session = Depends(get_db)) -> dict:
     row = db.query(MemberGroup).filter_by(id=group_id, tenant_id=auth.tenant_id, status="active").first()
     if not row: raise HTTPException(404, "分组不存在")
     row.name = payload.name.strip(); db.commit(); return {"ok": True}
 
 
 @tenant_router.delete("/groups/{group_id}")
-def delete_group(group_id: int, auth: AuthContext = Depends(tenant_admin), db: Session = Depends(get_db)) -> dict:
+def delete_group(group_id: int, auth: AuthContext = Depends(require_permission("tenant_teams.manage")), db: Session = Depends(get_db)) -> dict:
     row = db.query(MemberGroup).filter_by(id=group_id, tenant_id=auth.tenant_id, status="active").first()
     if not row: raise HTTPException(404, "分组不存在")
     if db.query(TenantMember).filter_by(tenant_id=auth.tenant_id, group_id=group_id, status="active").count(): raise HTTPException(409, "请先转移分组中的用户")
@@ -239,20 +252,22 @@ def delete_group(group_id: int, auth: AuthContext = Depends(tenant_admin), db: S
 
 @tenant_router.get("/members")
 def list_members(keyword: str = "", status: str = "", team_id: Optional[int] = None, group_id: Optional[int] = None,
-                 is_admin: Optional[bool] = None, page: int = Query(1, ge=1), page_size: int = Query(20, ge=1, le=100),
-                 auth: AuthContext = Depends(tenant_admin), db: Session = Depends(get_db)) -> dict:
+                 is_admin: Optional[bool] = None, role_id: Optional[int] = None, page: int = Query(1, ge=1), page_size: int = Query(20, ge=1, le=100),
+                 auth: AuthContext = Depends(require_permission("tenant_users.manage")), db: Session = Depends(get_db)) -> dict:
     query = db.query(TenantMember, User).join(User, User.id == TenantMember.user_id).filter(TenantMember.tenant_id == auth.tenant_id)
     if keyword: query = query.filter(or_(User.name.contains(keyword), User.phone.contains(keyword), User.employee_no.contains(keyword)))
     if status: query = query.filter(TenantMember.status == status)
     if team_id is not None: query = query.filter(TenantMember.team_id == team_id)
     if group_id is not None: query = query.filter(TenantMember.group_id == group_id)
+    if role_id is not None: query = query.filter(TenantMember.role_id == role_id)
     if is_admin is True: query = query.filter(TenantMember.role.in_(["owner", "admin"]))
     if is_admin is False: query = query.filter(TenantMember.role == "member")
     total = query.count()
     rows = query.order_by(User.created_at.desc()).offset((page - 1) * page_size).limit(page_size).all()
     teams = {row.id: row for row in db.query(Team).filter_by(tenant_id=auth.tenant_id).all()}
     groups = {row.id: row for row in db.query(MemberGroup).filter_by(tenant_id=auth.tenant_id).all()}
-    return {"items": [member_dict(member, user, teams.get(member.team_id), groups.get(member.group_id)) for member, user in rows],
+    roles = {row.id: row for row in db.query(TenantRole).filter_by(tenant_id=auth.tenant_id).all()}
+    return {"items": [member_dict(member, user, teams.get(member.team_id), groups.get(member.group_id), roles.get(member.role_id)) for member, user in rows],
             "total": total, "page": page, "page_size": page_size}
 
 
@@ -266,22 +281,32 @@ def validate_assignment(db: Session, tenant_id: str, team_id: int, group_id: Opt
     return team, group
 
 
+def validate_role_assignment(auth: AuthContext, role: TenantRole) -> None:
+    if auth.role == "owner" or "*" in auth.permissions:
+        return
+    if not set(role.permissions or []).issubset(set(auth.permissions)):
+        raise HTTPException(403, "不能分配权限高于自己的角色")
+
+
 @tenant_router.post("/members")
-def create_member(payload: MemberCreate, auth: AuthContext = Depends(tenant_admin), db: Session = Depends(get_db)) -> dict:
+def create_member(payload: MemberCreate, auth: AuthContext = Depends(require_permission("tenant_users.manage")), db: Session = Depends(get_db)) -> dict:
     phone = require_phone(payload.phone); validate_assignment(db, auth.tenant_id, payload.team_id, payload.group_id)
     if db.query(User).filter_by(phone=phone).first(): raise HTTPException(409, "手机号已被使用")
+    assigned_role = db.query(TenantRole).filter_by(id=payload.role_id, tenant_id=auth.tenant_id, status="active").first() if payload.role_id else db.query(TenantRole).filter_by(tenant_id=auth.tenant_id, code="employee", status="active").first()
+    if not assigned_role: raise HTTPException(422, "请选择有效角色")
+    validate_role_assignment(auth, assigned_role)
     user = User(id=uuid.uuid4().hex, email=f"{phone}@phone.local", phone=phone, name=payload.name.strip(),
                 password_hash=hash_password(payload.initial_password), must_change_password=True,
                 job_title=payload.job_title.strip(), employee_no=payload.employee_no.strip())
     db.add(user); db.flush()
-    member = TenantMember(tenant_id=auth.tenant_id, user_id=user.id, role="admin" if payload.is_admin else "member",
-                          status="active", team_id=payload.team_id, group_id=payload.group_id)
+    member = TenantMember(tenant_id=auth.tenant_id, user_id=user.id, role="member",
+                          status="active", team_id=payload.team_id, group_id=payload.group_id, role_id=assigned_role.id)
     db.add(member); db.commit(); db.refresh(member)
     return {"id": member.id, "user_id": user.id}
 
 
 @tenant_router.patch("/members/{member_id}")
-def update_member(member_id: int, payload: MemberUpdate, auth: AuthContext = Depends(tenant_admin), db: Session = Depends(get_db)) -> dict:
+def update_member(member_id: int, payload: MemberUpdate, auth: AuthContext = Depends(require_permission("tenant_users.manage")), db: Session = Depends(get_db)) -> dict:
     member = db.query(TenantMember).filter_by(id=member_id, tenant_id=auth.tenant_id).first()
     if not member: raise HTTPException(404, "用户不存在")
     user = db.query(User).filter_by(id=member.user_id).first()
@@ -293,6 +318,12 @@ def update_member(member_id: int, payload: MemberUpdate, auth: AuthContext = Dep
     if payload.name is not None: user.name = payload.name.strip()
     if payload.job_title is not None: user.job_title = payload.job_title.strip()
     if payload.employee_no is not None: user.employee_no = payload.employee_no.strip()
+    if payload.role_id is not None:
+        assigned_role = db.query(TenantRole).filter_by(id=payload.role_id, tenant_id=auth.tenant_id, status="active").first()
+        if not assigned_role: raise HTTPException(422, "请选择有效角色")
+        validate_role_assignment(auth, assigned_role)
+        if member.role == "owner": raise HTTPException(409, "企业主管理员不使用自定义角色")
+        member.role_id = assigned_role.id; member.role = "member"
     target_team = payload.team_id if payload.team_id is not None else member.team_id
     target_group = payload.group_id if payload.group_id is not None else member.group_id
     if target_team is not None:
@@ -308,7 +339,7 @@ def update_member(member_id: int, payload: MemberUpdate, auth: AuthContext = Dep
 
 
 @tenant_router.post("/members/{member_id}/reset-password")
-def reset_member_password(member_id: int, payload: PasswordReset, auth: AuthContext = Depends(tenant_admin), db: Session = Depends(get_db)) -> dict:
+def reset_member_password(member_id: int, payload: PasswordReset, auth: AuthContext = Depends(require_permission("tenant_users.manage")), db: Session = Depends(get_db)) -> dict:
     member = db.query(TenantMember).filter_by(id=member_id, tenant_id=auth.tenant_id).first()
     if not member: raise HTTPException(404, "用户不存在")
     user = db.query(User).filter_by(id=member.user_id).first(); user.password_hash = hash_password(payload.new_password); user.must_change_password = True
@@ -316,9 +347,65 @@ def reset_member_password(member_id: int, payload: PasswordReset, auth: AuthCont
 
 
 @tenant_router.delete("/members/{member_id}")
-def delete_member(member_id: int, auth: AuthContext = Depends(tenant_admin), db: Session = Depends(get_db)) -> dict:
+def delete_member(member_id: int, auth: AuthContext = Depends(require_permission("tenant_users.manage")), db: Session = Depends(get_db)) -> dict:
     member = db.query(TenantMember).filter_by(id=member_id, tenant_id=auth.tenant_id).first()
     if not member: raise HTTPException(404, "用户不存在")
     if member.role == "owner": raise HTTPException(409, "不能删除企业主管理员")
     if member.user_id == auth.user_id: raise HTTPException(409, "不能删除当前登录用户")
     member.status = "deleted"; db.commit(); return {"ok": True}
+
+
+@tenant_router.get("/permission-catalog")
+def permission_catalog(_: AuthContext = Depends(tenant_admin)) -> dict:
+    return {"user": USER_PERMISSION_GROUPS, "admin": ADMIN_PERMISSION_GROUPS}
+
+
+@tenant_router.get("/roles")
+def list_roles(auth: AuthContext = Depends(tenant_admin), db: Session = Depends(get_db)) -> list[dict]:
+    rows = db.query(TenantRole).filter_by(tenant_id=auth.tenant_id, status="active").order_by(TenantRole.is_system.desc(), TenantRole.id).all()
+    return [{"id": row.id, "name": row.name, "code": row.code, "permissions": row.permissions or [], "is_system": row.is_system,
+             "member_count": db.query(TenantMember).filter_by(tenant_id=auth.tenant_id, role_id=row.id, status="active").count()} for row in rows]
+
+
+def validate_permissions(values: list[str]) -> list[str]:
+    allowed = set(ALL_USER_PERMISSIONS + ALL_ADMIN_PERMISSIONS)
+    invalid = set(values) - allowed
+    if invalid: raise HTTPException(422, f"包含无效权限: {', '.join(sorted(invalid))}")
+    return sorted(set(values))
+
+
+@tenant_router.post("/roles")
+def create_role(payload: TenantRolePayload, auth: AuthContext = Depends(require_permission("tenant_roles.manage")), db: Session = Depends(get_db)) -> dict:
+    name = payload.name.strip()
+    if db.query(TenantRole).filter_by(tenant_id=auth.tenant_id, name=name, status="active").first(): raise HTTPException(409, "角色名称已存在")
+    row = TenantRole(tenant_id=auth.tenant_id, name=name, code="custom", permissions=validate_permissions(payload.permissions))
+    db.add(row); db.commit(); db.refresh(row); return {"id": row.id}
+
+
+@tenant_router.patch("/roles/{role_id}")
+def update_role(role_id: int, payload: TenantRolePayload, auth: AuthContext = Depends(require_permission("tenant_roles.manage")), db: Session = Depends(get_db)) -> dict:
+    row = db.query(TenantRole).filter_by(id=role_id, tenant_id=auth.tenant_id, status="active").first()
+    if not row: raise HTTPException(404, "角色不存在")
+    if row.code == "employee" and payload.name.strip() != row.name: raise HTTPException(409, "默认角色不能改名")
+    conflict = db.query(TenantRole).filter(TenantRole.tenant_id == auth.tenant_id, TenantRole.name == payload.name.strip(), TenantRole.id != row.id, TenantRole.status == "active").first()
+    if conflict: raise HTTPException(409, "角色名称已存在")
+    row.name = payload.name.strip(); row.permissions = validate_permissions(payload.permissions); db.commit(); return {"ok": True}
+
+
+@tenant_router.post("/roles/{role_id}/duplicate")
+def duplicate_role(role_id: int, auth: AuthContext = Depends(require_permission("tenant_roles.manage")), db: Session = Depends(get_db)) -> dict:
+    source = db.query(TenantRole).filter_by(id=role_id, tenant_id=auth.tenant_id, status="active").first()
+    if not source: raise HTTPException(404, "角色不存在")
+    base = f"{source.name}副本"; name = base; index = 2
+    while db.query(TenantRole).filter_by(tenant_id=auth.tenant_id, name=name, status="active").first(): name = f"{base}{index}"; index += 1
+    row = TenantRole(tenant_id=auth.tenant_id, name=name, code="custom", permissions=list(source.permissions or []))
+    db.add(row); db.commit(); db.refresh(row); return {"id": row.id}
+
+
+@tenant_router.delete("/roles/{role_id}")
+def delete_role(role_id: int, auth: AuthContext = Depends(require_permission("tenant_roles.manage")), db: Session = Depends(get_db)) -> dict:
+    row = db.query(TenantRole).filter_by(id=role_id, tenant_id=auth.tenant_id, status="active").first()
+    if not row: raise HTTPException(404, "角色不存在")
+    if row.is_system: raise HTTPException(409, "系统角色不能删除")
+    if db.query(TenantMember).filter_by(tenant_id=auth.tenant_id, role_id=row.id, status="active").count(): raise HTTPException(409, "请先转移使用该角色的用户")
+    row.status = "deleted"; db.commit(); return {"ok": True}
