@@ -9,3 +9,5 @@
 backend/uploads
 backend/*.db
 backend/demo_data
+backend/log
+backend/logs

@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { loginUrl } from '../lib/loginReturn';
 import { NavLink, Outlet, useLocation } from 'react-router-dom';
 import {
   LayoutDashboard,
@@ -22,6 +23,8 @@ import {
   Menu,
   X,
   Tags,
+  Building2,
+  UsersRound,
 } from 'lucide-react';
 import IcpFiling from './IcpFiling';
 import dirovoLogo from '../assets/dirovo-logo.svg';
@@ -89,6 +92,16 @@ const navGroups = [
   },
 ];
 
+const routePermissions: Record<string, string> = {
+  '/': 'dashboard.view', '/products': 'products.access', '/knowledge': 'knowledge.access',
+  '/brand-visuals': 'brand_visuals.access', '/design-skills': 'design_skills.access',
+  '/creative-projects': 'creative_projects.access', '/finished-video-assets': 'finished_assets.access',
+  '/manual-video-compose': 'manual_compose.access', '/finished-video-remix': 'finished_remix.access',
+  '/final-videos': 'final_videos.access', '/director-inspiration': 'director.access',
+  '/shooting-tasks': 'shooting_tasks.access', '/task-center': 'task_center.access',
+  '/video-taxonomy': 'video_taxonomy.access',
+};
+
 const plannedLinks = [
   { to: '/semi-finished-assets', label: '半成品素材库', icon: Layers },
   { to: '/smart-video-compose', label: '智能成片', icon: Clapperboard },
@@ -126,18 +139,21 @@ export default function Layout() {
   const [plannedOpen, setPlannedOpen] = useState(false);
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const [role, setRole] = useState('');
+  const [isPlatformAdmin, setIsPlatformAdmin] = useState(false);
+  const [permissions, setPermissions] = useState<string[]>([]);
   const isDirectorWorkspace = /^\/director-inspiration\/\d+\/workspace/.test(location.pathname);
 
   useEffect(() => {
-    authApi.me().then((result) => setRole(result.role)).catch(() => setRole(''));
+    authApi.me().then((result) => { setRole(result.role); setIsPlatformAdmin(result.is_platform_admin); setPermissions(result.permissions || []); }).catch(() => setRole(''));
   }, []);
 
   if (!localStorage.getItem('access_token')) {
-    window.location.href = '/login';
+    window.location.href = loginUrl();
     return null;
   }
 
   const closeMobileNav = () => setMobileNavOpen(false);
+  const allowed = (code?: string) => role === 'owner' || permissions.includes('*') || !code || permissions.includes(code);
 
   return (
     <div className="min-h-screen flex bg-[var(--bg)] text-[var(--text)]">
@@ -162,7 +178,7 @@ export default function Layout() {
           </button>
         </div>
         <nav className="flex-1 overflow-y-auto p-3 space-y-1">
-          <NavLink
+          {allowed(routePermissions[dashboardLink.to]) && <NavLink
             to={dashboardLink.to}
             end={dashboardLink.end}
             onClick={closeMobileNav}
@@ -172,14 +188,14 @@ export default function Layout() {
           >
             <dashboardLink.icon size={18} />
             {dashboardLink.label}
-          </NavLink>
+          </NavLink>}
           {navGroups.map((group) => (
             <div key={group.label} className="pt-3">
               <div className="px-3 pb-1.5 text-[10px] font-medium tracking-[0.12em] text-[var(--muted)] opacity-70">
                 {group.label}
               </div>
               <div className="space-y-1">
-                {group.items.filter((item) => !('adminOnly' in item) || !item.adminOnly || role === 'owner' || role === 'admin').map((item) => (
+                {group.items.filter((item) => allowed(routePermissions[item.to]) && (!('adminOnly' in item) || !item.adminOnly || role === 'owner' || permissions.includes('video_taxonomy.access'))).map((item) => (
                   <NavLink
                     key={item.to}
                     to={item.to}
@@ -195,6 +211,13 @@ export default function Layout() {
               </div>
             </div>
           ))}
+          {(role === 'owner' || permissions.some(code=>code.startsWith('tenant_')) || isPlatformAdmin) && <div className="pt-3">
+            <div className="px-3 pb-1.5 text-[10px] font-medium tracking-[0.12em] text-[var(--muted)] opacity-70">系统管理</div>
+            <div className="space-y-1">
+              {(role === 'owner' || permissions.some(code=>code.startsWith('tenant_'))) && <NavLink to="/tenant-admin" onClick={closeMobileNav} className={navClassName}><UsersRound size={18}/>企业管理后台</NavLink>}
+              {isPlatformAdmin && <NavLink to="/platform-admin" onClick={closeMobileNav} className={navClassName}><Building2 size={18}/>平台管理后台</NavLink>}
+            </div>
+          </div>}
           <div className="pt-4 mt-4 border-t border-[var(--border)]">
             <button
               type="button"

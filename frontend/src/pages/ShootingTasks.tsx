@@ -3,21 +3,27 @@ import { Link } from 'react-router-dom';
 import {
   ArrowUpRight,
   CheckCircle2,
-  ChevronRight,
   ClipboardList,
   Clock3,
   Loader2,
+  RefreshCw,
   Search,
   UserRound,
 } from 'lucide-react';
 import { directorApi } from '../api/client';
 import type { ShootingTask } from '../types';
+import { notificationLabels } from '../lib/notificationStatus';
 
 const statusLabel: Record<ShootingTask['status'], string> = {
-  pending: '待接收',
+  pending: '待处理',
   in_progress: '拍摄中',
   completed: '已完成',
 };
+
+function localTime(value: string) {
+  // The backend's existing timestamp columns store UTC without a timezone suffix.
+  return new Date(/(?:Z|[+-]\d{2}:\d{2})$/i.test(value) ? value : `${value}Z`).toLocaleString();
+}
 
 export default function ShootingTasksPage() {
   const [tasks, setTasks] = useState<ShootingTask[]>([]);
@@ -25,6 +31,29 @@ export default function ShootingTasksPage() {
   const [status, setStatus] = useState<'all' | ShootingTask['status']>('all');
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+  const [retrying, setRetrying] = useState<number | null>(null);
+  const [refreshing, setRefreshing] = useState(false);
+
+  async function refreshTasks() {
+    setRefreshing(true);
+    setError('');
+    try { setTasks(await directorApi.shootingTasks()); }
+    catch { setError('拍摄任务刷新失败，请重试'); }
+    finally { setRefreshing(false); }
+  }
+
+  async function retry(task: ShootingTask) {
+    if (retrying !== null) return;
+    setRetrying(task.id);
+    setError('');
+    try {
+      const updated = await directorApi.retryNotification(task.id);
+      setTasks((rows) => rows.map((row) => row.id === updated.id ? updated : row));
+    } catch (err: any) {
+      setError(typeof err?.response?.data?.detail === 'string' ? err.response.data.detail : '暂时无法确认重试结果，请刷新并核对飞书消息');
+      try { setTasks(await directorApi.shootingTasks()); } catch { /* Preserve current records. */ }
+    } finally { setRetrying(null); }
+  }
 
   useEffect(() => {
     directorApi.shootingTasks()
@@ -36,7 +65,7 @@ export default function ShootingTasksPage() {
   const filtered = useMemo(() => tasks.filter((task) => {
     const search = query.trim().toLowerCase();
     if (status !== 'all' && task.status !== status) return false;
-    return !search || [task.project_name, task.department_name, task.assignee_name].some((value) => value.toLowerCase().includes(search));
+    return !search || [task.project_name, task.department_name, task.recipient_name, task.assignee_name].some((value) => value.toLowerCase().includes(search));
   }), [query, status, tasks]);
 
   return (
@@ -48,6 +77,7 @@ export default function ShootingTasksPage() {
           <p className="mt-3 text-sm text-[var(--muted)]">已推送脚本的拍摄执行清单</p>
         </div>
         <div className="flex items-center gap-5 text-xs text-[var(--muted)]">
+          <button className="btn-secondary" disabled={refreshing || retrying !== null} onClick={() => void refreshTasks()}><RefreshCw size={14} className={refreshing ? 'animate-spin' : ''} />刷新</button>
           <span className="inline-flex items-center gap-1.5"><ClipboardList size={14} />{tasks.length} 个任务</span>
           <span className="inline-flex items-center gap-1.5"><Clock3 size={14} />{tasks.filter((task) => task.status !== 'completed').length} 个待处理</span>
         </div>
@@ -57,7 +87,7 @@ export default function ShootingTasksPage() {
         <div className="flex flex-wrap items-center gap-2 border-b border-[var(--border)] pb-3">
           {([
             ['all', '全部'],
-            ['pending', '待接收'],
+            ['pending', '待处理'],
             ['in_progress', '拍摄中'],
             ['completed', '已完成'],
           ] as const).map(([value, label]) => (
@@ -92,21 +122,23 @@ export default function ShootingTasksPage() {
                     <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-[var(--muted)]">
                       <span>{task.section_count} 个脚本结构</span>
                       <span>{task.project_mode === 'reference' ? '参考视频仿写' : 'AI 原创脚本'}</span>
-                      <span className="inline-flex items-center gap-1"><Clock3 size={12} />{new Date(task.created_at).toLocaleString()}</span>
+                      <span className="inline-flex items-center gap-1"><Clock3 size={12} />{localTime(task.created_at)}</span>
                     </div>
                     {task.note && <p className="mt-2 text-xs text-[var(--muted)] line-clamp-2">拍摄要求: {task.note}</p>}
                   </div>
                 </div>
                 <div className="min-w-0 text-xs">
-                  <div className="mb-1 text-[10px] text-[var(--muted)]">接收人</div>
+                  <div className="mb-1 text-[10px] text-[var(--muted)]">{task.recipient_type === 'chat' ? '接收群' : '接收人'}</div>
                   <div className="flex min-w-0 items-center gap-1.5 font-medium">
                     <UserRound size={13} className="shrink-0" />
-                    <span className="truncate">{task.channel_name}</span>
-                    <ChevronRight size={12} className="shrink-0 text-[var(--muted)]" />
-                    <span className="truncate">{task.department_name}</span>
-                    <ChevronRight size={12} className="shrink-0 text-[var(--muted)]" />
-                    <span className="truncate">{task.assignee_name}</span>
+                    <span className="truncate">{task.recipient_name || task.assignee_name}</span>
+                    {task.department_name && <span className="truncate text-[var(--muted)]">· {task.department_name}</span>}
                   </div>
+                  {task.recipient_type === 'chat' && <p className="mt-1 text-[var(--muted)]">未指定拍摄负责人</p>}
+                  <p className={`mt-2 ${task.notification_status === 'sent' ? 'text-emerald-700' : task.notification_status === 'failed' ? 'text-red-700' : 'text-amber-700'}`}>飞书：{notificationLabels[task.notification_status]}</p>
+                  {task.notification_error && <p className="mt-1 break-words text-[var(--muted)]">{task.notification_error}</p>}
+                  {task.notified_at && <p className="mt-1 text-[var(--muted)]">发送于 {localTime(task.notified_at)}</p>}
+                  {task.can_retry_notification && <button className="mt-2 inline-flex items-center gap-1 underline disabled:opacity-50" disabled={retrying !== null} onClick={() => void retry(task)}>{retrying === task.id ? <Loader2 size={12} className="animate-spin" /> : <RefreshCw size={12} />}重试通知</button>}
                 </div>
                 <Link className="btn-secondary h-9 justify-center" to={`/director-inspiration/${task.project_id}/workspace`}><ArrowUpRight size={14} />打开脚本</Link>
               </article>

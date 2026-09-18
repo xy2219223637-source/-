@@ -52,6 +52,33 @@ def get_db() -> Generator[Session, None, None]:
         db.close()
 
 
+def migrate_feishu_notifications(bind: Engine) -> None:
+    """Keep old simulated assignments unsent; nullable UUIDs allow legacy rows."""
+    with bind.begin() as connection:
+        columns = _table_columns(connection, "shooting_tasks")
+        if not columns:
+            return
+        json_type = "JSONB NOT NULL DEFAULT '{}'::jsonb" if bind.dialect.name == "postgresql" else "JSON NOT NULL DEFAULT '{}'"
+        additions = {
+            "recipient_type": "VARCHAR(16) NOT NULL DEFAULT ''",
+            "recipient_id": "VARCHAR(128) NOT NULL DEFAULT ''",
+            "recipient_name": "VARCHAR(256) NOT NULL DEFAULT ''",
+            "notification_status": "VARCHAR(16) NOT NULL DEFAULT 'not_sent'",
+            "notification_uuid": "VARCHAR(36) NULL",
+            "notification_app_id": "VARCHAR(128) NOT NULL DEFAULT ''",
+            "notification_payload": json_type,
+            "feishu_message_id": "VARCHAR(128) NOT NULL DEFAULT ''",
+            "notification_error": "TEXT NOT NULL DEFAULT ''",
+            "notification_started_at": "TIMESTAMP NULL",
+            "notified_at": "TIMESTAMP NULL",
+        }
+        for name, definition in additions.items():
+            if name not in columns:
+                connection.execute(text(f"ALTER TABLE shooting_tasks ADD COLUMN {name} {definition}"))
+        connection.execute(text("CREATE UNIQUE INDEX IF NOT EXISTS uq_shooting_notification_uuid ON shooting_tasks (tenant_id, notification_uuid)"))
+        connection.execute(text("CREATE UNIQUE INDEX IF NOT EXISTS uq_shooting_active_recipient ON shooting_tasks (tenant_id, project_id, recipient_type, recipient_id) WHERE recipient_id <> '' AND status IN ('pending', 'in_progress')"))
+
+
 def _table_columns(connection, table_name: str) -> set[str]:
     inspector = inspect(connection)
     try:
@@ -81,6 +108,32 @@ def init_db() -> None:
     # the old project_id constraint or add the new bookkeeping columns.
     # inspect must run after create_all, and must tolerate missing legacy tables.
     with engine.begin() as connection:
+        user_columns = _table_columns(connection, "users")
+        user_additions = {
+            "phone": "VARCHAR(20) NULL",
+            "is_platform_admin": "BOOLEAN NOT NULL DEFAULT FALSE",
+            "must_change_password": "BOOLEAN NOT NULL DEFAULT FALSE",
+            "job_title": "VARCHAR(120) NOT NULL DEFAULT ''",
+            "employee_no": "VARCHAR(100) NOT NULL DEFAULT ''",
+        }
+        for name, definition in user_additions.items():
+            if name not in user_columns:
+                connection.execute(text(f"ALTER TABLE users ADD COLUMN {name} {definition}"))
+        if user_columns:
+            connection.execute(text("CREATE UNIQUE INDEX IF NOT EXISTS uq_users_phone ON users (phone) WHERE phone IS NOT NULL"))
+        member_columns = _table_columns(connection, "tenant_members")
+        for name in ("team_id", "group_id", "role_id"):
+            if member_columns and name not in member_columns:
+                connection.execute(text(f"ALTER TABLE tenant_members ADD COLUMN {name} INTEGER NULL"))
+                connection.execute(text(f"CREATE INDEX IF NOT EXISTS ix_tenant_members_{name} ON tenant_members ({name})"))
+        # Preserve the original user's identity and tenant ownership while switching
+        # the login identifier to a phone number. This migration is idempotent.
+        if user_columns:
+            connection.execute(text("""UPDATE users SET phone = '15271933010', is_platform_admin = TRUE
+                WHERE lower(email) = '345983950@qq.com' AND (phone IS NULL OR phone = '15271933010')
+                AND NOT EXISTS (SELECT 1 FROM users other WHERE other.phone = '15271933010' AND other.id <> users.id)"""))
+            connection.execute(text("""UPDATE tenant_members SET role = 'owner', status = 'active'
+                WHERE user_id IN (SELECT id FROM users WHERE lower(email) = '345983950@qq.com')"""))
         json_default = _json_column_sql(connection)
         columns = _table_columns(connection, "video_assets")
         if columns:
@@ -153,3 +206,29 @@ def init_db() -> None:
                     SELECT 1 FROM video_edit_project_assets link
                     WHERE link.project_id = video_assets.project_id AND link.asset_id = video_assets.id)"""))
     migrate_legacy_schema(engine)
+    migrate_feishu_notifications(engine)
+    _ensure_default_tenant_roles()
+
+
+def _ensure_default_tenant_roles() -> None:
+    from app.models import Tenant, TenantMember, TenantRole
+    from app.permissions import ALL_ADMIN_PERMISSIONS, ALL_USER_PERMISSIONS
+
+    db = SessionLocal()
+    try:
+        for tenant in db.query(Tenant).all():
+            employee = db.query(TenantRole).filter_by(tenant_id=tenant.id, code="employee", status="active").first()
+            if not employee:
+                employee = TenantRole(tenant_id=tenant.id, name="普通员工", code="employee", permissions=ALL_USER_PERMISSIONS, is_system=True)
+                db.add(employee); db.flush()
+            administrator = db.query(TenantRole).filter_by(tenant_id=tenant.id, code="administrator", status="active").first()
+            if not administrator:
+                administrator = TenantRole(tenant_id=tenant.id, name="企业管理员", code="administrator",
+                                           permissions=ALL_USER_PERMISSIONS + ALL_ADMIN_PERMISSIONS, is_system=True)
+                db.add(administrator); db.flush()
+            for member in db.query(TenantMember).filter_by(tenant_id=tenant.id).all():
+                if member.role_id is None and member.role != "owner":
+                    member.role_id = administrator.id if member.role == "admin" else employee.id
+        db.commit()
+    finally:
+        db.close()

@@ -3,7 +3,6 @@ import { useNavigate } from 'react-router-dom';
 import {
   ArrowUpRight,
   CheckCircle2,
-  ChevronLeft,
   ChevronRight,
   Clapperboard,
   Clock3,
@@ -17,33 +16,20 @@ import {
   Sparkles,
   Trash2,
   Upload,
-  UserRound,
   Users,
   WandSparkles,
   X,
 } from 'lucide-react';
 import { directorApi, mediaUrl } from '../api/client';
 import { CaptureExtensionError, createVideoCapture, extractSharedVideoUrl, isDirectVideoUrl } from '../lib/videoCaptureExtension';
-import type { DirectorProject, ShootingDirectory } from '../types';
+import type { DirectorProject, ShootingTask } from '../types';
+import FeishuPushDialog from '../components/FeishuPushDialog';
+import { notificationSummary } from '../lib/notificationStatus';
 
 const statusLabel: Record<string, string> = {
   draft: '草稿', capturing: '采集中', queued: '排队中', analyzing: '解析中', analyzed: '已解析',
   generating: '生成中', ready: '可编辑', mixing: '混剪中', preview_ready: '预览可用', failed: '失败',
 };
-
-const simulatedShootingDirectory: ShootingDirectory[] = [
-  {
-    id: 'feishu',
-    name: '飞书',
-    departments: [
-      {
-        id: 'shooting-department-1',
-        name: '拍摄部1',
-        members: [{ id: 'zhang-san', name: '张三' }],
-      },
-    ],
-  },
-];
 
 function durationLabel(seconds: number) {
   const value = Math.max(0, Math.round(seconds || 0));
@@ -62,7 +48,8 @@ export default function DirectorProjectsPage() {
   const autoCaptureStarted = useRef(false);
   const [mode, setMode] = useState<'reference' | 'original'>('reference');
   const [projects, setProjects] = useState<DirectorProject[]>([]);
-  const [shootingDirectory, setShootingDirectory] = useState<ShootingDirectory[]>(simulatedShootingDirectory);
+  const [pushProject, setPushProject] = useState<DirectorProject | null>(null);
+  const [pushResult, setPushResult] = useState<ShootingTask | null>(null);
   const [historyMode, setHistoryMode] = useState<'mine' | 'shared' | 'analysis'>('mine');
   const [query, setQuery] = useState('');
   const [file, setFile] = useState<File | null>(null);
@@ -72,8 +59,6 @@ export default function DirectorProjectsPage() {
   const [language, setLanguage] = useState('中文');
   const [advanced, setAdvanced] = useState(false);
   const [menuId, setMenuId] = useState<number | null>(null);
-  const [pushMenuLevel, setPushMenuLevel] = useState<0 | 1 | 2>(0);
-  const [pushingId, setPushingId] = useState<number | null>(null);
   const [deletingId, setDeletingId] = useState<number | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
@@ -87,12 +72,6 @@ export default function DirectorProjectsPage() {
         setProjects([]);
         setError('编导项目加载失败, 请刷新页面重试');
       });
-  }, []);
-
-  useEffect(() => {
-    directorApi.shootingDirectory()
-      .then((rows) => { if (Array.isArray(rows) && rows.length) setShootingDirectory(rows); })
-      .catch(() => setShootingDirectory(simulatedShootingDirectory));
   }, []);
 
   useEffect(() => {
@@ -180,36 +159,6 @@ export default function DirectorProjectsPage() {
     }
   }
 
-  async function pushShootingTask(project: DirectorProject) {
-    const channel = shootingDirectory[0];
-    const department = channel?.departments[0];
-    const member = department?.members[0];
-    if (!channel || !department || !member) {
-      setError('模拟拍摄人员数据不可用, 请刷新页面重试');
-      return;
-    }
-    setPushingId(project.id);
-    setSuccess('');
-    setError('');
-    try {
-      await directorApi.createShootingTask(project.id, {
-        channel_id: channel.id,
-        department_id: department.id,
-        assignee_id: member.id,
-        note: '',
-      });
-      setMenuId(null);
-      setPushMenuLevel(0);
-      setSuccess(`已推送给 ${channel.name} > ${department.name} > ${member.name}`);
-    } catch (requestError: any) {
-      setMenuId(null);
-      setPushMenuLevel(0);
-      setError(requestError?.response?.data?.detail || '拍摄任务推送失败, 请重试');
-    } finally {
-      setPushingId(null);
-    }
-  }
-
   const filtered = useMemo(() => projects.filter((project) => {
     if (historyMode === 'shared') return false;
     if (historyMode === 'analysis' && project.mode !== 'reference') return false;
@@ -268,7 +217,9 @@ export default function DirectorProjectsPage() {
       </section>
 
       {error && <div className="mx-auto max-w-4xl border border-red-200 bg-red-50 rounded-md px-4 py-3 text-sm text-red-700">{error}</div>}
-      {success && <div className="mx-auto flex max-w-4xl flex-wrap items-center justify-between gap-3 border border-emerald-200 bg-emerald-50 rounded-md px-4 py-3 text-sm text-emerald-800"><span className="inline-flex items-center gap-2"><CheckCircle2 size={16} />{success}</span>{success.startsWith('已推送') && <button className="font-medium underline underline-offset-4" onClick={() => navigate('/shooting-tasks')}>查看拍摄任务</button>}</div>}
+      {success && <div className="mx-auto border border-emerald-200 bg-emerald-50 rounded-md px-4 py-3 text-sm text-emerald-800"><span className="inline-flex items-center gap-2"><CheckCircle2 size={16} />{success}</span></div>}
+      {pushResult && <div role="status" className={`mx-auto flex max-w-4xl flex-wrap items-center justify-between gap-3 rounded-md border px-4 py-3 text-sm ${pushResult.notification_status === 'sent' ? 'border-emerald-200 bg-emerald-50 text-emerald-800' : 'border-amber-200 bg-amber-50 text-amber-900'}`}><span>{notificationSummary(pushResult)}</span><button className="font-medium underline underline-offset-4" onClick={() => navigate('/shooting-tasks')}>查看拍摄任务</button></div>}
+      {pushProject && <FeishuPushDialog key={pushProject.id} project={pushProject} onClose={() => setPushProject(null)} onResult={setPushResult} />}
       {extensionMissing && <div className="mx-auto flex max-w-4xl flex-wrap items-center justify-between gap-3 rounded-md border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900"><span>平台视频需要视频采集插件.</span><a className="inline-flex items-center gap-2 font-medium text-amber-950 underline underline-offset-4" href="/downloads/enrui-video-capture-extension.zip" download><Puzzle size={15} />下载插件</a></div>}
 
       <section>
@@ -298,25 +249,13 @@ export default function DirectorProjectsPage() {
                   <div className="mt-2 flex gap-1.5">{project.sections.slice(0, 4).map((section) => <span key={section.id} className="text-[10px] border border-[var(--border)] rounded px-1.5 py-0.5 text-[var(--muted)]">{section.title}</span>)}</div>
                 </div>
                 <span className={`hidden sm:inline text-xs px-2.5 py-1 rounded-full ${project.status === 'failed' ? 'badge-err' : isRunning ? 'badge-run' : 'badge-ok'}`}>{statusLabel[project.status] || project.status}</span>
-                <button className="w-8 h-8 grid place-items-center text-[var(--muted)] hover:text-black" onClick={(event) => { event.stopPropagation(); setMenuId(menuId === project.id ? null : project.id); setPushMenuLevel(0); }} title="更多操作"><MoreHorizontal size={18} /></button>
+                <button className="w-8 h-8 grid place-items-center text-[var(--muted)] hover:text-black" onClick={(event) => { event.stopPropagation(); setMenuId(menuId === project.id ? null : project.id); }} title="更多操作"><MoreHorizontal size={18} /></button>
                 <ChevronRight size={17} className="hidden sm:block text-[var(--muted)]" />
                 {menuId === project.id && <div className="absolute right-12 top-12 z-10 w-44 border border-[var(--border)] rounded-md bg-white shadow-lg p-1" onClick={(event) => event.stopPropagation()}>
-                  {pushMenuLevel === 0 && <>
                     <button className="w-full px-3 py-2 text-xs text-left rounded hover:bg-[var(--bg-elevated)] inline-flex items-center gap-2" onClick={() => navigate(`/director-inspiration/${project.id}/workspace`)}><ArrowUpRight size={13} />打开工作台</button>
-                    <button className="w-full px-3 py-2 text-xs text-left rounded hover:bg-[var(--bg-elevated)] flex items-center gap-2 disabled:opacity-40 disabled:cursor-not-allowed" disabled={!project.sections.length} title={project.sections.length ? `推送到${shootingDirectory[0]?.name || '飞书'}` : '脚本暂无可推送内容'} onClick={() => setPushMenuLevel(1)}><Send size={13} /><span className="flex-1">推送{shootingDirectory[0]?.name || '飞书'}</span><ChevronRight size={13} /></button>
+                    <button className="w-full px-3 py-2 text-xs text-left rounded hover:bg-[var(--bg-elevated)] flex items-center gap-2 disabled:opacity-40 disabled:cursor-not-allowed" disabled={!project.sections.length || isRunning} title={isRunning ? '脚本正在处理中' : project.sections.length ? '推送到飞书' : '脚本暂无可推送内容'} onClick={() => { setMenuId(null); setPushResult(null); setSuccess(''); setError(''); setPushProject(project); }}><Send size={13} /><span className="flex-1">推送飞书</span><ChevronRight size={13} /></button>
                     <div className="my-1 border-t border-[var(--border)]" />
                     <button className="w-full px-3 py-2 text-xs text-left rounded text-red-700 hover:bg-red-50 inline-flex items-center gap-2 disabled:opacity-50" disabled={deletingId === project.id} onClick={() => void deleteProject(project)}>{deletingId === project.id ? <Loader2 size={13} className="animate-spin" /> : <Trash2 size={13} />}删除</button>
-                  </>}
-                  {pushMenuLevel === 1 && <>
-                    <button className="w-full px-3 py-2 text-xs text-left rounded text-[var(--muted)] hover:bg-[var(--bg-elevated)] inline-flex items-center gap-2" onClick={() => setPushMenuLevel(0)}><ChevronLeft size={13} />{shootingDirectory[0]?.name || '飞书'}</button>
-                    <div className="my-1 border-t border-[var(--border)]" />
-                    <button className="w-full px-3 py-2 text-xs text-left rounded hover:bg-[var(--bg-elevated)] flex items-center gap-2" onClick={() => setPushMenuLevel(2)}><span className="flex-1">{shootingDirectory[0]?.departments[0]?.name || '拍摄部1'}</span><ChevronRight size={13} /></button>
-                  </>}
-                  {pushMenuLevel === 2 && <>
-                    <button className="w-full px-3 py-2 text-xs text-left rounded text-[var(--muted)] hover:bg-[var(--bg-elevated)] inline-flex items-center gap-2" onClick={() => setPushMenuLevel(1)}><ChevronLeft size={13} />{shootingDirectory[0]?.departments[0]?.name || '拍摄部1'}</button>
-                    <div className="my-1 border-t border-[var(--border)]" />
-                    <button className="w-full px-3 py-2 text-xs text-left rounded hover:bg-[var(--bg-elevated)] inline-flex items-center gap-2 disabled:opacity-50" disabled={pushingId === project.id} onClick={() => void pushShootingTask(project)}>{pushingId === project.id ? <Loader2 size={13} className="animate-spin" /> : <UserRound size={13} />}{shootingDirectory[0]?.departments[0]?.members[0]?.name || '张三'}</button>
-                  </>}
                 </div>}
               </div>
             );
