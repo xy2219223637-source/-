@@ -114,6 +114,18 @@ def _require_admin(auth: AuthContext) -> None:
         raise HTTPException(403, "仅管理员可以维护分类和公共标签")
 
 
+def _require_asset_access(auth: AuthContext, assets: list[VideoAsset]) -> None:
+    if auth.role == "owner" or "*" in auth.permissions:
+        return
+    required = {
+        "finished_assets.access" if object_type_for_asset(asset) == "material" else "final_videos.access"
+        for asset in assets
+    }
+    missing = required - set(auth.permissions)
+    if missing:
+        raise HTTPException(403, "当前角色没有对应素材库的操作权限")
+
+
 def _name(value: str) -> str:
     clean = value.strip()
     if not clean:
@@ -160,12 +172,20 @@ def _tag(db: Session, auth: AuthContext, tag_id: int) -> VideoTag:
     return row
 
 
-def _validate_parent(db: Session, auth: AuthContext, object_type: str, parent_id: Optional[int]) -> Optional[VideoCategory]:
+def _validate_parent(
+    db: Session,
+    auth: AuthContext,
+    object_type: str,
+    parent_id: Optional[int],
+    require_active: bool = False,
+) -> Optional[VideoCategory]:
     if parent_id is None:
         return None
     parent = _category(db, auth, parent_id)
     if parent.object_type != object_type or parent.parent_id is not None:
         raise HTTPException(422, "二级分类只能挂在同类型的一级分类下")
+    if require_active and parent.status != "active":
+        raise HTTPException(422, "不能在已停用的一级分类下维护二级分类")
     return parent
 
 
@@ -336,7 +356,7 @@ def catalog(
 def create_category(payload: CategoryCreate, db: Session = Depends(get_db), auth: AuthContext = Depends(current_auth)):
     _require_admin(auth)
     name = _name(payload.name)
-    _validate_parent(db, auth, payload.object_type, payload.parent_id)
+    _validate_parent(db, auth, payload.object_type, payload.parent_id, require_active=True)
     _validate_unique_category_name(db, auth, payload.object_type, payload.parent_id, name)
     row = VideoCategory(
         tenant_id=auth.tenant_id,
@@ -361,9 +381,19 @@ def update_category(category_id: int, payload: CategoryUpdate, db: Session = Dep
     _require_admin(auth)
     row = _category(db, auth, category_id)
     parent_id = payload.parent_id if "parent_id" in payload.model_fields_set else row.parent_id
-    _validate_parent(db, auth, row.object_type, parent_id)
+    _validate_parent(
+        db,
+        auth,
+        row.object_type,
+        parent_id,
+        require_active=parent_id is not None and (parent_id != row.parent_id or payload.status == "active"),
+    )
     if parent_id == row.id:
         raise HTTPException(422, "分类不能成为自己的父分类")
+    if payload.status == "active" and parent_id is not None:
+        parent = _category(db, auth, parent_id)
+        if parent.status != "active":
+            raise HTTPException(422, "父分类已停用，不能启用该二级分类")
     if parent_id is not None and db.query(VideoCategory).filter(VideoCategory.parent_id == row.id).first():
         raise HTTPException(422, "包含二级分类的一级分类不能移动")
     name = _name(payload.name) if payload.name is not None else row.name
@@ -641,6 +671,7 @@ def update_assets(payload: AssetTaxonomyUpdate, db: Session = Depends(get_db), a
     ).all()
     if len(assets) != len(asset_ids):
         raise HTTPException(404, "部分视频不存在或无权访问")
+    _require_asset_access(auth, assets)
 
     category = None
     if payload.set_category and payload.category_id is not None:
@@ -649,6 +680,9 @@ def update_assets(payload: AssetTaxonomyUpdate, db: Session = Depends(get_db), a
             raise HTTPException(422, "不能使用已停用分类")
         if category.parent_id is None:
             raise HTTPException(422, "素材只能绑定二级分类")
+        parent = _category(db, auth, category.parent_id)
+        if parent.status != "active":
+            raise HTTPException(422, "不能使用父分类已停用的分类")
     if payload.set_category:
         for asset in assets:
             if category is not None and category.object_type != object_type_for_asset(asset):
@@ -669,6 +703,11 @@ def update_assets(payload: AssetTaxonomyUpdate, db: Session = Depends(get_db), a
     for tag_id in payload.add_tag_ids:
         if accessible_tags[tag_id].status != "active":
             raise HTTPException(422, "不能添加已停用标签")
+        tag = accessible_tags[tag_id]
+        if tag.scope == "public":
+            group = _group(db, auth, tag.group_id)
+            if group.status != "active":
+                raise HTTPException(422, "不能添加所属标签组已停用的标签")
     for asset in assets:
         for tag_id in payload.add_tag_ids:
             if not applies_to_object(accessible_tags[tag_id].applies_to, object_type_for_asset(asset)):

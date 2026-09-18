@@ -58,7 +58,7 @@ export default function App() {
             <Route path="design-skills" element={<DesignSkillsPage />} />
             <Route path="brand-visuals" element={<BrandVisualsPage />} />
             <Route path="task-center" element={<TaskCenterPage />} />
-            <Route path="video-taxonomy" element={<VideoTaxonomyPage />} />
+            <Route path="video-taxonomy" element={<Navigate to="/tenant-admin/taxonomy" replace />} />
             <Route path="detail-templates" element={<DetailTemplatesPage />} />
             <Route path="production" element={<ProductionHubPage />} />
             <Route path="quality" element={<QualityWorkbenchPage />} />
@@ -82,6 +82,7 @@ export default function App() {
             <Route path="platform-admin" element={<PlatformAdmin />} />
             <Route path="tenant-admin" element={<TenantAdmin />} />
             <Route path="tenant-admin/roles" element={<TenantRoles />} />
+            <Route path="tenant-admin/taxonomy" element={<VideoTaxonomyPage />} />
             <Route path="smart-video-compose" element={<PerformanceVideoProjectsPage editMode="smart_compose" title="智能成片" description="只用半成品素材，按 Hook→卖点→品牌信任→痛点→展示→使用→效果→直播间 CTA 生成成片，并自动进入成片库。" />} />
             <Route path="smart-video-compose/:id" element={<AutoEditWorkspace />} />
             <Route path="finished-video-remix" element={<PerformanceVideoProjectsPage editMode="finished_remix" title="成品混剪" description="只用已审核可复用的成品素材，保留原声、原画面和原字幕，按相邻语义衔接生成多个去重版本。" />} />

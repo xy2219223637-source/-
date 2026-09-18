@@ -12,7 +12,7 @@ from app.api.video_taxonomy import AssetTaxonomyUpdate, PersonalTagCreate, catal
 from app.api.video_library import get_asset
 from app.auth import AuthContext
 from app.database import Base
-from app.models import Product, VideoAsset, VideoAssetTag, VideoCategory, VideoTag
+from app.models import Product, VideoAsset, VideoAssetTag, VideoCategory, VideoTag, VideoTagGroup
 from app.services.video_taxonomy import ensure_default_taxonomy, inherit_public_tags_to_final
 
 
@@ -149,6 +149,40 @@ class VideoTaxonomyTest(unittest.TestCase):
         update_assets(AssetTaxonomyUpdate(asset_ids=[asset.id], remove_tag_ids=[tag.id]), self.db, self.auth)
         self.assertEqual(self.db.query(VideoAssetTag).filter_by(asset_id=asset.id, tag_id=tag.id).count(), 0)
 
+    def test_inactive_parent_category_cannot_receive_new_assignments(self) -> None:
+        ensure_default_taxonomy(self.db, self.auth.tenant_id)
+        self.db.commit()
+        asset = self._asset("material-inactive-parent")
+        child = self.db.query(VideoCategory).filter_by(
+            tenant_id="tenant-1", object_type="material"
+        ).filter(VideoCategory.parent_id.is_not(None)).first()
+        parent = self.db.query(VideoCategory).filter_by(id=child.parent_id).one()
+        parent.status = "inactive"
+        self.db.commit()
+
+        with self.assertRaises(HTTPException) as raised:
+            update_assets(AssetTaxonomyUpdate(
+                asset_ids=[asset.id], set_category=True, category_id=child.id
+            ), self.db, self.auth)
+        self.assertEqual(raised.exception.status_code, 422)
+
+    def test_tag_in_inactive_group_cannot_receive_new_assignments(self) -> None:
+        ensure_default_taxonomy(self.db, self.auth.tenant_id)
+        self.db.commit()
+        asset = self._asset("material-inactive-group")
+        tag = self.db.query(VideoTag).filter_by(
+            tenant_id="tenant-1", scope="public", status="active"
+        ).first()
+        group = self.db.query(VideoTagGroup).filter_by(id=tag.group_id).one()
+        group.status = "inactive"
+        self.db.commit()
+
+        with self.assertRaises(HTTPException) as raised:
+            update_assets(AssetTaxonomyUpdate(
+                asset_ids=[asset.id], add_tag_ids=[tag.id]
+            ), self.db, self.auth)
+        self.assertEqual(raised.exception.status_code, 422)
+
     def test_asset_detail_is_tenant_scoped(self) -> None:
         asset = self._asset("material-detail")
         serialized = get_asset(asset.id, self.db, self.auth)
@@ -158,6 +192,30 @@ class VideoTaxonomyTest(unittest.TestCase):
         with self.assertRaises(HTTPException) as raised:
             get_asset(asset.id, self.db, other_tenant)
         self.assertEqual(raised.exception.status_code, 404)
+
+    def test_asset_taxonomy_update_requires_library_permission(self) -> None:
+        ensure_default_taxonomy(self.db, self.auth.tenant_id)
+        self.db.commit()
+        asset = self._asset("material-permission")
+        child = self.db.query(VideoCategory).filter_by(
+            tenant_id="tenant-1", object_type="material", status="active"
+        ).filter(VideoCategory.parent_id.is_not(None)).first()
+
+        with self.assertRaises(HTTPException) as raised:
+            update_assets(AssetTaxonomyUpdate(
+                asset_ids=[asset.id], set_category=True, category_id=child.id
+            ), self.db, self.other_auth)
+        self.assertEqual(raised.exception.status_code, 403)
+
+        permitted = AuthContext(
+            "member-2", "tenant-1", "member", "member@example.com", "测试企业",
+            permissions=("finished_assets.access",),
+        )
+        update_assets(AssetTaxonomyUpdate(
+            asset_ids=[asset.id], set_category=True, category_id=child.id
+        ), self.db, permitted)
+        self.db.refresh(asset)
+        self.assertEqual(asset.category_id, child.id)
 
 
 if __name__ == "__main__":
