@@ -13,7 +13,7 @@ import {
   Upload,
   X,
 } from 'lucide-react';
-import {useNavigate} from 'react-router-dom';
+import {useLocation,useNavigate,useSearchParams} from 'react-router-dom';
 import {mediaUrl,productApi,videoLibraryApi,videoTaxonomyApi} from '../api/client';
 import {matchesVideoTaxonomy,VideoBatchTaxonomyBar,VideoTaxonomyFilters} from '../components/VideoTaxonomyFilters';
 import {VideoTaxonomySummary} from '../components/VideoTaxonomyEditor';
@@ -44,35 +44,70 @@ function businessStatus(asset:VideoLibraryAsset){
   return'review';
 }
 
+function positiveNumber(value:string|null){
+  const parsed=Number(value);
+  return Number.isInteger(parsed)&&parsed>0?parsed:null;
+}
+
+function idList(value:string|null){
+  return Array.from(new Set((value||'').split(',').map(item=>positiveNumber(item)).filter((item):item is number=>item!==null)));
+}
+
 export default function VideoAssetLibrary({libraryType,title,description}:Props){
   const navigate=useNavigate();
+  const location=useLocation();
+  const [searchParams,setSearchParams]=useSearchParams();
   const isFinished=libraryType==='finished';
   const [products,setProducts]=useState<Product[]>([]);
-  const [productId,setProductId]=useState('');
+  const [productId,setProductId]=useState(()=>searchParams.get('product')||'');
   const [assets,setAssets]=useState<VideoLibraryAsset[]>([]);
   const [busy,setBusy]=useState('');
   const [error,setError]=useState('');
-  const [tagFilter,setTagFilter]=useState('全部');
-  const [statusFilter,setStatusFilter]=useState('all');
-  const [durationFilter,setDurationFilter]=useState('all');
+  const [tagFilter,setTagFilter]=useState(()=>searchParams.get('ai_tag')||'全部');
+  const [statusFilter,setStatusFilter]=useState(()=>searchParams.get('status')||'all');
+  const [durationFilter,setDurationFilter]=useState(()=>searchParams.get('duration')||'all');
   const [uploadOpen,setUploadOpen]=useState(false);
   const [editingId,setEditingId]=useState<number|null>(null);
   const [tagDraft,setTagDraft]=useState('');
   const [catalog,setCatalog]=useState<VideoTaxonomyCatalog|null>(null);
-  const [taxonomyFilter,setTaxonomyFilter]=useState<VideoTaxonomyFilterValue>({categoryId:null,publicTagIds:[],publicTagMatchMode:'any',personalTagIds:[]});
-  const [selectedIds,setSelectedIds]=useState<number[]>([]);
+  const [taxonomyFilter,setTaxonomyFilter]=useState<VideoTaxonomyFilterValue>(()=>({
+    categoryId:positiveNumber(searchParams.get('category')),
+    publicTagIds:idList(searchParams.get('public_tags')),
+    publicTagMatchMode:searchParams.get('tag_match')==='all'?'all':'any',
+    personalTagIds:idList(searchParams.get('personal_tags')),
+  }));
+  const [selectedIds,setSelectedIds]=useState<number[]>(()=>idList(searchParams.get('selected')));
   const loadRequest=useRef(0);
+  const previousProductId=useRef(productId);
 
   useEffect(()=>{
     productApi.list().then(rows=>{
       setProducts(rows);
-      setProductId(String(rows[0]?.id||''));
+      setProductId(current=>rows.some(product=>String(product.id)===current)?current:String(rows[0]?.id||''));
     }).catch(()=>setError('商品列表加载失败'));
     void refreshCatalog();
   },[]);
 
   useEffect(()=>{
-    setSelectedIds([]);
+    setSearchParams(current=>{
+      const next=new URLSearchParams(current);
+      const setOrDelete=(key:string,value:string,defaultValue='')=>value&&value!==defaultValue?next.set(key,value):next.delete(key);
+      setOrDelete('product',productId);
+      setOrDelete('status',statusFilter,'all');
+      setOrDelete('duration',durationFilter,'all');
+      setOrDelete('ai_tag',tagFilter,'全部');
+      setOrDelete('category',taxonomyFilter.categoryId?String(taxonomyFilter.categoryId):'');
+      setOrDelete('public_tags',taxonomyFilter.publicTagIds.join(','));
+      setOrDelete('tag_match',taxonomyFilter.publicTagMatchMode,'any');
+      setOrDelete('personal_tags',taxonomyFilter.personalTagIds.join(','));
+      setOrDelete('selected',selectedIds.join(','));
+      return next;
+    },{replace:true});
+  },[productId,statusFilter,durationFilter,tagFilter,taxonomyFilter,selectedIds,setSearchParams]);
+
+  useEffect(()=>{
+    if(previousProductId.current&&previousProductId.current!==productId)setSelectedIds([]);
+    previousProductId.current=productId;
     if(!productId){setAssets([]);return;}
     void load();
     const refresh=()=>{if(document.visibilityState==='visible')void load(true)};
@@ -179,6 +214,9 @@ export default function VideoAssetLibrary({libraryType,title,description}:Props)
   });
   const allVisibleSelected=visibleAssets.length>0&&visibleAssets.every(asset=>selectedIds.includes(asset.id));
   const toggleSelection=(assetId:number)=>setSelectedIds(current=>current.includes(assetId)?current.filter(id=>id!==assetId):[...current,assetId]);
+  const openDetail=(assetId:number,suffix='')=>navigate(`/${libraryType==='finished'?'finished-video-assets':'semi-finished-assets'}/${assetId}${suffix}`,{
+    state:{libraryReturn:{url:location.pathname+location.search,scroll:window.scrollY}},
+  });
 
   return <div className="mx-auto max-w-7xl space-y-6 animate-fade-in">
     <header><div className="mb-2 text-xs tracking-[.18em] text-[var(--muted)]">{isFinished?'FINISHED VIDEO LIBRARY':'SEMI-FINISHED MATERIAL LIBRARY'}</div><h1 className="font-display text-4xl">{title}</h1><p className="mt-2 text-sm text-[var(--muted)]">{description}</p></header>
@@ -197,7 +235,7 @@ export default function VideoAssetLibrary({libraryType,title,description}:Props)
     {uploadOpen&&catalog&&productId&&<VideoUploadDialog libraryType={libraryType} productId={Number(productId)} productName={products.find(product=>product.id===Number(productId))?.name||'未命名商品'} catalog={catalog} onClose={()=>setUploadOpen(false)} onCatalogRefresh={refreshCatalog} onUploaded={async()=>{await Promise.all([load(true),refreshCatalog()])}}/>}
 
     {catalog&&<VideoTaxonomyFilters objectType="material" catalog={catalog} value={taxonomyFilter} onChange={setTaxonomyFilter} onRefresh={refreshCatalog} presetFilters={{product_id:Number(productId)||null,library_type:libraryType,status_filter:statusFilter,duration_filter:durationFilter,ai_tag_filter:tagFilter}} onApplyPreset={applyPreset}/>}
-    {catalog&&<VideoBatchTaxonomyBar catalog={catalog} selectedIds={selectedIds} onClear={()=>setSelectedIds([])} onDone={async()=>{await Promise.all([load(true),refreshCatalog()])}}/>}
+    {catalog&&<VideoBatchTaxonomyBar catalog={catalog} selectedIds={selectedIds} onClear={()=>setSelectedIds([])} onDone={()=>load(true)}/>}
 
     <section className="grid grid-cols-2 gap-3 lg:grid-cols-5">{(isFinished?[
       [stats.total,'全部素材','all'],[stats.processing,'处理中','processing'],[stats.review,'待确认','review'],[stats.usable,'可混剪','reusable'],[stats.excluded,'已排除','excluded'],
@@ -216,12 +254,12 @@ export default function VideoAssetLibrary({libraryType,title,description}:Props)
         return <article key={asset.id} className={`panel overflow-hidden ${selected?'border-black ring-1 ring-black':''} ${state==='excluded'||state==='blocked'?'opacity-60':''}`}>
           <div className="relative"><video className="aspect-video w-full bg-black object-cover" src={mediaUrl(asset.object_url)} controls preload="metadata"/><label className="absolute right-3 top-3 grid h-9 w-9 cursor-pointer place-items-center bg-white shadow" aria-label={`选择 ${asset.filename}`}><input className="sr-only" type="checkbox" checked={selected} onChange={()=>toggleSelection(asset.id)}/>{selected?<CheckSquare2 size={19}/>:<Square size={19}/>}</label>{isFinished&&<span className={`absolute left-3 top-3 px-2 py-1 text-[11px] font-medium shadow ${state==='reusable'?'bg-emerald-600 text-white':state==='review'?'bg-amber-400 text-black':state==='failed'||state==='blocked'?'bg-red-600 text-white':state==='processing'?'bg-blue-600 text-white':'bg-black/75 text-white'}`}>{businessStatusText[state]}</span>}</div>
           <div className="p-4"><div className="flex justify-between gap-2"><b className="truncate" title={asset.filename}>{asset.filename}</b>{!isFinished&&<span className={`shrink-0 text-xs ${asset.status==='analyzed'?'text-emerald-700':asset.status==='analysis_failed'?'text-red-600':'text-blue-600'}`}>{statusText[asset.status]||asset.status}</span>}</div><div className="mt-2 text-xs text-[var(--muted)]">{asset.duration_seconds.toFixed(1)} 秒 - {asset.width} x {asset.height}{asset.burned_subtitles?' - 烧录字幕':''}{asset.has_background_music?' - 原 BGM':''}</div>
-            <button className="mt-3 text-xs underline underline-offset-4" onClick={()=>navigate(`/${libraryType==='finished'?'finished-video-assets':'semi-finished-assets'}/${asset.id}?tab=used`)}>引用次数 {asset.reference_count??0}</button>
+            <button className="mt-3 text-xs underline underline-offset-4" onClick={()=>openDetail(asset.id,'?tab=used')}>引用次数 {asset.reference_count??0}</button>
             <div className="mt-3"><VideoTaxonomySummary asset={asset} compact/></div>
             {(asset.status==='queued_for_analysis'||asset.status==='analyzing')&&<div className="mt-3 border border-blue-100 bg-blue-50 p-3"><div className="flex items-center gap-2 text-xs text-blue-800"><Loader2 size={13} className="animate-spin"/>{asset.status==='queued_for_analysis'?'等待分析':'正在分析视频内容'}</div></div>}
             <p className="mt-3 min-h-10 text-sm leading-5">{asset.analysis?.summary||'等待 AI 生成内容摘要'}</p>
             {isFinished&&asset.status==='analyzed'&&<div className="mt-3 bg-[#f6f5f2] px-3 py-2 text-xs"><b>{asset.highlights.length} 个可用片段</b><span className="ml-2 text-[var(--muted)]">合计 {usableSeconds.toFixed(1)} 秒</span></div>}
-            <button className="btn-secondary mt-4 w-full justify-center" onClick={()=>navigate(`/${libraryType==='finished'?'finished-video-assets':'semi-finished-assets'}/${asset.id}`)}><Eye size={14}/>查看详情与标签</button>
+            <button className="btn-secondary mt-4 w-full justify-center" onClick={()=>openDetail(asset.id)}><Eye size={14}/>查看详情与标签</button>
             {editingId===asset.id&&<div className="mt-4 border border-blue-200 bg-blue-50 p-3"><div className="text-xs font-medium">修正 AI 分析标签</div><div className="mt-2 flex flex-wrap gap-1.5">{asset.effective_tags.map(tag=><button key={tag} onClick={()=>removeLegacyTag(asset,tag)} disabled={!!busy} className="inline-flex items-center gap-1 border border-blue-200 bg-white px-2 py-1 text-[11px]">{tag}<X size={11}/></button>)}</div><div className="mt-3 flex gap-2"><input className="min-w-0 flex-1 border border-blue-200 px-2 py-1.5 text-xs" value={tagDraft} onChange={event=>setTagDraft(event.target.value)} onKeyDown={event=>{if(event.key==='Enter'){event.preventDefault();addManualTags(asset)}}} placeholder="输入标签, 使用逗号分隔"/><button className="btn-secondary" onClick={()=>addManualTags(asset)} disabled={!tagDraft.trim()||!!busy}><Tag size={13}/>添加</button></div>{asset.removed_ai_tags.length>0&&<div className="mt-3 text-xs"><span className="text-[var(--muted)]">已隐藏 </span>{asset.removed_ai_tags.map(tag=><button className="ml-2 underline" key={tag} onClick={()=>restoreLegacyTag(asset,tag)}>{tag}</button>)}</div>}</div>}
             {isFinished?<div className="mt-4 flex flex-wrap gap-2">{state==='review'&&asset.generation_depth<=1&&<><button className="btn-primary" disabled={!!busy} onClick={()=>setReusable(asset,'reusable')}><CheckCircle2 size={14}/>确认可混剪</button><button className="btn-secondary" disabled={!!busy} onClick={()=>setReusable(asset,'excluded')}><Ban size={14}/>排除</button></>}{state==='reusable'&&<button className="btn-secondary" disabled={!!busy} onClick={()=>setReusable(asset,'excluded')}><Ban size={14}/>排除</button>}{state==='excluded'&&asset.generation_depth<=1&&<button className="btn-secondary" disabled={!!busy} onClick={()=>setReusable(asset,'review_required')}><CheckCircle2 size={14}/>恢复待确认</button>}{state==='failed'&&<button className="btn-secondary" onClick={()=>reanalyze(asset)} disabled={!!busy}><RefreshCw size={14}/>重新分析</button>}{asset.status==='analyzed'&&<button className="btn-secondary" onClick={()=>{setEditingId(editingId===asset.id?null:asset.id);setTagDraft('')}}><Pencil size={14}/>AI 标签</button>}</div>:<div className="mt-4 flex justify-between"><div className="flex flex-wrap gap-2"><button className="btn-secondary" onClick={()=>exclude(asset)} disabled={!!busy}>{asset.excluded?<><CheckCircle2 size={14}/>恢复</>:<><Ban size={14}/>排除</>}</button><button className="btn-secondary" onClick={()=>{setEditingId(editingId===asset.id?null:asset.id);setTagDraft('')}}><Pencil size={14}/>AI 标签</button></div>{asset.status==='analysis_failed'&&<button className="btn-secondary" onClick={()=>reanalyze(asset)} disabled={!!busy}><RefreshCw size={14}/>重新分析</button>}</div>}
           </div>
