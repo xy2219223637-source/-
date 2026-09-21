@@ -91,6 +91,9 @@ class DirectorProject(Base):
         "DirectorSection", back_populates="project", cascade="all, delete-orphan"
     )
 
+    last_edited_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    edit_time_tracked: Mapped[bool] = mapped_column(nullable=False, default=True)
+
 
 class DirectorCaptureSession(Base):
     """Short-lived authority for a browser extension to upload one source video."""

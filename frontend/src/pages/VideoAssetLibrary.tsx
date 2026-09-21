@@ -234,7 +234,7 @@ export default function VideoAssetLibrary({libraryType,title,description}:Props)
 
     {uploadOpen&&catalog&&productId&&<VideoUploadDialog libraryType={libraryType} productId={Number(productId)} productName={products.find(product=>product.id===Number(productId))?.name||'未命名商品'} catalog={catalog} onClose={()=>setUploadOpen(false)} onCatalogRefresh={refreshCatalog} onUploaded={async()=>{await Promise.all([load(true),refreshCatalog()])}}/>}
 
-    {catalog&&<VideoTaxonomyFilters objectType="material" catalog={catalog} value={taxonomyFilter} onChange={setTaxonomyFilter} onRefresh={refreshCatalog} presetFilters={{product_id:Number(productId)||null,library_type:libraryType,status_filter:statusFilter,duration_filter:durationFilter,ai_tag_filter:tagFilter}} onApplyPreset={applyPreset}/>}
+    {catalog&&<VideoTaxonomyFilters showPresets={false} objectType="material" catalog={catalog} value={taxonomyFilter} onChange={setTaxonomyFilter} onRefresh={refreshCatalog} presetFilters={{product_id:Number(productId)||null,library_type:libraryType,status_filter:statusFilter,duration_filter:durationFilter,ai_tag_filter:tagFilter}} onApplyPreset={applyPreset}/>}
     {catalog&&<VideoBatchTaxonomyBar catalog={catalog} selectedIds={selectedIds} onClear={()=>setSelectedIds([])} onDone={()=>load(true)}/>}
 
     <section className="grid grid-cols-2 gap-3 lg:grid-cols-5">{(isFinished?[

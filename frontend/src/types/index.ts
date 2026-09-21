@@ -251,6 +251,8 @@ export interface DirectorProject {
   sections: DirectorSection[];
   created_at: string;
   updated_at: string;
+  last_edited_at?: string | null;
+  edit_time_tracked?: boolean;
   collected_count?: number;
 }
 
