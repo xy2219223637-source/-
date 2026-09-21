@@ -9,6 +9,7 @@ type FilterProps={
   value:VideoTaxonomyFilterValue;
   onChange:(value:VideoTaxonomyFilterValue)=>void;
   onRefresh:()=>Promise<void>;
+  showPresets?:boolean;
   presetFilters?:Record<string,unknown>;
   onApplyPreset?:(filters:Record<string,unknown>)=>void;
 };
@@ -46,7 +47,7 @@ function TagButton({tag,selected,onClick}:{tag:VideoTaxonomyTag;selected:boolean
   </button>;
 }
 
-export function VideoTaxonomyFilters({objectType,catalog,value,onChange,onRefresh,presetFilters={},onApplyPreset}:FilterProps){
+export function VideoTaxonomyFilters({objectType,catalog,value,onChange,onRefresh,presetFilters={},onApplyPreset,showPresets=true}:FilterProps){
   const [search,setSearch]=useState('');
   const [activePublicGroupId,setActivePublicGroupId]=useState<number|null>(null);
   const publicGroupCloseTimer=useRef<number|null>(null);
@@ -153,9 +154,11 @@ export function VideoTaxonomyFilters({objectType,catalog,value,onChange,onRefres
     <div className="flex flex-wrap items-center justify-between gap-3 border-b border-[var(--border)] bg-[var(--bg-elevated)] px-4 py-3">
       <div><h2 className="text-sm font-medium">分类与标签</h2><p className="mt-1 text-[11px] text-[var(--muted)]">公共标签支持跨标签组多选</p></div>
       <div className="flex flex-wrap items-center gap-2">
+        {showPresets&&<>
         <select className="input-select min-w-44" value={presetId} onChange={event=>applyPreset(event.target.value)} aria-label="常用筛选预设"><option value="">选择常用筛选预设</option>{catalog.presets.map(item=><option key={item.id} value={item.id}>{item.name}</option>)}</select>
         {savingPreset?<><input autoFocus className="h-10 min-w-36 border border-[var(--border)] bg-white px-3 text-sm outline-none focus:border-black" value={presetName} onChange={event=>setPresetName(event.target.value)} onKeyDown={event=>{if(event.key==='Enter')void savePreset();if(event.key==='Escape')setSavingPreset(false)}} placeholder="预设名称"/><button className="btn-primary" onClick={savePreset} disabled={!presetName.trim()||busy==='preset'}>{busy==='preset'?<Loader2 size={14} className="animate-spin"/>:<Save size={14}/>}保存</button><button className="tax-icon-button p-2" onClick={()=>setSavingPreset(false)} aria-label="取消保存预设"><X size={16}/></button></>:<button className="btn-secondary" onClick={()=>setSavingPreset(true)}><BookmarkPlus size={14}/>保存预设</button>}
         {presetId&&<button className="p-2 text-[var(--muted)] hover:text-[var(--danger)]" onClick={deletePreset} aria-label="删除当前预设"><Trash2 size={16}/></button>}
+        </>}
         {activeCount>0&&<button className="btn-secondary" onClick={reset}><RotateCcw size={14}/>重置 {activeCount}</button>}
       </div>
     </div>

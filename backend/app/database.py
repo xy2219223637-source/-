@@ -210,7 +210,20 @@ def init_db() -> None:
                     WHERE link.project_id = video_assets.project_id AND link.asset_id = video_assets.id)"""))
     migrate_legacy_schema(engine)
     migrate_feishu_notifications(engine)
+    migrate_director_edit_time(engine)
     _ensure_default_tenant_roles()
+
+
+def migrate_director_edit_time(bind: Engine) -> None:
+    """Preserve unknown edit times on existing projects; new projects opt in via ORM."""
+    with bind.begin() as connection:
+        columns = _table_columns(connection, "director_projects")
+        if not columns:
+            return
+        if "last_edited_at" not in columns:
+            connection.execute(text("ALTER TABLE director_projects ADD COLUMN last_edited_at TIMESTAMP NULL"))
+        if "edit_time_tracked" not in columns:
+            connection.execute(text("ALTER TABLE director_projects ADD COLUMN edit_time_tracked BOOLEAN NOT NULL DEFAULT FALSE"))
 
 
 def _ensure_default_tenant_roles() -> None:

@@ -15,6 +15,7 @@ from urllib.parse import unquote, urlparse
 import aiofiles
 from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, Header, HTTPException, Request, UploadFile
 from pydantic import BaseModel, Field, HttpUrl
+from sqlalchemy import case, func, inspect
 from sqlalchemy.orm import Session
 
 from app.auth import AuthContext, current_auth
@@ -239,6 +240,26 @@ def _shot_out(row: DirectorShot) -> dict[str, Any]:
     }
 
 
+def _record_edit(db: Session, project: DirectorProject, *, content_changed: bool = False) -> None:
+    """Record persisted user content changes, excluding processing state changes."""
+    project_fields = ("analysis", "product_id", "product_service", "selling_points", "language", "name")
+    changed = content_changed or any(inspect(project).attrs[field].history.has_changes() for field in project_fields)
+    changed = changed or any(
+        isinstance(item, (DirectorSection, DirectorShot, DirectorAsset))
+        and item.project_id == project.id and db.is_modified(item, include_collections=False)
+        for item in db.dirty
+    )
+    if changed:
+        project.last_edited_at = _utcnow()
+        project.edit_time_tracked = True
+
+
+def _utc_iso(value: datetime | None) -> str | None:
+    if value is None:
+        return None
+    return value.replace(tzinfo=timezone.utc).isoformat() if value.tzinfo is None else value.astimezone(timezone.utc).isoformat()
+
+
 def _serialize(db: Session, row: DirectorProject) -> dict[str, Any]:
     if row.status == "capturing":
         db.refresh(row, with_for_update=True)
@@ -307,8 +328,10 @@ def _serialize(db: Session, row: DirectorProject) -> dict[str, Any]:
             }
             for section in sections
         ],
-        "created_at": row.created_at,
-        "updated_at": row.updated_at,
+        "created_at": _utc_iso(row.created_at),
+        "updated_at": _utc_iso(row.updated_at),
+        "last_edited_at": _utc_iso(row.last_edited_at),
+        "edit_time_tracked": row.edit_time_tracked,
     }
 
 
@@ -387,7 +410,11 @@ lines 是台词字符串数组. 不生成配音或音频字段, 不虚构商品�
 
 @router.get("")
 def list_projects(db: Session = Depends(get_db), auth: AuthContext = Depends(current_auth)):
-    rows = db.query(DirectorProject).filter_by(tenant_id=auth.tenant_id).order_by(DirectorProject.updated_at.desc()).all()
+    display_time = func.coalesce(DirectorProject.last_edited_at, case(
+        (DirectorProject.edit_time_tracked.is_(True), DirectorProject.created_at),
+        else_=DirectorProject.updated_at,
+    ))
+    rows = db.query(DirectorProject).filter_by(tenant_id=auth.tenant_id).order_by(display_time.desc(), DirectorProject.id.desc()).all()
     return [_serialize(db, row) for row in rows]
 
 
@@ -829,6 +856,7 @@ def update_analysis(
         "target_audience": clean_tags(payload.target_audience, 4),
         "target_pain_points": payload.target_pain_points.strip(),
     }
+    _record_edit(db, row)
     db.commit()
     db.refresh(row)
     return _serialize(db, row)
@@ -879,6 +907,7 @@ async def rewrite_project(
     row.language = payload.language
     row.status = "ready"
     row.progress_stage = "completed"
+    _record_edit(db, row)
     db.commit()
     db.refresh(row)
     return _serialize(db, row)
@@ -908,6 +937,7 @@ def update_sections(
         section.description = item.description[:4000]
         section.shooting_notes = item.shooting_notes[:4000]
     row.status = "ready"
+    _record_edit(db, row)
     db.commit()
     db.refresh(row)
     return _serialize(db, row)
@@ -935,12 +965,11 @@ def update_shots(
         shot.scene = item.scene
         shot.shot_size = item.shot_size
         shot.camera = item.camera
-        shot.analysis = {
-            **(shot.analysis if isinstance(shot.analysis, dict) else {}),
-            "product": item.product,
-            "director_intent": item.director_intent,
-        }
+        analysis = shot.analysis if isinstance(shot.analysis, dict) else {}
+        if analysis.get("product", "") != item.product or analysis.get("director_intent", "") != item.director_intent:
+            shot.analysis = {**analysis, "product": item.product, "director_intent": item.director_intent}
         shot.description = item.description
+    _record_edit(db, project)
     db.commit()
     db.refresh(project)
     return _serialize(db, project)
@@ -968,6 +997,7 @@ async def rewrite_section(
         text = str(result.get("text") or "")
     text = text.strip() or _fallback_line(section.title, row.product_service or "该产品", row.selling_points)
     section.script_lines = [_new_line(text)]
+    _record_edit(db, row)
     db.commit()
     db.refresh(row)
     return _serialize(db, row)
@@ -1009,6 +1039,7 @@ async def upload_asset(
         sort_order=count,
     )
     db.add(asset)
+    _record_edit(db, project, content_changed=True)
     db.commit()
     db.refresh(project)
     return _serialize(db, project)
@@ -1030,6 +1061,7 @@ async def remove_asset(
         if asset.thumbnail_url and asset.thumbnail_url != asset.url:
             await get_storage().delete(asset.thumbnail_url)
     db.delete(asset)
+    _record_edit(db, project, content_changed=True)
     db.commit()
     return {"ok": True}
 
@@ -1079,6 +1111,7 @@ async def generate_asset(
         sort_order=db.query(DirectorAsset).filter_by(section_id=section.id, role="material").count(),
     )
     db.add(asset)
+    _record_edit(db, project, content_changed=True)
     db.commit()
     db.refresh(project)
     return _serialize(db, project)
@@ -1116,6 +1149,7 @@ def collect_materials(project_id: int, db: Session = Depends(get_db), auth: Auth
             )
         )
         added += 1
+    _record_edit(db, project, content_changed=added > 0)
     db.commit()
     db.refresh(project)
     result = _serialize(db, project)
