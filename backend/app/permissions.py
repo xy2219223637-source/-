@@ -19,7 +19,7 @@ USER_PERMISSION_GROUPS = [
         {"code": "finished_remix.access", "label": "成品混剪"}, {"code": "final_videos.access", "label": "成片库"},
         {"code": "director.access", "label": "编导灵感"}, {"code": "shooting_tasks.access", "label": "拍摄任务"}]},
     {"key": "operations", "label": "运营管理", "children": [
-        {"code": "task_center.access", "label": "任务与费用"}, {"code": "video_taxonomy.access", "label": "分类与标签"}]},
+        {"code": "task_center.access", "label": "任务与费用"}]},
 ]
 
 ADMIN_PERMISSION_GROUPS = [

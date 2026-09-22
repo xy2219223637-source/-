@@ -28,7 +28,7 @@ def platform_admin(auth: AuthContext = Depends(current_auth)) -> AuthContext:
 
 
 def tenant_admin(auth: AuthContext = Depends(current_auth)) -> AuthContext:
-    if auth.role != "owner" and not any(code in auth.permissions for code in ALL_ADMIN_PERMISSIONS):
+    if auth.role not in {"owner", "admin"} and not any(code in auth.permissions for code in ALL_ADMIN_PERMISSIONS):
         raise HTTPException(status_code=403, detail="仅企业管理员可访问")
     return auth
 
@@ -369,9 +369,10 @@ def list_roles(auth: AuthContext = Depends(tenant_admin), db: Session = Depends(
 
 def validate_permissions(values: list[str]) -> list[str]:
     allowed = set(ALL_USER_PERMISSIONS + ALL_ADMIN_PERMISSIONS)
-    invalid = set(values) - allowed
+    legacy = {"video_taxonomy.access"}
+    invalid = set(values) - allowed - legacy
     if invalid: raise HTTPException(422, f"包含无效权限: {', '.join(sorted(invalid))}")
-    return sorted(set(values))
+    return sorted(set(values) & allowed)
 
 
 @tenant_router.post("/roles")

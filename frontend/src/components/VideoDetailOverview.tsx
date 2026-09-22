@@ -13,7 +13,7 @@ export default function VideoDetailOverview({asset,productName,preview,onEdit,re
   const [,setParams]=useSearchParams(),location=useLocation();
   const fmt=(n:number)=>timecode(n).slice(0,5);
   const openUsed=()=>{setParams(p=>{const next=new URLSearchParams(p);next.set('tab','used');return next},{replace:true,state:location.state});document.getElementById('video-lineage-workspace')?.scrollIntoView({behavior:'smooth',block:'start'})};
-  const tags=[...(asset.category?[asset.category.path.join(' / ')]:[]),...asset.public_tags.map(t=>t.name),...asset.personal_tags.map(t=>t.name)];
+  const tags=[...(asset.category?[`${asset.category.path.join(' / ')}${asset.category.status==='inactive'?'（已停用）':''}`]:[]),...asset.public_tags.map(t=>`${t.name}${t.status==='inactive'?'（已停用）':''}`),...asset.personal_tags.map(t=>`${t.name}${t.status==='inactive'?'（已停用）':''}`)];
   return <section className="overview panel"><div className="preview"><span className="preview-label">画面预览</span><video key={asset.id} ref={preview.videoRef} playsInline tabIndex={0} aria-label="详情视频" src={mediaUrl(asset.object_url)}
     onLoadedMetadata={preview.onLoadedMetadata} onSeeking={preview.onSeeking} onTimeUpdate={e=>{preview.onTimeUpdate(e);setPosition(e.currentTarget.currentTime)}}
     onPlay={()=>setPlaying(true)} onPause={()=>setPlaying(false)} onError={()=>setError('视频暂时无法播放')}/>

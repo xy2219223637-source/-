@@ -22,7 +22,6 @@ import {
   ClipboardList,
   Menu,
   X,
-  Tags,
   Building2,
   UsersRound,
 } from 'lucide-react';
@@ -45,7 +44,7 @@ const routePreloaders: Record<string, () => Promise<unknown>> = {
   '/final-videos': () => import('../pages/FinalVideoLibrary'),
   '/manual-video-compose': () => import('../pages/ManualComposeProjects'),
   '/task-center': () => import('../pages/TaskCenter'),
-  '/video-taxonomy': () => import('../pages/VideoTaxonomy'),
+  '/tenant-admin/taxonomy': () => import('../pages/VideoTaxonomy'),
   '/semi-finished-assets': () => import('../pages/VideoAssetLibrary'),
   '/smart-video-compose': () => import('../pages/AutoEditWorkspace'),
   '/director-inspiration': () => import('../pages/DirectorProjects'),
@@ -87,7 +86,6 @@ const navGroups = [
     label: '运营管理',
     items: [
       { to: '/task-center', label: '任务与费用', icon: Activity },
-      { to: '/video-taxonomy', label: '管理分类与标签', icon: Tags, adminOnly: true },
     ],
   },
 ];
@@ -99,7 +97,6 @@ const routePermissions: Record<string, string> = {
   '/manual-video-compose': 'manual_compose.access', '/finished-video-remix': 'finished_remix.access',
   '/final-videos': 'final_videos.access', '/director-inspiration': 'director.access',
   '/shooting-tasks': 'shooting_tasks.access', '/task-center': 'task_center.access',
-  '/video-taxonomy': 'video_taxonomy.access',
 };
 
 const plannedLinks = [
@@ -195,7 +192,7 @@ export default function Layout() {
                 {group.label}
               </div>
               <div className="space-y-1">
-                {group.items.filter((item) => allowed(routePermissions[item.to]) && (!('adminOnly' in item) || !item.adminOnly || role === 'owner' || permissions.includes('video_taxonomy.access'))).map((item) => (
+                {group.items.filter((item) => allowed(routePermissions[item.to])).map((item) => (
                   <NavLink
                     key={item.to}
                     to={item.to}
@@ -211,10 +208,10 @@ export default function Layout() {
               </div>
             </div>
           ))}
-          {(role === 'owner' || permissions.some(code=>code.startsWith('tenant_')) || isPlatformAdmin) && <div className="pt-3">
+          {(role === 'owner' || role === 'admin' || permissions.some(code=>code.startsWith('tenant_')) || isPlatformAdmin) && <div className="pt-3">
             <div className="px-3 pb-1.5 text-[10px] font-medium tracking-[0.12em] text-[var(--muted)] opacity-70">系统管理</div>
             <div className="space-y-1">
-              {(role === 'owner' || permissions.some(code=>code.startsWith('tenant_'))) && <NavLink to="/tenant-admin" onClick={closeMobileNav} className={navClassName}><UsersRound size={18}/>企业管理后台</NavLink>}
+              {(role === 'owner' || role === 'admin' || permissions.some(code=>code.startsWith('tenant_'))) && <NavLink to="/tenant-admin" onClick={closeMobileNav} className={navClassName}><UsersRound size={18}/>企业管理后台</NavLink>}
               {isPlatformAdmin && <NavLink to="/platform-admin" onClick={closeMobileNav} className={navClassName}><Building2 size={18}/>平台管理后台</NavLink>}
             </div>
           </div>}
