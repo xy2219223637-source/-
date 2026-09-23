@@ -23,6 +23,7 @@ A11 = '/open_api/v1.0/qianchuan/report/uni_promotion/data/get/'
 class UploadTests(QianchuanAuthorizationTests):
     def setUp(self):
         super().setUp()
+        self.settings.qianchuan_allow_account_material_aggregate = True
         self.bytes = b'\x00\x00\x00\x18ftypisom' + b'synthetic-video' * 40
         self.path = Path(self.directory.name) / 'test.mp4'
         self.path.write_bytes(self.bytes)
@@ -50,7 +51,8 @@ class UploadTests(QianchuanAuthorizationTests):
             return self.uploads.view(db.get(Upload, upload_id))
 
     def test_upload_multipart_verified_and_persistent(self):
-        response = self.create_upload(headers=self.member_headers)
+        self.assertEqual(self.create_upload(headers=self.member_headers).status_code, 404)
+        response = self.create_upload()
         self.assertEqual(response.status_code, 202, response.text)
         upload_id = response.json()['id']
         self.assertEqual(self.call_count(A06), 0)  # HTTP creation does not download or send.
@@ -76,11 +78,60 @@ class UploadTests(QianchuanAuthorizationTests):
         self.assertEqual(self.call_count(A06), 1)
         self.assertEqual(self.create_upload().json()['status'], 'succeeded')
 
+    def test_same_advertiser_isolated_by_connection_owner(self):
+        owner_upload = self.create_upload().json()
+        member_session = self.browser.post(PREFIX + '/oauth/sessions', json={'video_asset_id': 1},
+            headers=self.member_headers)
+        self.assertEqual(member_session.status_code, 201, member_session.text)
+        self.assertEqual(self.callback(member_session.json()).status_code, 303)
+        with self.sessions() as db:
+            member_connection = db.query(Connection).filter_by(created_by='member').one()
+            member_connection_id = member_connection.id
+        self.service.sync_connection(member_connection_id)
+        member_accounts = self.browser.get(PREFIX + '/accounts', headers=self.member_headers).json()
+        self.assertTrue(member_accounts['can_manage'])
+        self.assertEqual(len(member_accounts['connections']), 1)
+        self.assertEqual(member_accounts['connections'][0]['id'], member_connection_id)
+        self.assertEqual(len(self.browser.get(PREFIX + '/accounts', headers=self.headers).json()['connections']), 1)
+        member_binding = member_accounts['connections'][0]['accounts'][0]['id']
+        member_upload = self.create_upload(headers=self.member_headers, binding_id=member_binding).json()
+        self.assertNotEqual(member_upload['id'], owner_upload['id'])
+        self.assertEqual([row['id'] for row in self.browser.get(PREFIX + '/uploads?video_asset_id=1',
+            headers=self.member_headers).json()], [member_upload['id']])
+        self.assertEqual([row['id'] for row in self.browser.get(PREFIX + '/uploads?video_asset_id=1',
+            headers=self.headers).json()], [owner_upload['id']])
+        self.assertEqual(self.browser.post(PREFIX + '/uploads/' + owner_upload['id'] + '/retry',
+            headers=self.member_headers).status_code, 404)
+        self.assertEqual(self.browser.get(PREFIX + '/uploads/' + owner_upload['id'] + '/report',
+            headers=self.member_headers).status_code, 404)
+
+    def test_new_personal_connection_does_not_reuse_old_binding_upload(self):
+        old_upload = self.create_upload().json()
+        self.browser.delete(PREFIX + '/connections/' + self.connection_id, headers=self.headers)
+        _, new_connection_id = self.completed()
+        self.service.sync_connection(new_connection_id)
+        accounts = self.browser.get(PREFIX + '/accounts', headers=self.headers).json()['connections']
+        new_binding = next(item for item in accounts if item['id'] == new_connection_id)['accounts'][0]['id']
+        new_upload = self.create_upload(binding_id=new_binding)
+        self.assertEqual(new_upload.status_code, 202, new_upload.text)
+        self.assertNotEqual(new_upload.json()['id'], old_upload['id'])
+
+    def test_legacy_upload_with_mismatched_connection_owner_is_quarantined(self):
+        upload_id = self.create_upload().json()['id']
+        with self.sessions() as db:
+            db.get(Upload, upload_id).created_by = 'member'
+            db.commit()
+        for headers in (self.headers, self.member_headers):
+            self.assertEqual(self.browser.get(PREFIX + '/uploads?video_asset_id=1',
+                headers=headers).json(), [])
+            self.assertEqual(self.browser.get(PREFIX + f'/uploads/{upload_id}/report',
+                headers=headers).status_code, 404)
+
     def test_upload_tenant_and_input_boundaries(self):
         self.assertEqual(self.create_upload(headers=self.other_headers).status_code, 404)
         self.assertEqual(self.create_upload(video_asset_id=2).status_code, 404)
         self.assertEqual(self.create_upload(video_asset_id=3).status_code, 404)
-        self.assertEqual(self.create_upload(binding_id='00000000-0000-0000-0000-000000000000').status_code, 409)
+        self.assertEqual(self.create_upload(binding_id='00000000-0000-0000-0000-000000000000').status_code, 404)
         self.assertEqual(self.create_upload(is_aigc='yes').status_code, 422)
         self.assertEqual(self.create_upload(filename='../secret.mp4').status_code, 400)
         row = self.create_upload().json()
@@ -218,7 +269,9 @@ class UploadTests(QianchuanAuthorizationTests):
                 "stat_cost_for_roi2": "12.34", "video_play_count_for_roi2_v2": 56,
                 "video_play_duration_3s_rate_for_roi2": "0.42"}}],
         })
-        response = self.browser.get(PREFIX + f'/uploads/{upload_id}/report?days=7', headers=self.member_headers)
+        self.assertEqual(self.browser.get(PREFIX + f'/uploads/{upload_id}/report?days=7',
+            headers=self.member_headers).status_code, 404)
+        response = self.browser.get(PREFIX + f'/uploads/{upload_id}/report?days=7', headers=self.headers)
         self.assertEqual(response.status_code, 200, response.text)
         result = response.json()
         self.assertEqual(result['status'], 'available')
@@ -235,6 +288,16 @@ class UploadTests(QianchuanAuthorizationTests):
             {"field": "roi2_material_type_v3", "operator": 7, "values": ["3"]},
         ])
         self.assertNotIn('mock-access', response.text)
+
+    def test_personal_mode_blocks_unattributed_material_aggregate(self):
+        upload_id = self.create_upload().json()['id']
+        self.uploads.send(upload_id)
+        self.settings.qianchuan_allow_account_material_aggregate = False
+        response = self.browser.get(PREFIX + f'/uploads/{upload_id}/report', headers=self.headers)
+        self.assertEqual(response.status_code, 409)
+        self.assertIn('无法确认只包含本人投放', response.json()['detail'])
+        self.assertEqual(self.call_count(A10), 0)
+        self.assertEqual(self.call_count(A11), 0)
 
     def test_report_empty_tenant_and_state_boundaries(self):
         upload_id = self.create_upload().json()['id']
@@ -409,7 +472,7 @@ class UploadTests(QianchuanAuthorizationTests):
             first = pool.submit(self.browser.get, url, headers=self.headers)
             try:
                 self.assertTrue(started.wait(10))
-                second = pool.submit(self.browser.get, url, headers=self.member_headers)
+                second = pool.submit(self.browser.get, url, headers=self.headers)
                 self.assertTrue(joined.wait(10))
             finally:
                 release.set()

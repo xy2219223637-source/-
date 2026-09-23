@@ -14,7 +14,7 @@ from sqlalchemy import or_, update
 from sqlalchemy.exc import IntegrityError
 
 from app.models import (QianchuanUpload as Upload, QianchuanAccountBinding as Binding,
-                        QianchuanConnection as Connection, VideoAsset, Tenant, TenantMember, User)
+                        QianchuanConnection as Connection, VideoAsset)
 from app.services.storage import get_storage, object_key
 from .client import PlatformError, identifier
 
@@ -62,19 +62,30 @@ class UploadService:
         return row
 
     @staticmethod
-    def binding(db, tenant_id, binding_id):
-        b = db.query(Binding).filter_by(id=binding_id, tenant_id=tenant_id, is_valid=True).first()
-        c = db.query(Connection).filter_by(id=b.connection_id, tenant_id=tenant_id, status="active").first() if b else None
-        if not b or not c:
+    def binding(db, tenant_id, binding_id, owner_user_id=None):
+        b = db.query(Binding).filter_by(id=binding_id, tenant_id=tenant_id).first()
+        c = db.query(Connection).filter_by(id=b.connection_id, tenant_id=tenant_id).first() if b else None
+        if not b or not c or (owner_user_id is not None and c.created_by != owner_user_id):
+            raise HTTPException(404, "未找到千川账户")
+        if not b.is_valid or c.status != "active":
             raise HTTPException(409, "目标账户不可用，请先同步账户或重新授权")
         return b, c
 
+    @staticmethod
+    def owned_uploads(db, tenant_id, user_id):
+        return db.query(Upload).join(Binding, Upload.binding_id == Binding.id).join(
+            Connection, Binding.connection_id == Connection.id).filter(
+            Upload.tenant_id == tenant_id, Upload.created_by == user_id,
+            Binding.tenant_id == tenant_id, Connection.tenant_id == tenant_id,
+            Connection.created_by == user_id)
+
     def create(self, db, auth, video_id, binding_id, filename, is_aigc):
+        self.auth.require_content_access(auth)
         self.auth.require_ready()
         if auth.role not in {"owner", "member"}:
             raise HTTPException(403, "当前角色不能上传素材")
         a = self.asset(db, auth.tenant_id, video_id)
-        b, _ = self.binding(db, auth.tenant_id, binding_id)
+        b, _ = self.binding(db, auth.tenant_id, binding_id, auth.user_id)
         if a.status not in {"uploaded", "analyzed", "ready", "completed"} or not re.fullmatch(r"[a-fA-F0-9]{64}", a.content_hash):
             raise HTTPException(409, "成片尚未就绪或缺少内容校验值")
         if not a.filename.lower().endswith(".mp4") or not a.object_url.startswith("/api/storage/objects/"):
@@ -83,11 +94,11 @@ class UploadService:
         if not filename or len(filename) > 255 or re.search(r'[\\/\x00-\x1f\x7f]', filename):
             raise HTTPException(400, "素材名称应为 1 至 255 个字符，不能包含路径或控制字符")
         key = dict(tenant_id=auth.tenant_id, video_asset_id=a.id, source_content_hash=a.content_hash,
-                   advertiser_id=b.advertiser_id)
+                   advertiser_id=b.advertiser_id, created_by=auth.user_id, binding_id=b.id)
         existing = db.query(Upload).filter_by(**key).first()
         if existing:
             return self.view(existing)
-        row = Upload(id=str(uuid.uuid4()), **key, created_by=auth.user_id, binding_id=b.id,
+        row = Upload(id=str(uuid.uuid4()), **key,
                      advertiser_name=b.advertiser_name, source_url=a.object_url, filename=filename,
                      is_aigc=is_aigc, status="queued")
         db.add(row)
@@ -101,18 +112,20 @@ class UploadService:
         return self.view(row)
 
     def list(self, db, auth, video_id):
+        self.auth.require_content_access(auth)
         self.asset(db, auth.tenant_id, video_id)
-        return [self.view(row) for row in db.query(Upload).filter_by(
-            tenant_id=auth.tenant_id, video_asset_id=video_id).order_by(Upload.created_at.desc()).all()]
+        return [self.view(row) for row in self.owned_uploads(db, auth.tenant_id, auth.user_id).filter(
+            Upload.video_asset_id == video_id).order_by(Upload.created_at.desc()).all()]
 
     def retry(self, db, auth, upload_id):
+        self.auth.require_content_access(auth)
         if auth.role not in {"owner", "member"}:
             raise HTTPException(403, "当前角色不能重试")
-        row = db.query(Upload).filter_by(id=upload_id, tenant_id=auth.tenant_id).first()
+        row = self.owned_uploads(db, auth.tenant_id, auth.user_id).filter(Upload.id == upload_id).first()
         if not row:
             raise HTTPException(404, "未找到上传记录")
         self.auth.require_ready()
-        self.binding(db, auth.tenant_id, row.binding_id)
+        self.binding(db, auth.tenant_id, row.binding_id, auth.user_id)
         if row.status == "failed" and row.attempts < 3:
             db.execute(update(Upload).where(Upload.id == row.id, Upload.status == "failed",
                 Upload.attempts == row.attempts).values(status="queued", phase=""))
@@ -128,14 +141,12 @@ class UploadService:
         self.auth.require_ready()
         with self.sessions() as db:
             row = db.get(Upload, upload_id)
+            if not row:
+                raise PlatformError("scope_changed", "上传任务已不存在")
             b, c = self.binding(db, row.tenant_id, row.binding_id)
-            if b.advertiser_id != row.advertiser_id:
+            if b.advertiser_id != row.advertiser_id or c.created_by != row.created_by:
                 raise PlatformError("scope_changed", "账户范围已变化，请核对授权")
-            if (not db.query(Tenant).filter_by(id=row.tenant_id, status="active").first()
-                    or not db.query(User).filter_by(id=row.created_by, status="active").first()
-                    or not db.query(TenantMember).filter(TenantMember.user_id == row.created_by,
-                        TenantMember.tenant_id == row.tenant_id, TenantMember.status == "active",
-                        TenantMember.role.in_(["owner", "member"])).first()):
+            if not self.auth.member_active(db, row.created_by, row.tenant_id):
                 raise PlatformError("owner_inactive", "发起人的企业权限已失效")
             if expected_version is not None and c.credential_version != expected_version:
                 raise PlatformError("scope_changed", "授权已变化，请重新核验账户")

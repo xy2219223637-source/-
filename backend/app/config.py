@@ -104,6 +104,8 @@ class Settings(BaseSettings):
     qianchuan_scope: str = ""
     qianchuan_token_encryption_key: str = ""
     qianchuan_log_material_response: bool = True
+    # Account/material totals may include campaigns run by other operators.
+    qianchuan_allow_account_material_aggregate: bool = False
 
     host: str = "0.0.0.0"
     port: int = 8000

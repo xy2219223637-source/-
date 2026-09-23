@@ -69,16 +69,19 @@ class ReportService:
                 raise
 
     def _get(self, db, auth, upload_id: str, days: int, calls: list) -> dict:
-        row = db.query(Upload).filter_by(id=upload_id, tenant_id=auth.tenant_id).first()
+        self.auth.require_content_access(auth)
+        row = self.uploads.owned_uploads(db, auth.tenant_id, auth.user_id).filter(Upload.id == upload_id).first()
         if not row:
             raise HTTPException(404, "未找到上传记录")
         self.uploads.asset(db, auth.tenant_id, row.video_asset_id)
         if row.status != "succeeded" or not row.material_id:
             raise HTTPException(409, "素材尚未上传并核验成功，暂不能查询投放数据")
+        if not self.auth.settings.qianchuan_allow_account_material_aggregate:
+            raise HTTPException(409, "当前千川报表是账号与素材的汇总，无法确认只包含本人投放；为避免显示他人数据，暂不提供此报表")
 
         try:
             _, version = self.uploads.access(row.id)
-            key = ("report", row.tenant_id, row.binding_id, row.advertiser_id,
+            key = ("report", row.tenant_id, row.created_by, row.binding_id, row.advertiser_id,
                    row.material_id, version, days, datetime.now(TIMEZONE).date())
             result, cache_status = self.cache.get(key, lambda: self._query(row, version, days))
             # Recheck even on cache hits or after waiting for another request.
@@ -153,7 +156,7 @@ class ReportService:
         return data_topic, query_dimensions, definitions, selected
 
     def _query(self, row, version, days):
-        config_key = ("config", row.tenant_id, row.binding_id, row.advertiser_id, version)
+        config_key = ("config", row.tenant_id, row.created_by, row.binding_id, row.advertiser_id, version)
         (data_topic, query_dimensions, definitions, selected), _ = self.cache.get(
             config_key, lambda: self._configuration(row, version))
         filters = [{"field": "material_id", "operator": 7, "values": [identifier(row.material_id)]}]

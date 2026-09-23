@@ -17,7 +17,7 @@ from app.auth import AuthContext
 from app.config import Settings, get_settings
 from app.database import SessionLocal
 from app.models import (QianchuanAccountBinding as Binding, QianchuanConnection as Connection,
-                        QianchuanOAuthSession as OAuthSession, Tenant, TenantMember, User, VideoAsset)
+                        QianchuanOAuthSession as OAuthSession, Tenant, TenantMember, TenantRole, User, VideoAsset)
 from .client import PlatformError, QianchuanClient, identifier
 from .logging import configure_logging
 from .cache import ReportCache
@@ -32,7 +32,7 @@ ERROR_MESSAGES = {
     "superseded": "已有更新的授权操作，请查看最新会话",
     "exchange_uncertain": "授权结果不确定，请重新授权",
     "exchange_failed": "获取授权失败，请检查应用配置和权限后重新授权",
-    "owner_inactive": "发起用户的管理员权限已失效",
+    "owner_inactive": "发起用户的企业权限已失效",
     "interrupted": "授权期间服务中断，请重新授权",
 }
 
@@ -161,24 +161,32 @@ class QianchuanService:
             raise PlatformError("invalid_response", "平台 Token 或有效期字段无效，请重新授权") from None
 
     @staticmethod
-    def owner_active(db, user_id: str, tenant_id: str) -> bool:
-        return bool(
-            db.query(TenantMember).filter_by(user_id=user_id, tenant_id=tenant_id, role="owner", status="active").first()
-            and db.query(User).filter_by(id=user_id, status="active").first()
-            and db.query(Tenant).filter_by(id=tenant_id, status="active").first()
-        )
+    def member_active(db, user_id: str, tenant_id: str) -> bool:
+        member = db.query(TenantMember).filter_by(user_id=user_id, tenant_id=tenant_id, status="active").first()
+        if not member or not db.query(User).filter_by(id=user_id, status="active").first() \
+                or not db.query(Tenant).filter_by(id=tenant_id, status="active").first():
+            return False
+        if member.role == "owner":
+            return True
+        role = db.query(TenantRole).filter_by(id=member.role_id, tenant_id=tenant_id, status="active").first() \
+            if member.role_id else None
+        return bool(role and "final_videos.access" in (role.permissions or []))
 
     @staticmethod
-    def connection(db, connection_id: str, tenant_id: str) -> Connection:
-        row = db.query(Connection).filter_by(id=connection_id, tenant_id=tenant_id).first()
+    def require_content_access(auth: AuthContext) -> None:
+        if auth.role != "owner" and "final_videos.access" not in auth.permissions:
+            raise HTTPException(403, "当前角色没有成片库权限")
+
+    @staticmethod
+    def connection(db, connection_id: str, tenant_id: str, user_id: str) -> Connection:
+        row = db.query(Connection).filter_by(id=connection_id, tenant_id=tenant_id, created_by=user_id).first()
         if not row:
             raise HTTPException(404, "未找到千川连接")
         return row
 
     def create_session(self, db, auth: AuthContext, video_asset_id: int | None, connection_id: str | None) -> dict:
+        self.require_content_access(auth)
         self.require_ready()
-        if auth.role != "owner":
-            raise HTTPException(403, "只有管理员可以管理千川授权")
         if video_asset_id is not None:
             asset = db.query(VideoAsset).filter_by(id=video_asset_id, tenant_id=auth.tenant_id,
                                                   asset_kind="final_output", excluded=False).first()
@@ -186,7 +194,7 @@ class QianchuanService:
                 raise HTTPException(404, "未找到本企业成片")
         session_id, state, nonce = str(uuid.uuid4()), secrets.token_urlsafe(32), secrets.token_urlsafe(32)
         if connection_id:
-            conn = self.connection(db, connection_id, auth.tenant_id)
+            conn = self.connection(db, connection_id, auth.tenant_id, auth.user_id)
             if conn.status == "deleted":
                 raise HTTPException(404, "此授权连接已删除，请添加新的授权")
             db.query(OAuthSession).filter(OAuthSession.connection_id == conn.id,
@@ -194,6 +202,7 @@ class QianchuanService:
                                           OAuthSession.status.in_(["pending", "processing"])).update(
                 {"status": "failed", "error_code": "superseded"}, synchronize_session=False)
             changed = db.execute(update(Connection).where(Connection.id == conn.id, Connection.tenant_id == auth.tenant_id,
+                       Connection.created_by == auth.user_id,
                        Connection.status != "deleted")
                        .values(current_session_id=session_id,
                                status=case((Connection.status == "disabled", "authorizing"), else_=Connection.status))).rowcount
@@ -201,10 +210,33 @@ class QianchuanService:
                 db.rollback()
                 raise HTTPException(404, "此授权连接已删除，请添加新的授权")
         else:
-            conn = Connection(id=str(uuid.uuid4()), tenant_id=auth.tenant_id, created_by=auth.user_id,
-                              current_session_id=session_id, credential_version=1)
-            db.add(conn)
-            db.flush()
+            # One application user owns one reusable Qianchuan authorization
+            # connection. Starting another authorization must rotate that
+            # connection instead of accumulating visually identical links.
+            conn = db.query(Connection).filter(
+                Connection.tenant_id == auth.tenant_id,
+                Connection.created_by == auth.user_id,
+                Connection.status != "deleted",
+            ).order_by(Connection.created_at.desc()).first()
+            if conn:
+                db.query(OAuthSession).filter(OAuthSession.connection_id == conn.id,
+                                              OAuthSession.tenant_id == auth.tenant_id,
+                                              OAuthSession.status.in_(["pending", "processing"])).update(
+                    {"status": "failed", "error_code": "superseded"}, synchronize_session=False)
+                changed = db.execute(update(Connection).where(
+                    Connection.id == conn.id, Connection.tenant_id == auth.tenant_id,
+                    Connection.created_by == auth.user_id, Connection.status != "deleted"
+                ).values(current_session_id=session_id,
+                         status=case((Connection.status == "disabled", "authorizing"),
+                                     else_=Connection.status))).rowcount
+                if not changed:
+                    db.rollback()
+                    raise HTTPException(409, "授权连接状态已变化，请重试")
+            else:
+                conn = Connection(id=str(uuid.uuid4()), tenant_id=auth.tenant_id, created_by=auth.user_id,
+                                  current_session_id=session_id, credential_version=1)
+                db.add(conn)
+                db.flush()
         db.add(OAuthSession(id=session_id, tenant_id=auth.tenant_id, user_id=auth.user_id, connection_id=conn.id,
                             state_hash=digest(state), browser_nonce_hash=digest(nonce), video_asset_id=video_asset_id,
                             expires_at=datetime.utcnow() + timedelta(minutes=10)))
@@ -230,7 +262,7 @@ class QianchuanService:
             row.status, row.error_code = "failed", "expired"
             db.commit()
             raise HTTPException(400, ERROR_MESSAGES["expired"])
-        if not self.owner_active(db, row.user_id, row.tenant_id):
+        if not self.member_active(db, row.user_id, row.tenant_id):
             raise HTTPException(400, ERROR_MESSAGES["owner_inactive"])
         session_id, connection_id, tenant_id, user_id = row.id, row.connection_id, row.tenant_id, row.user_id
         result = db.execute(update(OAuthSession).where(
@@ -249,10 +281,10 @@ class QianchuanService:
                 values = self.token_values(self.client.exchange(auth_code))
             except PlatformError as exc:
                 failure = "exchange_uncertain" if exc.code in {"transport_uncertain", "http_error", "invalid_response"} else "exchange_failed"
-        if not self.owner_active(db, user_id, tenant_id):
+        if not self.member_active(db, user_id, tenant_id):
             failure = "owner_inactive"
         # New authorization, disable and refresh races cannot overwrite a newer session.
-        conn = db.query(Connection).filter_by(id=connection_id, tenant_id=tenant_id).first()
+        conn = db.query(Connection).filter_by(id=connection_id, tenant_id=tenant_id, created_by=user_id).first()
         if not conn or conn.current_session_id != session_id or conn.status == "disabled":
             failure = "superseded"
         if failure:
@@ -265,6 +297,7 @@ class QianchuanService:
             logger.info("qianchuan action=authorize_failed tenant=%s session=%s reason=%s", tenant_id, session_id, failure)
             return session_id
         result = db.execute(update(Connection).where(Connection.id == connection_id, Connection.tenant_id == tenant_id,
+                            Connection.created_by == user_id,
                             Connection.current_session_id == session_id, Connection.status != "disabled")
                             .values(**values, status="sync_pending", error_code="", error_message="",
                                     credential_version=Connection.credential_version + 1))
@@ -280,53 +313,78 @@ class QianchuanService:
         return session_id
 
     def session_result(self, db, auth: AuthContext, session_id: str) -> dict:
+        self.require_content_access(auth)
         row = db.query(OAuthSession).filter_by(id=session_id, user_id=auth.user_id, tenant_id=auth.tenant_id).first()
         if not row:
             raise HTTPException(404, "未找到授权会话")
         if row.status == "pending" and row.expires_at <= datetime.utcnow():
             row.status, row.error_code = "failed", "expired"
             db.commit()
-        conn = self.connection(db, row.connection_id, auth.tenant_id)
+        conn = self.connection(db, row.connection_id, auth.tenant_id, auth.user_id)
         return {"session_id": row.id, "status": row.status, "error_code": row.error_code,
                 "message": ERROR_MESSAGES.get(row.error_code, ""), "connection_id": conn.id,
                 "connection_status": conn.status, "connection_error": conn.error_message,
                 "return_path": f"/final-videos/{row.video_asset_id}" if row.video_asset_id else "/final-videos"}
 
     def accounts(self, db, auth: AuthContext) -> dict:
+        self.require_content_access(auth)
         config = self.configuration()
         connections = db.query(Connection).filter(Connection.tenant_id == auth.tenant_id,
+            Connection.created_by == auth.user_id,
             Connection.status != "deleted").order_by(Connection.created_at.desc()).all()
         result = []
-        for conn in connections:
-            bindings = db.query(Binding).filter_by(tenant_id=auth.tenant_id, connection_id=conn.id, is_valid=True).all()
+        if connections:
+            # Legacy versions could create another connection on every OAuth
+            # round-trip.  Treat all of them as one personal authorization in
+            # the API without deleting audit/history rows. The newest row is
+            # the reusable connection for future authorization operations.
+            primary = connections[0]
+            connection_ids = [row.id for row in connections if row.status == "active"]
+            bindings = db.query(Binding).filter(
+                Binding.tenant_id == auth.tenant_id,
+                Binding.connection_id.in_(connection_ids),
+                Binding.is_valid.is_(True),
+            ).all() if connection_ids else []
+            priority = {"ADVERTISER": 4, "SHOP": 3, "AGENT": 2}
+            unique_bindings = {}
+            for binding in bindings:
+                current = unique_bindings.get(binding.advertiser_id)
+                rank = (priority.get(binding.source_account_type, 1),
+                        bool(binding.advertiser_name), bool(binding.source_account_name))
+                current_rank = ((priority.get(current.source_account_type, 1),
+                                 bool(current.advertiser_name), bool(current.source_account_name))) \
+                    if current else (-1, False, False)
+                if current is None or rank > current_rank:
+                    unique_bindings[binding.advertiser_id] = binding
+            warnings = sorted({warning for row in connections for warning in (row.warnings or [])})
             result.append({
-                "id": conn.id, "status": conn.status, "error": conn.error_message,
-                "warnings": conn.warnings, "last_synced_at": conn.last_synced_at,
+                "id": primary.id, "status": primary.status, "error": primary.error_message,
+                "warnings": warnings, "last_synced_at": primary.last_synced_at,
                 "accounts": [{"id": b.id, "advertiser_id": b.advertiser_id, "advertiser_name": b.advertiser_name,
                               "source_account_name": b.source_account_name, "source_account_type": b.source_account_type,
-                              "source_account_id": b.source_account_id} for b in bindings]
-                            if conn.status == "active" and config["status"] == "ready" else [],
+                              "source_account_id": b.source_account_id} for b in unique_bindings.values()]
+                            if config["status"] == "ready" else [],
             })
-        return {"configuration": config, "can_manage": auth.role == "owner", "connections": result}
+        return {"configuration": config, "can_manage": True, "connections": result}
 
     def request_sync(self, db, auth: AuthContext, connection_id: str) -> None:
+        self.require_content_access(auth)
         self.require_ready()
-        if auth.role != "owner":
-            raise HTTPException(403, "只有管理员可以管理千川授权")
-        conn = self.connection(db, connection_id, auth.tenant_id)
+        conn = self.connection(db, connection_id, auth.tenant_id, auth.user_id)
         if conn.status not in {"active", "sync_failed", "sync_pending", "syncing"}:
             raise HTTPException(409, "请先重新授权")
         # Repeated clicks while a sync is running do not reset its claim.
         db.execute(update(Connection).where(Connection.id == conn.id, Connection.tenant_id == auth.tenant_id,
+                   Connection.created_by == auth.user_id,
                    Connection.status.in_(["active", "sync_failed"])).values(status="sync_pending"))
         db.commit()
 
     def disable(self, db, auth: AuthContext, connection_id: str, *, remove: bool = False) -> None:
-        if auth.role != "owner":
-            raise HTTPException(403, "只有管理员可以管理千川授权")
-        conn = self.connection(db, connection_id, auth.tenant_id)
+        self.require_content_access(auth)
+        conn = self.connection(db, connection_id, auth.tenant_id, auth.user_id)
         # Keep the record for upload history; deleted connections cannot be reactivated by stale requests.
         db.execute(update(Connection).where(Connection.id == conn.id, Connection.tenant_id == auth.tenant_id,
+                   Connection.created_by == auth.user_id,
                    Connection.status != "deleted")
                    .values(status="deleted" if remove else "disabled", current_session_id="", access_token_ciphertext="",
                            refresh_token_ciphertext="", credential_version=Connection.credential_version + 1))
@@ -355,8 +413,8 @@ class QianchuanService:
                 current = db.get(Connection, connection_id)
                 if not current or current.status != "syncing" or current.credential_version != version:
                     raise PlatformError("superseded", "账户同步已被新的授权或停用操作取代")
-                if not db.query(Tenant).filter_by(id=tenant_id, status="active").first():
-                    raise PlatformError("reauthorization_required", "企业状态无效")
+                if not self.member_active(db, current.created_by, tenant_id):
+                    raise PlatformError("reauthorization_required", "授权用户或企业状态无效")
                 # Do not keep database transactions open across network requests.
                 db.commit()
 
@@ -391,12 +449,19 @@ class QianchuanService:
                 if changed:
                     db.query(Binding).filter_by(connection_id=connection_id, tenant_id=tenant_id).update({"is_valid": False})
                     for data in bindings:
-                        row = db.query(Binding).filter_by(connection_id=connection_id, tenant_id=tenant_id,
-                              source_account_id=data["source_account_id"], advertiser_id=data["advertiser_id"]).first()
+                        duplicates = db.query(Binding).filter_by(
+                            connection_id=connection_id, tenant_id=tenant_id,
+                            advertiser_id=data["advertiser_id"]).order_by(Binding.id).all()
+                        row = next((item for item in duplicates
+                                    if item.source_account_id == data["source_account_id"]),
+                                   duplicates[0] if duplicates else None)
                         if row:
                             for key, value in data.items():
                                 setattr(row, key, value)
                             row.is_valid = True
+                            for duplicate in duplicates:
+                                if duplicate.id != row.id:
+                                    duplicate.is_valid = False
                         else:
                             db.add(Binding(id=str(uuid.uuid4()), tenant_id=tenant_id, connection_id=connection_id, **data))
                 db.commit()

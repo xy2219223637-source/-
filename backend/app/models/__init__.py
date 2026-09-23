@@ -1171,8 +1171,9 @@ class QianchuanAccountBinding(Base):
 
 class QianchuanUpload(Base):
     __tablename__ = "qianchuan_uploads"
-    __table_args__ = (UniqueConstraint("tenant_id", "video_asset_id", "source_content_hash", "advertiser_id",
-                                      name="uq_qianchuan_upload_source_target"),)
+    __table_args__ = (UniqueConstraint("tenant_id", "created_by", "binding_id", "video_asset_id",
+                                      "source_content_hash", "advertiser_id",
+                                      name="uq_qianchuan_upload_owner_binding_target"),)
     id: Mapped[str] = mapped_column(String(36), primary_key=True)
     tenant_id: Mapped[str] = mapped_column(ForeignKey("tenants.id"), index=True)
     created_by: Mapped[str] = mapped_column(ForeignKey("users.id"))

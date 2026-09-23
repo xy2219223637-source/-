@@ -338,5 +338,20 @@ class QianchuanClient:
                                  "source_account_type": role, "source_company_ids": company_ids,
                                  "advertiser_id": candidate["id"], "advertiser_name": candidate["name"],
                                  "advertiser_type": advertiser_type})
-        unique = {(b["source_account_id"], b["advertiser_id"]): b for b in bindings}
+        # The same Qianchuan advertiser can be reachable through several OAuth
+        # subjects (for example a workspace/PAMIS account and its shop).  It is
+        # still one upload target, so expose it only once.  Prefer the most
+        # direct subject and keep richer names when priorities are equal.
+        priority = {"ADVERTISER": 4, SHOP_ROLE: 3, AGENT_ROLE: 2}
+        unique: dict[str, dict] = {}
+        for binding in bindings:
+            advertiser_id = binding["advertiser_id"]
+            current = unique.get(advertiser_id)
+            candidate_rank = (priority.get(binding["source_account_type"], 1),
+                              bool(binding["advertiser_name"]), bool(binding["source_account_name"]))
+            current_rank = ((priority.get(current["source_account_type"], 1),
+                             bool(current["advertiser_name"]), bool(current["source_account_name"]))) \
+                if current else (-1, False, False)
+            if current is None or candidate_rank > current_rank:
+                unique[advertiser_id] = binding
         return list(unique.values()), snapshot, sorted(set(warnings))
