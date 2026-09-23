@@ -37,6 +37,7 @@ const ManualComposeWorkspace = lazy(() => import('./pages/ManualComposeWorkspace
 const PlatformAdmin = lazy(() => import('./pages/PlatformAdmin'));
 const TenantAdmin = lazy(() => import('./pages/TenantAdmin'));
 const TenantRoles = lazy(() => import('./pages/TenantRoles'));
+const QianchuanOAuthResult = lazy(() => import('./pages/QianchuanOAuthResult'));
 
 function PageLoading() {
   return <div className="min-h-screen grid place-items-center bg-[var(--bg)] text-[var(--muted)]"><div className="flex items-center gap-2 text-sm"><Loader2 size={18} className="animate-spin text-[var(--accent)]" />页面加载中…</div></div>;
@@ -77,6 +78,7 @@ export default function App() {
             <Route path="finished-video-assets/:id" element={<VideoAssetDetail libraryType="finished" title="成品素材库" />} />
             <Route path="final-videos" element={<FinalVideoLibrary />} />
             <Route path="final-videos/:id" element={<FinalVideoDetail />} />
+            <Route path="qianchuan/oauth/result" element={<QianchuanOAuthResult />} />
             <Route path="manual-video-compose" element={<ManualComposeProjects />} />
             <Route path="manual-video-compose/:id" element={<ManualComposeWorkspace />} />
             <Route path="platform-admin" element={<PlatformAdmin />} />

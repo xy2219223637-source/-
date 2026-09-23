@@ -92,6 +92,12 @@ body {
   cursor: not-allowed;
 }
 
+.qianchuan-upload-button:disabled {
+  background: #e5e7eb;
+  color: #6b7280;
+  opacity: 1;
+}
+
 .btn-secondary {
   display: inline-flex;
   align-items: center;

@@ -1114,3 +1114,87 @@ class MemberGroup(Base):
     name: Mapped[str] = mapped_column(String(120), nullable=False)
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="active")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+class QianchuanConnection(Base):
+    __tablename__ = "qianchuan_connections"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    tenant_id: Mapped[str] = mapped_column(ForeignKey("tenants.id"), index=True)
+    created_by: Mapped[str] = mapped_column(ForeignKey("users.id"))
+    current_session_id: Mapped[str] = mapped_column(String(36), default="")
+    credential_version: Mapped[int] = mapped_column(Integer, default=0)
+    access_token_ciphertext: Mapped[str] = mapped_column(Text, default="")
+    refresh_token_ciphertext: Mapped[str] = mapped_column(Text, default="")
+    access_token_expires_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    refresh_token_expires_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    status: Mapped[str] = mapped_column(String(32), default="authorizing", index=True)
+    account_snapshot: Mapped[list] = mapped_column(JSON, default=list)
+    warnings: Mapped[list] = mapped_column(JSON, default=list)
+    error_code: Mapped[str] = mapped_column(String(64), default="")
+    error_message: Mapped[str] = mapped_column(String(256), default="")
+    provider_request_id: Mapped[str] = mapped_column(String(128), default="")
+    last_synced_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
+class QianchuanOAuthSession(Base):
+    __tablename__ = "qianchuan_oauth_sessions"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    tenant_id: Mapped[str] = mapped_column(ForeignKey("tenants.id"), index=True)
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id"))
+    connection_id: Mapped[str] = mapped_column(ForeignKey("qianchuan_connections.id"), index=True)
+    state_hash: Mapped[str] = mapped_column(String(64), unique=True)
+    browser_nonce_hash: Mapped[str] = mapped_column(String(64))
+    video_asset_id: Mapped[Optional[int]] = mapped_column(ForeignKey("video_assets.id"), nullable=True)
+    status: Mapped[str] = mapped_column(String(32), default="pending", index=True)
+    error_code: Mapped[str] = mapped_column(String(64), default="")
+    expires_at: Mapped[datetime] = mapped_column(DateTime)
+    consumed_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
+class QianchuanAccountBinding(Base):
+    __tablename__ = "qianchuan_account_bindings"
+    __table_args__ = (UniqueConstraint("tenant_id", "connection_id", "source_account_id", "advertiser_id",
+                                      name="uq_qianchuan_binding"),)
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    tenant_id: Mapped[str] = mapped_column(ForeignKey("tenants.id"), index=True)
+    connection_id: Mapped[str] = mapped_column(ForeignKey("qianchuan_connections.id"), index=True)
+    source_account_id: Mapped[str] = mapped_column(String(32))
+    source_account_name: Mapped[str] = mapped_column(String(256), default="")
+    source_account_type: Mapped[str] = mapped_column(String(64))
+    source_company_ids: Mapped[list] = mapped_column(JSON, default=list)
+    advertiser_id: Mapped[str] = mapped_column(String(32))
+    advertiser_name: Mapped[str] = mapped_column(String(256), default="")
+    advertiser_type: Mapped[str] = mapped_column(String(64), default="")
+    is_valid: Mapped[bool] = mapped_column(default=True)
+
+
+class QianchuanUpload(Base):
+    __tablename__ = "qianchuan_uploads"
+    __table_args__ = (UniqueConstraint("tenant_id", "created_by", "binding_id", "video_asset_id",
+                                      "source_content_hash", "advertiser_id",
+                                      name="uq_qianchuan_upload_owner_binding_target"),)
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    tenant_id: Mapped[str] = mapped_column(ForeignKey("tenants.id"), index=True)
+    created_by: Mapped[str] = mapped_column(ForeignKey("users.id"))
+    video_asset_id: Mapped[int] = mapped_column(ForeignKey("video_assets.id"), index=True)
+    binding_id: Mapped[str] = mapped_column(ForeignKey("qianchuan_account_bindings.id"))
+    advertiser_id: Mapped[str] = mapped_column(String(32))
+    advertiser_name: Mapped[str] = mapped_column(String(256), default="")
+    source_content_hash: Mapped[str] = mapped_column(String(64))
+    source_url: Mapped[str] = mapped_column(String(1024))
+    filename: Mapped[str] = mapped_column(String(255))
+    is_aigc: Mapped[bool] = mapped_column()
+    status: Mapped[str] = mapped_column(String(32), default="queued", index=True)
+    phase: Mapped[str] = mapped_column(String(32), default="")
+    signature: Mapped[str] = mapped_column(String(32), default="")
+    material_id: Mapped[str] = mapped_column(String(32), default="")
+    video_id: Mapped[str] = mapped_column(String(128), default="")
+    attempts: Mapped[int] = mapped_column(Integer, default=0)
+    verify_attempts: Mapped[int] = mapped_column(Integer, default=0)
+    next_attempt_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    error_code: Mapped[str] = mapped_column(String(64), default="")
+    error_message: Mapped[str] = mapped_column(String(256), default="")
+    provider_request_id: Mapped[str] = mapped_column(String(128), default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)

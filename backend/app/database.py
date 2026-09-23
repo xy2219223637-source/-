@@ -1,9 +1,15 @@
 from __future__ import annotations
 
 from collections.abc import Generator
+from contextlib import closing
+from datetime import UTC, datetime
 import logging
+from pathlib import Path
+import sqlite3
+import uuid
 
-from sqlalchemy import create_engine, inspect, text
+from sqlalchemy import MetaData, create_engine, inspect, text
+from sqlalchemy.schema import CreateIndex, CreateTable
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
 
@@ -211,7 +217,79 @@ def init_db() -> None:
     migrate_legacy_schema(engine)
     migrate_feishu_notifications(engine)
     migrate_director_edit_time(engine)
+    migrate_qianchuan_upload_uniqueness(engine)
     _ensure_default_tenant_roles()
+
+
+def migrate_qianchuan_upload_uniqueness(bind: Engine, *, postgres_backup_confirmed: bool = False) -> None:
+    """Replace tenant-wide upload deduplication with per-user deduplication."""
+    from app.models import QianchuanUpload
+
+    old_names = {"uq_qianchuan_upload_source_target", "uq_qianchuan_upload_owner_source_target"}
+    new_name = "uq_qianchuan_upload_owner_binding_target"
+    with bind.connect() as connection:
+        if "qianchuan_uploads" not in inspect(connection).get_table_names():
+            return
+        constraints = {item["name"] for item in inspect(connection).get_unique_constraints("qianchuan_uploads")}
+        if new_name in constraints:
+            return
+        previous_names = old_names & constraints
+        if len(previous_names) != 1:
+            raise RuntimeError("千川上传唯一约束状态未知，请先人工检查数据库并备份")
+        previous = next(iter(previous_names))
+        dialect = bind.dialect.name
+        if dialect == "postgresql":
+            if not postgres_backup_confirmed:
+                raise RuntimeError("千川上传表需要个人归属迁移；请先备份 PostgreSQL 并显式执行迁移脚本")
+            connection.commit()
+            with connection.begin():
+                connection.execute(text(f"ALTER TABLE qianchuan_uploads DROP CONSTRAINT {previous}"))
+                connection.execute(text("ALTER TABLE qianchuan_uploads ADD CONSTRAINT " + new_name +
+                    " UNIQUE (tenant_id, created_by, binding_id, video_asset_id, source_content_hash, advertiser_id)"))
+            return
+        if dialect != "sqlite":
+            raise RuntimeError(f"不支持千川上传唯一约束迁移的数据库类型: {dialect}")
+
+        original = QianchuanUpload.__table__
+        existing_columns = {column["name"] for column in inspect(connection).get_columns("qianchuan_uploads")}
+        expected_columns = {column.name for column in original.columns}
+        if existing_columns != expected_columns:
+            raise RuntimeError("千川上传表字段与模型不一致，拒绝自动重建，请先人工检查并备份")
+        temp_name = "qianchuan_uploads_personal_migration"
+        if temp_name in inspect(connection).get_table_names():
+            raise RuntimeError("发现未完成的千川迁移临时表，请先人工检查并备份")
+        temp_metadata = MetaData()
+        temp_metadata.reflect(bind=connection)
+        temp = original.to_metadata(temp_metadata, name=temp_name)
+        columns = ", ".join(column.name for column in original.columns)
+        database_path = bind.url.database
+        if database_path and database_path != ":memory:":
+            source = Path(database_path).resolve()
+            backup = source.with_name(source.name + ".qianchuan-personal-" +
+                datetime.now(UTC).strftime("%Y%m%d%H%M%S") + "-" + uuid.uuid4().hex[:8] + ".bak")
+            connection.commit()
+            with closing(sqlite3.connect(source)) as source_db, closing(sqlite3.connect(backup)) as backup_db:
+                source_db.backup(backup_db)
+            logger.info("Backed up SQLite database before Qianchuan personal migration: %s", backup)
+        connection.exec_driver_sql("PRAGMA foreign_keys=OFF")
+        connection.commit()
+        try:
+            with connection.begin():
+                connection.execute(CreateTable(temp))
+                connection.execute(text(f"INSERT INTO {temp_name} ({columns}) SELECT {columns} FROM qianchuan_uploads"))
+                source_count = connection.execute(text("SELECT count(*) FROM qianchuan_uploads")).scalar_one()
+                copied_count = connection.execute(text(f"SELECT count(*) FROM {temp_name}")).scalar_one()
+                if source_count != copied_count:
+                    raise RuntimeError("千川上传迁移行数不一致，已中止")
+                connection.execute(text("DROP TABLE qianchuan_uploads"))
+                connection.execute(text(f"ALTER TABLE {temp_name} RENAME TO qianchuan_uploads"))
+                for index in original.indexes:
+                    connection.execute(CreateIndex(index))
+                if connection.execute(text("PRAGMA foreign_key_check")).first():
+                    raise RuntimeError("千川上传迁移后外键校验失败，已中止")
+        finally:
+            connection.exec_driver_sql("PRAGMA foreign_keys=ON")
+            connection.commit()
 
 
 def migrate_director_edit_time(bind: Engine) -> None:

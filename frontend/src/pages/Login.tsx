@@ -12,11 +12,20 @@ export default function Login() {
     try {
       const result = await authApi.login(form.phone, form.password);
       localStorage.setItem('access_token', result.access_token);
+      const oauthReturn = sessionStorage.getItem('qianchuan_oauth_return') || '';
+      sessionStorage.removeItem('qianchuan_oauth_return');
       if (result.user?.must_change_password === 'true') {
-        window.location.href = '/change-password';
-        return;
+          window.location.href = '/change-password';
+          return;
       }
-      window.location.href = safeReturnPath(new URLSearchParams(window.location.search).get('returnTo'));
+
+      if (/^\/qianchuan\/oauth\/result\?session_id=[0-9a-f-]{36}$/.test(oauthReturn)) {
+          window.location.href = oauthReturn;
+          return;
+      }
+      window.location.href = safeReturnPath(
+          new URLSearchParams(window.location.search).get('returnTo')
+        );
     } catch (err: any) {
       setError(err.response?.data?.detail || '操作失败');
     }

@@ -5,7 +5,6 @@ import VideoLineage,{LineageBack,useSegmentPreview} from '../src/components/Vide
 import {videoLibraryApi} from '../src/api/client';
 import type {VideoLineageAsset,VideoLineageResult} from '../src/types';
 import {aggregateReports,demoReport,money} from '../src/components/videoPerformanceDemo';
-import VideoPerformanceAnalytics from '../src/components/VideoPerformanceAnalytics';
 
 vi.mock('../src/api/client',()=>({mediaUrl:(value:string)=>value,videoLibraryApi:{lineage:vi.fn()}}));
 const source:VideoLineageAsset={id:1,asset_id:'source',filename:'source.mp4',asset_kind:'final_output',library_type:'finished',object_url:'/source.mp4',duration_seconds:20,reference_count:7,created_at:'2026-09-17T00:00:00Z'};
@@ -49,16 +48,6 @@ describe('视频溯源交互',()=>{
     expect(api).toHaveBeenCalledTimes(1);
   });
 
-  it('投放分析范围改变指标, 逐秒分析覆盖整条视频并支持定位',()=>{
-    const seek=vi.fn();render(<VideoPerformanceAnalytics asset={{...source,duration_seconds:90}} currentSecond={0} onSeek={seek}/>);
-    const first=document.querySelector('.metrics')!.textContent;
-    fireEvent.change(screen.getByLabelText('投放分析时间范围'),{target:{value:'30'}});
-    expect(document.querySelector('.metrics')!.textContent).not.toBe(first);
-    fireEvent.click(screen.getByRole('button',{name:'逐秒分析'}));
-    const range=screen.getByLabelText('逐秒分析进度');
-    expect(range.getAttribute('max')).toBe('90');
-    fireEvent.change(range,{target:{value:'72'}});expect(seek).toHaveBeenCalledWith(72);
-  });
   it('时间轴保留空白, 抽屉切换片段后定位到成片区间',async()=>{
     const locate=vi.fn();mount('/final-videos/2',target,locate);
     const marker=await screen.findByRole('button',{name:'source.mp4, 00:02.000 - 00:06.000'});

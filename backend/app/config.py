@@ -96,6 +96,17 @@ class Settings(BaseSettings):
     feishu_log_dir: str = ""
     feishu_log_raw: bool = True
 
+    qianchuan_enabled: bool = False
+    qianchuan_app_id: str = ""
+    qianchuan_app_secret: str = ""
+    qianchuan_authorization_url: str = ""
+    qianchuan_redirect_uri: str = ""
+    qianchuan_scope: str = ""
+    qianchuan_token_encryption_key: str = ""
+    qianchuan_log_material_response: bool = True
+    # Account/material totals may include campaigns run by other operators.
+    qianchuan_allow_account_material_aggregate: bool = False
+
     host: str = "0.0.0.0"
     port: int = 8000
     debug: bool = True
