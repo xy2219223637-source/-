@@ -21,6 +21,7 @@ htmlcov/
 *.swp
 deploy/logs/
 backend/logs/
+backups/
 output/
 backend/log/
 backend/logs/

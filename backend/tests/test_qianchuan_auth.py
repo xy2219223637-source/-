@@ -22,7 +22,7 @@ from app.api.qianchuan import router
 from app.auth import create_token
 from app.config import Settings
 from app.database import Base, get_db
-from app.models import (Product, VideoAsset, Tenant, User, TenantMember,
+from app.models import (Product, VideoAsset, Tenant, User, TenantMember, TenantRole,
                         QianchuanConnection as Connection, QianchuanOAuthSession as OAuthSession,
                         QianchuanAccountBinding as Binding)
 from app.services.qianchuan.client import QianchuanClient, PlatformError, AGENT_ROLE, SHOP_ROLE
@@ -57,10 +57,13 @@ class QianchuanAuthorizationTests(unittest.TestCase):
         with self.sessions() as db:
             for tenant_id in ("team-a", "team-b"):
                 db.add(Tenant(id=tenant_id, name=tenant_id, code=tenant_id))
+            db.add(TenantRole(id=1, tenant_id="team-a", name="成片成员", code="custom",
+                              permissions=["final_videos.access"]))
             for user_id, tenant_id, role in (("owner", "team-a", "owner"), ("member", "team-a", "member"),
                                              ("other", "team-b", "owner")):
                 db.add(User(id=user_id, email=user_id + "@example.test", name=user_id, password_hash="unused"))
-                db.add(TenantMember(tenant_id=tenant_id, user_id=user_id, role=role))
+                db.add(TenantMember(tenant_id=tenant_id, user_id=user_id, role=role,
+                                    role_id=1 if user_id == "member" else None))
             db.add(Product(id=1, tenant_id="team-a", name="测试商品"))
             db.add(Product(id=2, tenant_id="team-b", name="其他企业商品"))
             for asset_id, tenant_id, kind in ((1, "team-a", "final_output"), (2, "team-b", "final_output"),
@@ -223,17 +226,28 @@ class QianchuanAuthorizationTests(unittest.TestCase):
         self.assertEqual(self.callback(session).status_code, 400)
         self.assertEqual(self.call_count(A01), 1)
 
-    def test_owner_role_checked_again_on_callback(self):
+    def test_membership_checked_again_on_callback(self):
         session, _ = self.start()
         with self.sessions() as db:
-            db.query(TenantMember).filter_by(user_id="owner").update({"role": "member"})
+            db.query(TenantMember).filter_by(user_id="owner").update({"status": "disabled"})
             db.commit()
         self.assertEqual(self.callback(session).status_code, 400)
         self.assertEqual(self.call_count(A01), 0)
 
+    def test_member_losing_final_video_permission_cannot_finish_authorization(self):
+        response = self.browser.post(PREFIX + "/oauth/sessions", json={"video_asset_id": 1},
+                                     headers=self.member_headers)
+        self.assertEqual(response.status_code, 201)
+        with self.sessions() as db:
+            db.get(TenantRole, 1).permissions = []
+            db.commit()
+        self.assertEqual(self.callback(response.json()).status_code, 400)
+        self.assertEqual(self.call_count(A01), 0)
+        self.assertEqual(self.browser.get(PREFIX + "/accounts", headers=self.member_headers).status_code, 403)
+
     def test_authentication_roles_and_cross_tenant_resources(self):
         self.assertEqual(self.browser.get(PREFIX + "/accounts").status_code, 401)
-        self.assertEqual(self.browser.post(PREFIX + "/oauth/sessions", json={}, headers=self.member_headers).status_code, 403)
+        self.assertEqual(self.browser.post(PREFIX + "/oauth/sessions", json={}, headers=self.member_headers).status_code, 201)
         for asset_id in (2, 3):
             self.assertEqual(self.browser.post(PREFIX + "/oauth/sessions", json={"video_asset_id": asset_id},
                                                headers=self.headers).status_code, 404)
@@ -244,7 +258,7 @@ class QianchuanAuthorizationTests(unittest.TestCase):
                                           headers=self.member_headers).status_code, 404)
         for suffix, method in (("/sync", self.browser.post), ("", self.browser.delete)):
             self.assertEqual(method(PREFIX + "/connections/" + conn_id + suffix, headers=self.other_headers).status_code, 404)
-            self.assertEqual(method(PREFIX + "/connections/" + conn_id + suffix, headers=self.member_headers).status_code, 403)
+            self.assertEqual(method(PREFIX + "/connections/" + conn_id + suffix, headers=self.member_headers).status_code, 404)
         self.assertEqual(self.browser.get(PREFIX + "/accounts", headers=self.other_headers).json()["connections"], [])
         self.assertEqual(self.browser.post(PREFIX + "/oauth/sessions", json={"tenant_id": "team-b"}, headers=self.headers).status_code, 422)
 
@@ -278,6 +292,53 @@ class QianchuanAuthorizationTests(unittest.TestCase):
         self.assertNotEqual(one["state"], ["old"])
         self.assertNotEqual(one["state"], two["state"])
         self.assertEqual(len(one["state"]), 1)
+
+    def test_repeated_new_authorization_reuses_personal_connection(self):
+        first, _ = self.start(video_asset_id=1)
+        second, _ = self.start(video_asset_id=1)
+        with self.sessions() as db:
+            self.assertEqual(db.query(Connection).filter_by(
+                tenant_id="team-a", created_by="owner").count(), 1)
+            first_row = db.get(OAuthSession, first["session_id"])
+            second_row = db.get(OAuthSession, second["session_id"])
+            self.assertEqual(first_row.connection_id, second_row.connection_id)
+            self.assertEqual(first_row.status, "failed")
+            self.assertEqual(first_row.error_code, "superseded")
+            self.assertEqual(second_row.status, "pending")
+
+    def test_same_advertiser_from_shop_and_workspace_is_returned_once(self):
+        self.custom[A02] = lambda r: self.envelope({"list": [
+            {"account_id": 100, "account_name": "PAMIS", "account_type": "CUSTOMER_ADMIN", "is_valid": True},
+            {"account_id": 101, "account_name": "直营店铺", "account_type": SHOP_ROLE, "is_valid": True},
+        ]})
+        self.custom[A09] = lambda r: self.envelope({"accounts": [
+            {"account_id": 9007199254740993, "account_name": "工作台千川", "account_type": "QIANCHUAN"}],
+            "page_info": {"page": 1, "total_page": 1}})
+        _, connection_id = self.completed()
+        self.service.sync_connection(connection_id)
+        accounts = self.browser.get(PREFIX + "/accounts", headers=self.headers).json()
+        rows = accounts["connections"][0]["accounts"]
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["advertiser_id"], "9007199254740993")
+        self.assertEqual(rows[0]["source_account_name"], "直营店铺")
+
+    def test_legacy_connections_are_presented_as_one_deduplicated_list(self):
+        _, first_id = self.completed()
+        self.service.sync_connection(first_id)
+        with self.sessions() as db:
+            first = db.get(Connection, first_id)
+            second = Connection(id="legacy-second", tenant_id="team-a", created_by="owner",
+                                status="active", created_at=first.created_at + timedelta(seconds=1))
+            db.add(second)
+            db.add(Binding(id="legacy-binding", tenant_id="team-a", connection_id=second.id,
+                           source_account_id="200", source_account_name="duplicate",
+                           source_account_type=SHOP_ROLE, advertiser_id="9007199254740993",
+                           advertiser_name="测试千川", advertiser_type="SHOP_LINKED"))
+            db.commit()
+        result = self.browser.get(PREFIX + "/accounts", headers=self.headers).json()
+        self.assertEqual(len(result["connections"]), 1)
+        self.assertEqual(result["connections"][0]["id"], "legacy-second")
+        self.assertEqual(len(result["connections"][0]["accounts"]), 1)
 
     def test_authorization_template_rejects_conflicts_and_unknown_parameters(self):
         base = self.settings.qianchuan_authorization_url
@@ -575,7 +636,7 @@ class QianchuanAuthorizationTests(unittest.TestCase):
         _, conn_id = self.completed()
         self.service.sync_connection(conn_id)
         url = PREFIX + "/connections/" + conn_id + "/remove"
-        self.assertEqual(self.browser.post(url, headers=self.member_headers).status_code, 403)
+        self.assertEqual(self.browser.post(url, headers=self.member_headers).status_code, 404)
         self.assertEqual(self.browser.post(url, headers=self.other_headers).status_code, 404)
         pending, _ = self.start(connection_id=conn_id)
         calls_before = self.call_count(A01)

@@ -107,8 +107,10 @@ export default function QianchuanUploadModal({videoAssetId, filename: originalFi
       {error && <p role="alert" className="mt-4 text-sm text-red-600">{error}</p>}
       {!data && !error && <div className="flex items-center gap-2 py-8 text-sm"><Loader2 size={16} className="animate-spin"/>正在读取账户</div>}
       {data && !ready && <div className="mt-4 rounded bg-amber-50 p-4 text-sm text-amber-900">千川授权功能尚未启用或配置不完整，请管理员配置应用凭据和回调地址。</div>}
-      {data?.can_manage && ready && <button className="btn-primary mt-4" disabled={busy} onClick={() => void authorize()}>添加官方授权</button>}
-      {data && !data.can_manage && !data.connections.some(c => c.accounts.length > 0) && <p className="mt-4 text-sm">当前没有可选账户，请联系企业管理员完成授权。</p>}
+      {data && <button className="btn-primary mt-4" disabled={busy || !ready || !data.can_manage} onClick={() => void authorize()}>
+        {data.connections.length ? '更新我的千川授权' : '绑定我的千川账号'}
+      </button>}
+      {data && ready && !data.connections.some(c => c.accounts.length > 0) && <p className="mt-4 text-sm">当前没有本人可用的千川账号，可添加官方授权或同步已有连接。</p>}
       <div className="mt-4 space-y-4">
         {data?.connections.map((connection, index) => <div key={connection.id} className="rounded border border-[var(--border)] p-4">
           <div className="flex flex-wrap items-center justify-between gap-2">
@@ -123,14 +125,14 @@ export default function QianchuanUploadModal({videoAssetId, filename: originalFi
                 }
               }}>停用连接</button>
               <button className="text-red-600 underline disabled:opacity-50" disabled={busy} onClick={() => {
-                if (window.confirm('删除此授权连接及其账户列表？已有上传记录和千川素材会保留；再次使用需添加新的授权。')) {
+                if (window.confirm('解绑此授权连接？这是本系统内的移除，不代表千川平台已撤销授权；已有上传记录和素材会保留。')) {
                   void perform(async () => {
                     await qianchuanApi.remove(connection.id);
                     if (connection.accounts.some(account => account.id === selection)) setSelection('');
                     setData(current => current ? {...current, connections: current.connections.filter(item => item.id !== connection.id)} : current);
                   });
                 }
-              }}>删除</button>
+              }}>解绑</button>
             </div>}
           </div>
           {connection.error && <p className="mt-2 text-sm text-red-600">{connection.error}</p>}
