@@ -106,6 +106,11 @@ class Settings(BaseSettings):
     qianchuan_log_material_response: bool = True
     # Account/material totals may include campaigns run by other operators.
     qianchuan_allow_account_material_aggregate: bool = False
+    # Full-domain delivery is a sidecar flow. Read, write and worker gates are
+    # deliberately independent and default off.
+    qianchuan_plan_enabled: bool = False
+    qianchuan_plan_write_enabled: bool = False
+    qianchuan_plan_worker_enabled: bool = False
 
     host: str = "0.0.0.0"
     port: int = 8000

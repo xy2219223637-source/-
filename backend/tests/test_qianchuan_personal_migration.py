@@ -17,7 +17,8 @@ class QianchuanPersonalMigrationTests(unittest.TestCase):
             engine = create_engine("sqlite:///" + str(Path(directory) / "migration.db"))
             try:
                 Base.metadata.create_all(engine, tables=[table for table in Base.metadata.sorted_tables
-                    if table.name != "qianchuan_uploads"])
+                    if table.name != "qianchuan_uploads"
+                    and not table.info.get("explicit_migration_required")])
                 metadata = MetaData()
                 metadata.reflect(bind=engine)
                 old = QianchuanUpload.__table__.to_metadata(metadata)

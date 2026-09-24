@@ -139,6 +139,51 @@ export interface QianchuanMaterialReport {
   per_second: {status: 'unavailable'; message: string};
 }
 
+export interface QianchuanPlanCapabilities {
+  enabled: boolean;
+  write_enabled: boolean;
+  worker_enabled: boolean;
+  binding_id: string | null;
+  credential_version: number | null;
+  can_create: boolean;
+  capabilities: {name: string; conclusion: string; probed_at: string; expires_at: string}[];
+}
+
+export interface QianchuanAwemeOption {
+  id: string;
+  name: string;
+  show_id: string;
+  avatar_url: string;
+  status: string;
+  has_live_permission: boolean | null;
+  has_video_permission: boolean | null;
+  has_publish_permission: boolean | null;
+  bind_types: string[];
+}
+
+export interface QianchuanAwemePage {
+  items: QianchuanAwemeOption[];
+  page: number;
+  page_size: number;
+  total_number: number;
+  total_page: number;
+}
+
+export interface QianchuanProductOption {
+  id: string;
+  name: string;
+  image_url: string;
+  category_name: string;
+  channel_type: string;
+}
+
+export interface QianchuanProductPage {
+  items: QianchuanProductOption[];
+  cursor: number | null;
+  has_more: boolean;
+  page_size: number;
+}
+
 const pendingReports = new Map<string, Promise<QianchuanMaterialReport>>();
 function loadQianchuanReport(id: string, days: number) {
   const key = JSON.stringify([localStorage.getItem('access_token'), id, days]);
@@ -164,6 +209,12 @@ export const qianchuanApi = {
   uploads: (video_asset_id: number) => api.get<QianchuanUpload[]>('/qianchuan/uploads', {params: {video_asset_id}}).then(r => r.data),
   retryUpload: (id: string) => api.post<QianchuanUpload>(`/qianchuan/uploads/${encodeURIComponent(id)}/retry`).then(r => r.data),
   report: loadQianchuanReport,
+  planCapabilities: (binding_id?: string) => api.get<QianchuanPlanCapabilities>(
+    '/qianchuan/plan-capabilities', {params: binding_id ? {binding_id} : {}}).then(r => r.data),
+  awemes: (bindingId: string, params: {keyword?: string; page?: number; page_size?: number} = {}) =>
+    api.get<QianchuanAwemePage>(`/qianchuan/accounts/${encodeURIComponent(bindingId)}/awemes`, {params}).then(r => r.data),
+  products: (bindingId: string, params: {aweme_id?: string; keyword?: string; cursor?: number; page_size?: number} = {}) =>
+    api.get<QianchuanProductPage>(`/qianchuan/accounts/${encodeURIComponent(bindingId)}/products`, {params}).then(r => r.data),
 };
 
 export function mediaUrl(path: string): string {

@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 from datetime import datetime
+from decimal import Decimal
 from typing import Optional
 
-from sqlalchemy import DateTime, Float, ForeignKey, Integer, String, Text, JSON, UniqueConstraint, Index, text
+from sqlalchemy import (CheckConstraint, DateTime, Float, ForeignKey, Integer, String, Text, JSON,
+                        Numeric, UniqueConstraint, Index, text)
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.database import Base
@@ -1198,3 +1200,115 @@ class QianchuanUpload(Base):
     provider_request_id: Mapped[str] = mapped_column(String(128), default="")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class QianchuanDeliveryPlan(Base):
+    """Sidecar mirror/task for a full-domain plan; never changes upload semantics."""
+
+    __tablename__ = "qianchuan_delivery_plans"
+    __table_args__ = (
+        CheckConstraint("budget_minor >= 0", name="ck_qianchuan_plan_budget_nonnegative"),
+        CheckConstraint("operation_version >= 0", name="ck_qianchuan_plan_version_nonnegative"),
+        Index("ix_qianchuan_plan_owner_asset", "tenant_id", "created_by", "video_asset_id"),
+        Index("ix_qianchuan_plan_status_updated", "local_status", "updated_at"),
+        Index("ix_qianchuan_plan_binding", "binding_id"),
+        Index("uq_qianchuan_plan_platform_ad", "advertiser_id", "platform_ad_id", unique=True,
+              postgresql_where=text("platform_ad_id IS NOT NULL AND platform_ad_id <> ''"),
+              sqlite_where=text("platform_ad_id IS NOT NULL AND platform_ad_id <> ''")),
+        {"info": {"explicit_migration_required": True}},
+    )
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    tenant_id: Mapped[str] = mapped_column(ForeignKey("tenants.id"), nullable=False)
+    created_by: Mapped[str] = mapped_column(ForeignKey("users.id"), nullable=False)
+    connection_id: Mapped[str] = mapped_column(ForeignKey("qianchuan_connections.id"), nullable=False)
+    binding_id: Mapped[str] = mapped_column(ForeignKey("qianchuan_account_bindings.id"), nullable=False)
+    advertiser_id: Mapped[str] = mapped_column(String(32), nullable=False)
+    credential_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    video_asset_id: Mapped[int] = mapped_column(ForeignKey("video_assets.id"), nullable=False)
+    upload_id: Mapped[str] = mapped_column(ForeignKey("qianchuan_uploads.id"), nullable=False)
+    material_id: Mapped[str] = mapped_column(String(32), nullable=False)
+    product_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    product_name: Mapped[str] = mapped_column(String(256), nullable=False, default="")
+    aweme_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    aweme_name: Mapped[str] = mapped_column(String(256), nullable=False, default="")
+    name: Mapped[str] = mapped_column(String(256), nullable=False)
+    marketing_goal: Mapped[str] = mapped_column(String(64), nullable=False)
+    budget_minor: Mapped[int] = mapped_column(Integer, nullable=False)
+    roi_goal: Mapped[Optional[Decimal]] = mapped_column(Numeric(12, 4), nullable=True)
+    platform_ad_id: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
+    local_status: Mapped[str] = mapped_column(String(32), nullable=False, default="draft")
+    platform_status: Mapped[str] = mapped_column(String(64), nullable=False, default="")
+    review_status: Mapped[str] = mapped_column(String(32), nullable=False, default="unknown")
+    delivery_status: Mapped[str] = mapped_column(String(32), nullable=False, default="unknown")
+    last_operation: Mapped[str] = mapped_column(String(32), nullable=False, default="")
+    operation_version: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    provider_request_id: Mapped[str] = mapped_column(String(128), nullable=False, default="")
+    error_code: Mapped[str] = mapped_column(String(64), nullable=False, default="")
+    error_message: Mapped[str] = mapped_column(String(256), nullable=False, default="")
+    request_snapshot: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.utcnow,
+                                                  onupdate=datetime.utcnow)
+    last_synced_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+
+
+class QianchuanPlanOperation(Base):
+    """Append-only audit record for create/enable/pause/sync requests."""
+
+    __tablename__ = "qianchuan_plan_operations"
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "created_by", "idempotency_key",
+                         name="uq_qianchuan_plan_operation_owner_key"),
+        CheckConstraint("request_version >= 0", name="ck_qianchuan_operation_version_nonnegative"),
+        Index("ix_qianchuan_operation_plan_created", "plan_id", "created_at"),
+        Index("ix_qianchuan_operation_status_created", "status", "created_at"),
+        {"info": {"explicit_migration_required": True}},
+    )
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    plan_id: Mapped[str] = mapped_column(ForeignKey("qianchuan_delivery_plans.id"), nullable=False)
+    tenant_id: Mapped[str] = mapped_column(ForeignKey("tenants.id"), nullable=False)
+    created_by: Mapped[str] = mapped_column(ForeignKey("users.id"), nullable=False)
+    operation_type: Mapped[str] = mapped_column(String(32), nullable=False)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="pending")
+    before_status: Mapped[str] = mapped_column(String(32), nullable=False, default="")
+    after_status: Mapped[str] = mapped_column(String(32), nullable=False, default="")
+    idempotency_key: Mapped[str] = mapped_column(String(128), nullable=False)
+    request_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    result_certainty: Mapped[str] = mapped_column(String(32), nullable=False, default="not_started")
+    provider_code: Mapped[str] = mapped_column(String(32), nullable=False, default="")
+    provider_request_id: Mapped[str] = mapped_column(String(128), nullable=False, default="")
+    error_code: Mapped[str] = mapped_column(String(64), nullable=False, default="")
+    error_message: Mapped[str] = mapped_column(String(256), nullable=False, default="")
+    request_snapshot: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.utcnow)
+    started_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    completed_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+
+
+class QianchuanCapabilityProbe(Base):
+    """Credential-version-bound result of a read-only provider capability probe."""
+
+    __tablename__ = "qianchuan_capability_probes"
+    __table_args__ = (
+        CheckConstraint(
+            "conclusion IN ('verified','permission_missing','account_not_applicable','no_sample_data','contract_uncertain')",
+            name="ck_qianchuan_capability_conclusion"),
+        Index("ix_qianchuan_capability_owner", "tenant_id", "created_by"),
+        Index("ix_qianchuan_capability_binding_name_expiry", "binding_id", "capability", "expires_at"),
+        {"info": {"explicit_migration_required": True}},
+    )
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    tenant_id: Mapped[str] = mapped_column(ForeignKey("tenants.id"), nullable=False)
+    created_by: Mapped[str] = mapped_column(ForeignKey("users.id"), nullable=False)
+    connection_id: Mapped[str] = mapped_column(ForeignKey("qianchuan_connections.id"), nullable=False)
+    binding_id: Mapped[str] = mapped_column(ForeignKey("qianchuan_account_bindings.id"), nullable=False)
+    advertiser_id: Mapped[str] = mapped_column(String(32), nullable=False)
+    credential_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    capability: Mapped[str] = mapped_column(String(64), nullable=False)
+    conclusion: Mapped[str] = mapped_column(String(32), nullable=False)
+    http_status: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    provider_code: Mapped[str] = mapped_column(String(32), nullable=False, default="")
+    provider_request_id: Mapped[str] = mapped_column(String(128), nullable=False, default="")
+    response_summary: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    probed_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.utcnow)
+    expires_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)

@@ -14,7 +14,7 @@ from app.services.production_queue import start_worker, stop_worker
 from app.services.video_analysis_queue import start_video_analysis_worker, stop_video_analysis_worker
 from app.services.redis_client import get_redis
 from app.services.feishu_logging import RequestTraceMiddleware, trace_fields
-from app.api import qianchuan
+from app.api import qianchuan, qianchuan_plans
 from app.api import video_lineage
 from app.services.qianchuan.service import get_qianchuan_service, install_log_filters
 from app.services.qianchuan.worker import start_qianchuan_worker, stop_qianchuan_worker
@@ -75,6 +75,7 @@ app.include_router(videos.router, prefix="/api")
 app.include_router(director.router, prefix="/api")
 app.include_router(auto_edit.router, prefix="/api")
 app.include_router(qianchuan.router, prefix="/api")
+app.include_router(qianchuan_plans.router, prefix="/api")
 app.include_router(video_library.router, prefix="/api")
 app.include_router(video_taxonomy.router, prefix="/api")
 app.include_router(video_lineage.router, prefix="/api")

@@ -108,7 +108,11 @@ def _json_column_sql(connection) -> str:
 def init_db() -> None:
     from app import models  # noqa: F401
 
-    Base.metadata.create_all(bind=engine)
+    # Delivery-plan tables require the audited, explicit migration command.
+    # Startup must not silently create production sidecar tables.
+    startup_tables = [table for table in Base.metadata.sorted_tables
+                      if not table.info.get("explicit_migration_required")]
+    Base.metadata.create_all(bind=engine, tables=startup_tables)
     # Lightweight compatibility migration for this PoC. Existing installations
     # predate the product-level video library, so create_all alone cannot relax
     # the old project_id constraint or add the new bookkeeping columns.

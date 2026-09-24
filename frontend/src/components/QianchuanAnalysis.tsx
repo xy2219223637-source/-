@@ -2,9 +2,12 @@ import {useState} from 'react';
 import type {QianchuanUpload} from '../api/client';
 import QianchuanReportPanel from './QianchuanReportPanel';
 import QianchuanUploadHistory,{uploadStatus} from './QianchuanUploadHistory';
+import QianchuanPlanDataPanel from './QianchuanPlanDataPanel';
+import type {QianchuanDemoPlan} from './QianchuanPlanDemo';
 
-export default function QianchuanAnalysis({uploads,error,reload,onManage}: {
-  uploads: QianchuanUpload[]; error: string; reload: () => void; onManage: () => void;
+export default function QianchuanAnalysis({uploads,error,reload,onManage,onCreatePlan,plans=[]}: {
+  uploads:QianchuanUpload[]; error:string; reload:()=>void; onManage:()=>void;
+  onCreatePlan?:()=>void; plans?:QianchuanDemoPlan[];
 }) {
   const [selectedAdvertiserId,setSelectedAdvertiserId]=useState('');
   const orderedUploads=[...uploads].sort((left,right)=>(Date.parse(right.created_at)||0)-(Date.parse(left.created_at)||0));
@@ -29,6 +32,7 @@ export default function QianchuanAnalysis({uploads,error,reload,onManage}: {
       <p>素材推送状态：{error?'上传状态读取失败':uploadStatus(latestUpload)}</p>
       {reportUpload?.material_id&&<p className="mt-2 break-all text-[var(--muted)]">千川素材 ID：{reportUpload.material_id}</p>}
     </div>
+    <QianchuanPlanDataPanel plans={plans} onCreate={onCreatePlan||onManage}/>
     <QianchuanReportPanel key={reportUpload?.id||advertiserId||'no-upload'} upload={reportUpload}/>
     <QianchuanUploadHistory uploads={accountUploads} error={error} reload={reload}/>
   </section>;
