@@ -111,6 +111,80 @@ class ArkSeedreamImageProvider:
         return urls
 
 
+class ApilioImageProvider:
+    """OpenAI-compatible Apilio image-generation adapter.
+
+    This is intentionally separate from the Ark adapter: both providers expose
+    the same application-facing ``generate`` contract, but their request-only
+    options remain contained here.
+    """
+
+    name = "apilio"
+
+    def __init__(self) -> None:
+        settings = get_settings()
+        self.base_url = settings.apilio_image_base_url.rstrip("/")
+        self.api_key = settings.apilio_image_api_key
+        self.model = settings.apilio_image_model
+        self.quality = settings.apilio_image_quality
+        self.timeout = settings.image_generation_timeout_seconds
+        if not self.api_key:
+            raise RuntimeError("APILIO_IMAGE_API_KEY 未配置")
+        if not self.model:
+            raise RuntimeError("APILIO_IMAGE_MODEL 未配置")
+
+    def generate(
+        self,
+        *,
+        source_url: str,
+        source_urls: Optional[list[str]] = None,
+        variant_labels: Optional[list[str]] = None,
+        prompt: str,
+        action: str,
+        count: int,
+        width: int,
+        height: int,
+        project_id: int,
+    ) -> list[str]:
+        input_urls = [source_url] if source_urls is None else source_urls
+        image_inputs = [_image_input(url) for url in input_urls[:10] if url]
+        urls: list[str] = []
+        with httpx.Client(timeout=self.timeout, follow_redirects=True) as client:
+            for index in range(count):
+                label = variant_labels[index] if variant_labels and index < len(variant_labels) else action
+                request_prompt = f"{prompt}\n本张图片任务：{label}。保持所有参考商品的包装、瓶型、Logo与可见文字准确一致。"
+                payload: dict = {
+                    "model": self.model,
+                    "prompt": request_prompt,
+                    "size": f"{width}x{height}",
+                    "quality": self.quality,
+                    "response_format": "url",
+                }
+                # Apilio exposes an OpenAI-compatible image endpoint. Its image
+                # models accept reference images through this compatibility
+                # field; keeping it here avoids leaking provider syntax upward.
+                if image_inputs:
+                    payload["image"] = image_inputs
+                response = client.post(
+                    f"{self.base_url}/images/generations",
+                    headers={"Authorization": f"Bearer {self.api_key}", "Content-Type": "application/json"},
+                    json=payload,
+                )
+                if response.is_error:
+                    raise RuntimeError(f"Apilio 图片请求失败 ({response.status_code}): {response.text[:500]}")
+                data = response.json().get("data") or []
+                result = data[0] if data else {}
+                image_url = result.get("url")
+                if not image_url:
+                    raise RuntimeError("Apilio 未返回图片 URL")
+                image_response = client.get(image_url)
+                image_response.raise_for_status()
+                suffix = mimetypes.guess_extension(image_response.headers.get("content-type", "").split(";")[0]) or ".png"
+                filename = f"apilio-{uuid.uuid4().hex}{suffix}"
+                urls.append(get_storage().save_bytes(image_response.content, filename, f"creative/{project_id}"))
+        return urls
+
+
 class LocalDemoImageProvider:
     name = "local_demo"
 
@@ -155,8 +229,13 @@ class LocalDemoImageProvider:
         return urls
 
 
-def get_image_provider(task_type:str="") -> ArkSeedreamImageProvider | LocalDemoImageProvider:
+def get_image_provider(task_type: str = "") -> ArkSeedreamImageProvider | ApilioImageProvider | LocalDemoImageProvider:
     settings = get_settings()
+    provider = settings.image_generation_provider.strip().lower()
+    if provider == "apilio":
+        return ApilioImageProvider()
+    if provider not in {"", "ark_seedream"}:
+        raise RuntimeError(f"不支持的 IMAGE_GENERATION_PROVIDER: {settings.image_generation_provider}")
     if settings.image_generation_model and (settings.image_generation_api_key or settings.llm_api_key):
         portrait=any(key in task_type.lower() for key in ["portrait","model","human"]);edit=any(key in task_type.lower() for key in ["edit","regional"]);upscale=any(key in task_type.lower() for key in ["upscale","final","4k"])
         model=settings.image_portrait_model if portrait else settings.image_edit_model if edit else settings.image_upscale_model if upscale else settings.image_product_model
