@@ -1202,6 +1202,232 @@ class QianchuanUpload(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
 
+class QianchuanReviewFeedback(Base):
+    """Immutable provider feedback; AI interpretation is stored on the repair task."""
+
+    __tablename__ = "qianchuan_review_feedback"
+    __table_args__ = (
+        CheckConstraint("source IN ('mock','platform')", name="ck_qianchuan_review_source"),
+        CheckConstraint("audit_platform IN ('AD','CONTENT','UNKNOWN')", name="ck_qianchuan_review_platform"),
+        CheckConstraint("review_status = 'REJECTED'", name="ck_qianchuan_review_status"),
+        Index("ix_qianchuan_review_owner_asset", "tenant_id", "created_by", "video_asset_id"),
+        Index("ix_qianchuan_review_plan", "delivery_plan_id"),
+        {"info": {"explicit_migration_required": True}},
+    )
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    tenant_id: Mapped[str] = mapped_column(ForeignKey("tenants.id"), nullable=False)
+    created_by: Mapped[str] = mapped_column(ForeignKey("users.id"), nullable=False)
+    delivery_plan_id: Mapped[Optional[str]] = mapped_column(
+        ForeignKey("qianchuan_delivery_plans.id"), nullable=True)
+    upload_id: Mapped[Optional[str]] = mapped_column(ForeignKey("qianchuan_uploads.id"), nullable=True)
+    video_asset_id: Mapped[int] = mapped_column(ForeignKey("video_assets.id"), nullable=False)
+    material_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    source: Mapped[str] = mapped_column(String(16), nullable=False)
+    audit_platform: Mapped[str] = mapped_column(String(16), nullable=False, default="UNKNOWN")
+    review_status: Mapped[str] = mapped_column(String(16), nullable=False, default="REJECTED")
+    raw_reason: Mapped[str] = mapped_column(Text, nullable=False)
+    raw_suggestions_json: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
+    provider_payload_json: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    provider_time_ranges_json: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
+    occurred_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.utcnow)
+
+
+class VideoRepairInput(Base):
+    """Immutable facts used by the video repair domain, independent of their origin."""
+
+    __tablename__ = "video_repair_inputs"
+    __table_args__ = (
+        CheckConstraint(
+            "source_kind IN ('MANUAL','INTERNAL_REVIEW','QIANCHUAN_MOCK','QIANCHUAN_PLATFORM')",
+            name="ck_video_repair_input_source_kind"),
+        CheckConstraint(
+            "audit_platform IN ('INTERNAL','AD','CONTENT','UNKNOWN')",
+            name="ck_video_repair_input_audit_platform"),
+        Index("ix_video_repair_input_owner_asset", "tenant_id", "created_by", "source_asset_id"),
+        Index("ix_video_repair_input_external_ref", "tenant_id", "external_ref_type", "external_ref_id"),
+        {"info": {"explicit_migration_required": True}},
+    )
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    tenant_id: Mapped[str] = mapped_column(ForeignKey("tenants.id"), nullable=False)
+    created_by: Mapped[str] = mapped_column(ForeignKey("users.id"), nullable=False)
+    source_asset_id: Mapped[int] = mapped_column(ForeignKey("video_assets.id"), nullable=False)
+    source_kind: Mapped[str] = mapped_column(String(32), nullable=False, default="MANUAL")
+    external_ref_type: Mapped[str] = mapped_column(String(64), nullable=False, default="")
+    external_ref_id: Mapped[str] = mapped_column(String(128), nullable=False, default="")
+    audit_platform: Mapped[str] = mapped_column(String(16), nullable=False, default="INTERNAL")
+    raw_reason: Mapped[str] = mapped_column(Text, nullable=False)
+    expected_result: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    suggestions_json: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
+    time_ranges_json: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
+    raw_payload_json: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    occurred_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.utcnow)
+
+
+class VideoRepairTask(Base):
+    """Stateful repair workflow. Source and approved plan snapshots are never overwritten."""
+
+    __tablename__ = "video_repair_tasks"
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('ANALYZING','NEEDS_CONFIRMATION','NEED_MORE_MATERIAL',"
+            "'NON_VIDEO_FIXABLE','APPROVED','RENDERING','AWAITING_MANUAL_DECISION',"
+            "'AWAITING_MATERIAL','CONFIGURING','PREVIEW_QUEUED','PREVIEW_RENDERING',"
+            "'PREVIEW_READY','COMPLETED','FAILED','CANCELED')",
+            name="ck_video_repair_status"),
+        CheckConstraint(
+            "output_asset_id IS NULL OR output_asset_id <> source_asset_id",
+            name="ck_video_repair_distinct_output"),
+        CheckConstraint(
+            "output_asset_id IS NULL OR status = 'COMPLETED'",
+            name="ck_video_repair_output_completed"),
+        Index("ix_video_repair_owner_created", "tenant_id", "created_by", "created_at"),
+        Index(
+            "uq_video_repair_active_input_source_owner",
+            "tenant_id", "created_by", "input_id", "source_asset_id",
+            unique=True,
+            postgresql_where=text(
+                "status IN ('ANALYZING','NEEDS_CONFIRMATION','APPROVED','RENDERING',"
+                "'AWAITING_MANUAL_DECISION','AWAITING_MATERIAL','CONFIGURING',"
+                "'PREVIEW_QUEUED','PREVIEW_RENDERING','PREVIEW_READY')"),
+            sqlite_where=text(
+                "status IN ('ANALYZING','NEEDS_CONFIRMATION','APPROVED','RENDERING',"
+                "'AWAITING_MANUAL_DECISION','AWAITING_MATERIAL','CONFIGURING',"
+                "'PREVIEW_QUEUED','PREVIEW_RENDERING','PREVIEW_READY')"),
+        ),
+        {"info": {"explicit_migration_required": True}},
+    )
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    tenant_id: Mapped[str] = mapped_column(ForeignKey("tenants.id"), nullable=False)
+    created_by: Mapped[str] = mapped_column(ForeignKey("users.id"), nullable=False)
+    input_id: Mapped[int] = mapped_column(ForeignKey("video_repair_inputs.id"), nullable=False)
+    review_feedback_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("qianchuan_review_feedback.id"), nullable=True)
+    source_asset_id: Mapped[int] = mapped_column(ForeignKey("video_assets.id"), nullable=False)
+    product_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("products.id"), nullable=True, index=True)
+    schema_version: Mapped[str] = mapped_column(
+        String(32), nullable=False, default="video_repair_task.v1")
+    draft_revision: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    accepted_preview_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    cancel_reason: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    # Null means this task repairs a flattened final video directly. Historical
+    # uploads do not necessarily have an editable project/plan lineage.
+    base_plan_version_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("editing_plan_versions.id"), nullable=True)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="ANALYZING")
+    diagnosis_json: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    repair_plan_json: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    selected_candidates_json: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    approved_plan_json: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    output_asset_id: Mapped[Optional[int]] = mapped_column(ForeignKey("video_assets.id"), nullable=True)
+    output_plan_version_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("editing_plan_versions.id"), nullable=True)
+    error_code: Mapped[str] = mapped_column(String(64), nullable=False, default="")
+    error_message: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    approved_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    started_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    completed_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class VideoRepairAttachment(Base):
+    __tablename__ = "video_repair_attachments"
+    __table_args__ = (
+        CheckConstraint("kind IN ('AUDIO','VIDEO','IMAGE')", name="ck_video_repair_attachment_kind"),
+        CheckConstraint(
+            "source IN ('UPLOAD','TTS','PRODUCT_LIBRARY')",
+            name="ck_video_repair_attachment_source"),
+        CheckConstraint(
+            "status IN ('UPLOADING','READY','FAILED')",
+            name="ck_video_repair_attachment_status"),
+        Index("ix_video_repair_attachment_task", "tenant_id", "task_id", "created_at"),
+        {"info": {"explicit_migration_required": True}},
+    )
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    tenant_id: Mapped[str] = mapped_column(ForeignKey("tenants.id"), nullable=False)
+    task_id: Mapped[int] = mapped_column(ForeignKey("video_repair_tasks.id"), nullable=False)
+    kind: Mapped[str] = mapped_column(String(16), nullable=False)
+    source: Mapped[str] = mapped_column(String(32), nullable=False)
+    object_url: Mapped[str] = mapped_column(String(1024), nullable=False, default="")
+    filename: Mapped[str] = mapped_column(String(512), nullable=False, default="")
+    content_hash: Mapped[str] = mapped_column(String(64), nullable=False, default="")
+    duration_ms: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    width: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    height: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    has_audio: Mapped[bool] = mapped_column(nullable=False, default=False)
+    metadata_json: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default="UPLOADING")
+    created_by: Mapped[str] = mapped_column(ForeignKey("users.id"), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.utcnow)
+
+
+class VideoRepairPreview(Base):
+    __tablename__ = "video_repair_previews"
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('QUEUED','RENDERING','READY','FAILED','SUPERSEDED')",
+            name="ck_video_repair_preview_status"),
+        Index("ix_video_repair_preview_task", "tenant_id", "task_id", "created_at"),
+        Index("ix_video_repair_preview_revision", "task_id", "draft_revision", "status"),
+        {"info": {"explicit_migration_required": True}},
+    )
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    tenant_id: Mapped[str] = mapped_column(ForeignKey("tenants.id"), nullable=False)
+    task_id: Mapped[int] = mapped_column(ForeignKey("video_repair_tasks.id"), nullable=False)
+    draft_revision: Mapped[int] = mapped_column(Integer, nullable=False)
+    plan_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default="QUEUED")
+    object_url: Mapped[str] = mapped_column(String(1024), nullable=False, default="")
+    content_hash: Mapped[str] = mapped_column(String(64), nullable=False, default="")
+    duration_seconds: Mapped[float] = mapped_column(Float, nullable=False, default=0)
+    width: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    height: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    source_snapshot_json: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    plan_snapshot_json: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    error_code: Mapped[str] = mapped_column(String(64), nullable=False, default="")
+    error_message: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    created_by: Mapped[str] = mapped_column(ForeignKey("users.id"), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.utcnow)
+    completed_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+
+
+class VideoRepairJob(Base):
+    __tablename__ = "video_repair_jobs"
+    __table_args__ = (
+        CheckConstraint(
+            "job_type IN ('ANALYZE','RENDER_PREVIEW','FINALIZE')",
+            name="ck_video_repair_job_type"),
+        CheckConstraint(
+            "status IN ('QUEUED','RUNNING','SUCCEEDED','FAILED','CANCELED')",
+            name="ck_video_repair_job_status"),
+        UniqueConstraint("tenant_id", "job_type", "idempotency_key",
+                         name="uq_video_repair_job_idempotency"),
+        Index("ix_video_repair_job_status", "status", "created_at"),
+        Index("ix_video_repair_job_task", "tenant_id", "task_id", "created_at"),
+        {"info": {"explicit_migration_required": True}},
+    )
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    tenant_id: Mapped[str] = mapped_column(ForeignKey("tenants.id"), nullable=False)
+    task_id: Mapped[int] = mapped_column(ForeignKey("video_repair_tasks.id"), nullable=False)
+    job_type: Mapped[str] = mapped_column(String(32), nullable=False)
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default="QUEUED")
+    idempotency_key: Mapped[str] = mapped_column(String(192), nullable=False)
+    payload_json: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    max_attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    error_code: Mapped[str] = mapped_column(String(64), nullable=False, default="")
+    error_message: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    started_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    finished_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
 class QianchuanDeliveryPlan(Base):
     """Sidecar mirror/task for a full-domain plan; never changes upload semantics."""
 

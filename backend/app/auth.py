@@ -78,6 +78,7 @@ def current_auth(request: Request, credentials: Optional[HTTPAuthorizationCreden
         path = request.url.path
         route_permissions = (
             ("/api/director-projects/shooting-tasks", "shooting_tasks.access"),
+            ("/api/video-repair", "video_repair.access"),
             ("/api/dashboard", "dashboard.view"), ("/api/products", "products.access"),
             ("/api/knowledge", "knowledge.access"), ("/api/brand-visuals", "brand_visuals.access"),
             ("/api/design-skills", "design_skills.access"), ("/api/creative-projects", "creative_projects.access"),

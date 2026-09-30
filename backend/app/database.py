@@ -222,7 +222,27 @@ def init_db() -> None:
     migrate_feishu_notifications(engine)
     migrate_director_edit_time(engine)
     migrate_qianchuan_upload_uniqueness(engine)
+    migrate_video_repair_flat_source(engine)
     _ensure_default_tenant_roles()
+
+
+def migrate_video_repair_flat_source(bind: Engine) -> None:
+    """Allow repair tasks whose source is a flattened final video without a plan."""
+    with bind.begin() as connection:
+        if "video_repair_tasks" not in inspect(connection).get_table_names():
+            return
+        columns = {item["name"]: item for item in inspect(connection).get_columns(
+            "video_repair_tasks")}
+        if columns.get("base_plan_version_id", {}).get("nullable", True):
+            return
+        if connection.dialect.name == "postgresql":
+            connection.execute(text(
+                "ALTER TABLE video_repair_tasks ALTER COLUMN base_plan_version_id DROP NOT NULL"))
+            return
+        # Existing SQLite deployments use the explicit repair migration. Fresh
+        # SQLite databases already inherit the nullable model declaration.
+        if connection.dialect.name != "sqlite":
+            raise RuntimeError("不支持的视频修复扁平源迁移数据库类型")
 
 
 def migrate_qianchuan_upload_uniqueness(bind: Engine, *, postgres_backup_confirmed: bool = False) -> None:
@@ -327,6 +347,10 @@ def _ensure_default_tenant_roles() -> None:
             for member in db.query(TenantMember).filter_by(tenant_id=tenant.id).all():
                 if member.role_id is None and member.role != "owner":
                     member.role_id = administrator.id if member.role == "admin" else employee.id
+            for role in db.query(TenantRole).filter_by(tenant_id=tenant.id, status="active").all():
+                permissions = list(role.permissions or [])
+                if "final_videos.access" in permissions and "video_repair.access" not in permissions:
+                    role.permissions = [*permissions, "video_repair.access"]
         db.commit()
     finally:
         db.close()

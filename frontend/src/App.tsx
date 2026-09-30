@@ -32,6 +32,9 @@ const VideoAssetLibrary = lazy(() => import('./pages/VideoAssetLibrary'));
 const VideoAssetDetail = lazy(() => import('./pages/VideoAssetDetail'));
 const FinalVideoLibrary = lazy(() => import('./pages/FinalVideoLibrary'));
 const FinalVideoDetail = lazy(() => import('./pages/FinalVideoDetail'));
+const VideoRepairProjects = lazy(() => import('./pages/VideoRepairProjects'));
+const VideoRepairCreate = lazy(() => import('./pages/VideoRepairCreate'));
+const VideoRepairWorkspace = lazy(() => import('./pages/VideoRepairWorkspace'));
 const ManualComposeProjects = lazy(() => import('./pages/ManualComposeProjects'));
 const ManualComposeWorkspace = lazy(() => import('./pages/ManualComposeWorkspace'));
 const PlatformAdmin = lazy(() => import('./pages/PlatformAdmin'));
@@ -78,6 +81,9 @@ export default function App() {
             <Route path="finished-video-assets/:id" element={<VideoAssetDetail libraryType="finished" title="成品素材库" />} />
             <Route path="final-videos" element={<FinalVideoLibrary />} />
             <Route path="final-videos/:id" element={<FinalVideoDetail />} />
+            <Route path="video-repair" element={<VideoRepairProjects />} />
+            <Route path="video-repair/new" element={<VideoRepairCreate />} />
+            <Route path="video-repair/:taskId" element={<VideoRepairWorkspace />} />
             <Route path="qianchuan/oauth/result" element={<QianchuanOAuthResult />} />
             <Route path="manual-video-compose" element={<ManualComposeProjects />} />
             <Route path="manual-video-compose/:id" element={<ManualComposeWorkspace />} />

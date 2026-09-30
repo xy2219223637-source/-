@@ -15,13 +15,12 @@ TTS_ENDPOINT = "https://openspeech.bytedance.com/api/v3/tts/unidirectional"
 
 def synthesize_speech(text: str, output: Path, speaker: Optional[str] = None) -> Path:
     settings = get_settings()
-    if not settings.doubao_tts_app_id or not settings.doubao_tts_access_token:
-        raise RuntimeError("豆包 TTS App ID 或 Access Token 未配置")
+    if not settings.doubao_tts_api_key:
+        raise RuntimeError("豆包 TTS API Key 未配置")
     request_id = str(uuid.uuid4())
     headers = {
         "Content-Type": "application/json",
-        "X-Api-App-Id": settings.doubao_tts_app_id,
-        "X-Api-Access-Key": settings.doubao_tts_access_token,
+        "X-Api-Key": settings.doubao_tts_api_key,
         "X-Api-Resource-Id": settings.doubao_tts_resource_id,
         "X-Api-Request-Id": request_id,
     }

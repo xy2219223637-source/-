@@ -184,6 +184,78 @@ export interface QianchuanProductPage {
   page_size: number;
 }
 
+export interface VideoRepairCandidate {
+  id:string; source_asset_id:number; source_asset_public_id:string; highlight_id:string;
+  source_range:{start:number;end:number}; duration_seconds:number; content_role:string;
+  description:string; object_url:string; has_audio:boolean; content_hash?:string; score?:number;
+  recommendation_level?:'RECOMMENDED'|'SELECTABLE_WITH_WARNING'|'BELOW_THRESHOLD';
+  semantic_mode?:string;reasons?:string[];warnings?:string[];
+  score_breakdown?:Record<string,number>;
+}
+
+export interface VideoRepairInput {
+  id:number;source_kind:'MANUAL'|'INTERNAL_REVIEW'|'QIANCHUAN_MOCK'|'QIANCHUAN_PLATFORM';
+  audit_platform:'INTERNAL'|'AD'|'CONTENT'|'UNKNOWN';raw_reason:string;suggestions:string[];
+  expected_result?:string;time_ranges:Array<{start:number;end:number}>;occurred_at:string;created_at:string;
+}
+
+export interface VideoRepairAsset {
+  id:number;asset_id:string;filename:string;object_url:string;duration_seconds:number;status:string;created_at:string;
+}
+
+export interface VideoRepairTask {
+  id:number;status:string;schema_version?:string;product_id?:number|null;draft_revision?:number;
+  accepted_preview_id?:number|null;cancel_reason?:string;capabilities?:string[];tts_available?:boolean;previews?:VideoRepairPreview[];
+  input_id:number;input:VideoRepairInput;review_feedback_id:number|null;
+  source_asset_id:number;base_plan_version_id:number|null;
+  diagnosis:{normalized_category?:string;content_fixable?:boolean;affected_modalities?:string[];
+    issue_ranges?:Array<{start:number;end:number;precision:string;source:string;confidence:number;evidence:string}>;
+    recommended_action?:string;confidence_level?:string;evidence_sufficiency?:string;
+    reported_ranges?:Array<{start_ms:number;end_ms:number}>;suggested_ranges?:Array<{start_ms:number;end_ms:number}>;
+    explanation?:string;evidence?:string[];schema_version?:string;summary?:string;
+    primary_issue_id?:string|null;requires_human_range_confirmation?:boolean;overall_confidence?:number;
+    ai_proposal?:{action?:Record<string,any>|null;action_template?:Record<string,any>;summary?:string;requires_input?:string[];field_sources?:Record<string,string>;risks?:string[];
+      placement?:{recommended_ms:number;alternatives:number[];confidence:number;confidence_level:'HIGH'|'MEDIUM'|'LOW';basis:string;evidence:string[]}};
+    material_candidates?:Array<Record<string,any>>;
+    issues?:Array<{issue_id:string;category:string;description:string;affected_modalities:string[];
+      ranges:Array<{start_ms:number;end_ms:number;precision:string;source:string;confidence:number}>;
+      evidence:Array<{source:string;start_ms?:number|null;end_ms?:number|null;description:string}>;
+      confidence:number;suggested_action:string}>;meta?:{mode?:string;model?:string|null;prompt_version?:string}};
+  repair_plan:{schema_version?:string;render_mode?:'PLAN'|'FLAT_VISUAL';primary_action?:string;actions?:Array<{action_id:string;type:string;
+    target_range:{start?:number;end?:number;start_ms?:number;end_ms?:number};affected_track?:string;
+    affected_tracks?:string[];duration_policy?:string;selected_candidate_id?:string|null;
+    recommended_candidate_id?:string|null;selection_override_reason?:string|null;
+    candidate_ids?:string[];candidates?:VideoRepairCandidate[];predicted_effects?:{
+      total_duration_delta_ms?:number;visual_changed?:boolean;audio_changed?:boolean;caption_changed?:boolean;
+    }}>;warnings?:string[];generated_by?:{diagnosis_mode?:string;model?:string|null;prompt_version?:string};
+    repair_context?:{schema_version:string;context_window:{pre:{start_ms:number;end_ms:number};target:{start_ms:number;end_ms:number};post:{start_ms:number;end_ms:number}};
+      narrative:{pre_summary:string;target_intent:string;target_summary?:string;post_summary:string;required_bridge?:string};
+      evidence?:Array<{source:string;confidence:number;description:string}>}};
+  selected_candidates:Record<string,string>; output_asset_id:number|null; output_plan_version_id:number|null;
+  source_asset:{id:number;asset_id:string;filename:string;object_url:string;duration_seconds:number;status:string};
+  output_asset:{id:number;asset_id:string;filename:string;object_url:string;duration_seconds:number;status:string}|null;
+  error_code:string;error_message:string;approved_at:string|null;started_at:string|null;completed_at:string|null;
+  created_at:string;updated_at:string;
+}
+
+export interface VideoRepairPreview {
+  id:number;task_id?:number;draft_revision:number;plan_hash:string;status:string;object_url:string;
+  content_hash:string;duration_seconds:number;width:number;height:number;error_code:string;
+  error_message:string;created_at:string;completed_at:string|null;
+}
+
+export interface VideoRepairMaterial {
+  id:number;asset_id:string;filename:string;object_url:string;content_hash:string;
+  duration_seconds:number;width:number;height:number;has_audio:boolean;asset_kind:string;
+  summary?:string;recommended_range?:{start:number;end:number};description?:string;content_role?:string;
+  score?:number|null;recommendation_level?:string;reasons?:string[];warnings?:string[];
+}
+
+export interface VideoRepairAttachment {
+  id:number;kind:string;source:string;filename?:string;object_url:string;content_hash:string;
+  duration_ms?:number;status:string;
+}
+
 const pendingReports = new Map<string, Promise<QianchuanMaterialReport>>();
 function loadQianchuanReport(id: string, days: number) {
   const key = JSON.stringify([localStorage.getItem('access_token'), id, days]);
@@ -215,6 +287,44 @@ export const qianchuanApi = {
     api.get<QianchuanAwemePage>(`/qianchuan/accounts/${encodeURIComponent(bindingId)}/awemes`, {params}).then(r => r.data),
   products: (bindingId: string, params: {aweme_id?: string; keyword?: string; cursor?: number; page_size?: number} = {}) =>
     api.get<QianchuanProductPage>(`/qianchuan/accounts/${encodeURIComponent(bindingId)}/products`, {params}).then(r => r.data),
+};
+
+export const videoRepairApi = {
+  assets: () => api.get<VideoRepairAsset[]>('/video-repair-assets').then(r=>r.data),
+  list: (params:{status?:string;source_asset_id?:number;page?:number;page_size?:number}={}) =>
+    api.get<{items:VideoRepairTask[];page:number;page_size:number;total:number}>('/video-repair-tasks',{params}).then(r=>r.data),
+  create: (data:{source_asset_id:number;input:{source_kind:'MANUAL'|'INTERNAL_REVIEW';
+    audit_platform:'INTERNAL'|'AD'|'CONTENT'|'UNKNOWN';raw_reason:string;expected_result?:string;suggestions:string[];
+    time_ranges:Array<{start:number;end:number}>;category_hint:'VISUAL'|'COPY'|'AV'|'PROCESS'|'FULL'|'UNKNOWN'}}) =>
+    api.post<VideoRepairTask>('/video-repair-tasks',data).then(r=>r.data),
+  get: (taskId:number) => api.get<VideoRepairTask>(`/video-repair-tasks/${taskId}`).then(r=>r.data),
+  selectCandidate: (taskId:number,actionId:string,candidateId:string,overrideReason?:string) => api.post<VideoRepairTask>(
+    `/video-repair-tasks/${taskId}/candidates/select`,{action_id:actionId,candidate_id:candidateId,override_reason:overrideReason||null}).then(r=>r.data),
+  updateDraft: (taskId:number,data:{updated_at:string;action_type:'VISUAL_REPLACE'|'AV_SEGMENT_REPLACE'|'PROCESS_INSERT';
+    target_range:{start_ms:number;end_ms:number};selected_candidate_id?:string|null}) => api.patch<VideoRepairTask>(
+    `/video-repair-tasks/${taskId}/draft-plan`,data).then(r=>r.data),
+  approve: (taskId:number,updatedAt:string) => api.post<VideoRepairTask>(
+    `/video-repair-tasks/${taskId}/approve`,{updated_at:updatedAt}).then(r=>r.data),
+  render: (taskId:number) => api.post<VideoRepairTask>(
+    `/video-repair-tasks/${taskId}/render`,undefined,{timeout:900000}).then(r=>r.data),
+  materials: (taskId:number) => api.get<VideoRepairMaterial[]>(
+    `/video-repair-tasks/${taskId}/materials`).then(r=>r.data),
+  updateV4Draft: (taskId:number,draftRevision:number,action:Record<string,unknown>,overrideReason='') => api.patch<VideoRepairTask>(
+    `/video-repair-tasks/${taskId}/draft`,{draft_revision:draftRevision,action,override_reason:overrideReason}).then(r=>r.data),
+  uploadAttachment: (taskId:number,file:File) => {const data=new FormData();data.append('file',file);return api.post<VideoRepairAttachment>(
+    `/video-repair-tasks/${taskId}/attachments`,data,{headers:{'Content-Type':'multipart/form-data'}}).then(r=>r.data)},
+  createTts: (taskId:number,text:string,voice='') => api.post<VideoRepairAttachment>(
+    `/video-repair-tasks/${taskId}/tts`,{text,voice},{timeout:180000}).then(r=>r.data),
+  createPreview: (taskId:number) => api.post<VideoRepairPreview>(
+    `/video-repair-tasks/${taskId}/previews`).then(r=>r.data),
+  acceptPreview: (taskId:number,previewId:number,draftRevision:number) => api.post<VideoRepairTask>(
+    `/video-repair-tasks/${taskId}/previews/${previewId}/accept`,{draft_revision:draftRevision}).then(r=>r.data),
+  retryPreview: (taskId:number,previewId:number) => api.post<VideoRepairPreview>(
+    `/video-repair-tasks/${taskId}/previews/${previewId}/retry`).then(r=>r.data),
+  retryAnalysis: (taskId:number) => api.post<VideoRepairTask>(
+    `/video-repair-tasks/${taskId}/retry-analysis`).then(r=>r.data),
+  cancel: (taskId:number,reason='用户取消') => api.post<VideoRepairTask>(
+    `/video-repair-tasks/${taskId}/cancel`,undefined,{params:{reason}}).then(r=>r.data),
 };
 
 export function mediaUrl(path: string): string {

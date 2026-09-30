@@ -332,7 +332,7 @@ def validate_video_asset(asset_db_id: int) -> None:
             if media["duration"] > max_duration + .05:
                 raise ValueError(f"视频超过 {max_duration / 60:g} 分钟限制")
             if asset.library_type == "finished":
-                local = get_storage().local_path(asset.object_url)
+                local = _asset_storage(asset).local_path(asset.object_url)
                 if not local:
                     raise ValueError("无法读取成品素材")
                 digest = hashlib.sha256()

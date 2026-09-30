@@ -24,6 +24,7 @@ import {
   X,
   Building2,
   UsersRound,
+  Wrench,
 } from 'lucide-react';
 import IcpFiling from './IcpFiling';
 import dirovoLogo from '../assets/dirovo-logo.svg';
@@ -42,6 +43,7 @@ const routePreloaders: Record<string, () => Promise<unknown>> = {
   '/finished-video-remix': () => import('../pages/AutoEditWorkspace'),
   '/video-projects': () => import('../pages/VideoProjects'),
   '/final-videos': () => import('../pages/FinalVideoLibrary'),
+  '/video-repair': () => import('../pages/VideoRepairProjects'),
   '/manual-video-compose': () => import('../pages/ManualComposeProjects'),
   '/task-center': () => import('../pages/TaskCenter'),
   '/tenant-admin/taxonomy': () => import('../pages/VideoTaxonomy'),
@@ -78,6 +80,7 @@ const navGroups = [
       { to: '/manual-video-compose', label: '视频编排', icon: Layers3 },
       { to: '/finished-video-remix', label: '成品混剪', icon: Video },
       { to: '/final-videos', label: '成片库', icon: Library },
+      { to: '/video-repair', label: '审核失败修改', icon: Wrench },
       { to: '/director-inspiration', label: '编导灵感', icon: Clapperboard },
       { to: '/shooting-tasks', label: '拍摄任务', icon: ClipboardList },
     ],
@@ -96,6 +99,7 @@ const routePermissions: Record<string, string> = {
   '/creative-projects': 'creative_projects.access', '/finished-video-assets': 'finished_assets.access',
   '/manual-video-compose': 'manual_compose.access', '/finished-video-remix': 'finished_remix.access',
   '/final-videos': 'final_videos.access', '/director-inspiration': 'director.access',
+  '/video-repair': 'video_repair.access',
   '/shooting-tasks': 'shooting_tasks.access', '/task-center': 'task_center.access',
 };
 

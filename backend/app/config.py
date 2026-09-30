@@ -73,8 +73,6 @@ class Settings(BaseSettings):
     ark_video_model: str = "doubao-seedance-1-0-pro-250528"
     ark_video_resolution: str = "720p"
     video_model_provider: str = "volcengine-ark"
-    doubao_tts_app_id: str = ""
-    doubao_tts_access_token: str = ""
     doubao_tts_api_key: str = ""
     doubao_tts_resource_id: str = "seed-tts-2.0"
     doubao_tts_speaker: str = "zh_female_shuangkuaisisi_uranus_bigtts"
@@ -111,6 +109,23 @@ class Settings(BaseSettings):
     qianchuan_plan_enabled: bool = False
     qianchuan_plan_write_enabled: bool = False
     qianchuan_plan_worker_enabled: bool = False
+    video_repair_ai_enabled: bool = False
+    video_repair_ai_provider: str = "openai_compatible"
+    video_repair_ai_model: str = ""
+    video_repair_ai_timeout_seconds: float = 45.0
+    video_repair_ai_max_keyframes: int = 12
+    video_repair_ai_prompt_version: str = "video-repair-diagnosis-v2"
+    video_repair_context_pre_ms: int = 4000
+    video_repair_context_post_ms: int = 4000
+    video_repair_context_max_ms: int = 8000
+    video_repair_recommend_score: float = 0.75
+    video_repair_selectable_score: float = 0.60
+    video_repair_v4_enabled: bool = False
+    video_repair_async_worker_enabled: bool = False
+    video_repair_multimodal_enabled: bool = False
+    video_repair_audio_replace_enabled: bool = False
+    video_repair_content_insert_enabled: bool = False
+    video_repair_image_motion_enabled: bool = False
 
     host: str = "0.0.0.0"
     port: int = 8000

@@ -17,6 +17,7 @@ USER_PERMISSION_GROUPS = [
     {"key": "video_production", "label": "视频生产", "children": [
         {"code": "finished_assets.access", "label": "成品素材库"}, {"code": "manual_compose.access", "label": "视频编排"},
         {"code": "finished_remix.access", "label": "成品混剪"}, {"code": "final_videos.access", "label": "成片库"},
+        {"code": "video_repair.access", "label": "审核失败修改"},
         {"code": "director.access", "label": "编导灵感"}, {"code": "shooting_tasks.access", "label": "拍摄任务"}]},
     {"key": "operations", "label": "运营管理", "children": [
         {"code": "task_center.access", "label": "任务与费用"}]},

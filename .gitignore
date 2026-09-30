@@ -3,6 +3,8 @@ __pycache__/
 *.py[cod]
 .venv/
 venv/
+/.codex_deps/
+/uv.lock
 *.db
 .env
 .env.*
