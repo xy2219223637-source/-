@@ -81,11 +81,15 @@ def asset_eligible_for_project(asset: Any, tenant_id: str, product_id: int, edit
         return False
     if getattr(asset, "product_id", None) != product_id:
         return False
-    if getattr(asset, "status", None) != "analyzed" or getattr(asset, "excluded", False):
+    if getattr(asset, "excluded", False):
         return False
     if getattr(asset, "library_type", None) != library_type_for_edit_mode(edit_mode):
         return False
     if getattr(asset, "asset_kind", "material") != "material":
+        return False
+    if edit_mode == "manual_compose":
+        return True
+    if getattr(asset, "status", None) != "analyzed":
         return False
     if edit_mode == "smart_compose":
         return True
@@ -118,11 +122,12 @@ def _eligible_assets_query(db: Session, tenant_id: str, edit_mode: str, product_
                            project_id: Optional[int] = None):
     query = db.query(VideoAsset).filter(
         VideoAsset.tenant_id == tenant_id,
-        VideoAsset.status == "analyzed",
         VideoAsset.excluded.is_(False),
         VideoAsset.library_type == library_type_for_edit_mode(edit_mode),
         VideoAsset.asset_kind == "material",
     )
+    if edit_mode != "manual_compose":
+        query = query.filter(VideoAsset.status == "analyzed")
     if product_id is not None:
         query = query.filter(VideoAsset.product_id == product_id)
     if project_id is not None:
@@ -131,9 +136,24 @@ def _eligible_assets_query(db: Session, tenant_id: str, edit_mode: str, product_
             VideoEditProjectAsset.included.is_(True),
             VideoEditProjectAsset.tenant_id == tenant_id,
         )
-    if edit_mode in {"finished_remix", "manual_compose"}:
+    if edit_mode == "finished_remix":
         query = query.filter(VideoAsset.reusable_status == "reusable", VideoAsset.generation_depth <= 1)
     return query
+
+
+def _ensure_manual_asset_metadata(asset: VideoAsset) -> None:
+    """Load only technical media metadata; manual compose does not require AI analysis."""
+    if float(asset.duration_seconds or 0) > 0 and int(asset.width or 0) > 0 and int(asset.height or 0) > 0:
+        return
+    source = get_storage_for_url(asset.object_url).local_path(asset.object_url)
+    if not source:
+        raise HTTPException(422, f"无法读取素材 {asset.filename}")
+    media = _probe(source)
+    asset.duration_seconds = media["duration"]
+    asset.width = media["width"]
+    asset.height = media["height"]
+    asset.fps = media["fps"]
+    asset.has_audio = media["has_audio"]
 
 
 def _starts_with_dangling_anaphor(text: str) -> bool:
@@ -316,7 +336,9 @@ def save_manual_plan(project_id: int, payload: ManualPlanUpdate,
     asset_map = {asset.asset_id: asset for asset in assets}
     missing = [asset_id for asset_id in public_ids if asset_id not in asset_map]
     if missing:
-        raise HTTPException(422, "部分素材不存在、尚未分析完成或不可使用")
+        raise HTTPException(422, "部分素材不存在或不可使用")
+    for asset_id in public_ids:
+        _ensure_manual_asset_metadata(asset_map[asset_id])
     project.structure = [section.model_dump() for section in payload.sections]
     project.target_duration_seconds = max(1, round(sum(asset_map[asset_id].duration_seconds for asset_id in public_ids)))
     project.status = "ready_to_render" if public_ids else "draft"
