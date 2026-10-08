@@ -29,6 +29,14 @@ class Settings(BaseSettings):
     image_generation_base_url: str = ""
     image_generation_api_key: str = ""
     image_generation_model: str = ""
+    # Image generation is deliberately isolated from the text/video providers.
+    # Supported values: ark_seedream, apilio.  An empty value preserves the
+    # previous local-demo behaviour when no image model is configured.
+    image_generation_provider: str = ""
+    apilio_image_base_url: str = "https://api.apilio.ai/v1"
+    apilio_image_api_key: str = ""
+    apilio_image_model: str = ""
+    apilio_image_quality: str = "high"
     image_product_model: str = ""
     image_portrait_model: str = ""
     image_edit_model: str = ""
