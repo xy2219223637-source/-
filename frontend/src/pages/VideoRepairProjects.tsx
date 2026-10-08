@@ -3,9 +3,9 @@ import {ArrowRight,Loader2,Plus,Wrench} from 'lucide-react';
 import {Link} from 'react-router-dom';
 import {mediaUrl,videoRepairApi} from '../api/client';
 import type {VideoRepairTask} from '../api/client';
-import {VIDEO_REPAIR_STATUS_LABELS} from '../components/VideoRepairWorkbench';
+import {VIDEO_REPAIR_STATUS_LABELS} from '../components/videoRepairStatus';
 
-const FILTERS=[['','全部'],['NEEDS_CONFIRMATION','待确认'],['APPROVED','已确认'],['RENDERING','渲染中'],['COMPLETED','已完成'],['FAILED','失败'],['NEED_MORE_MATERIAL','缺素材']];
+const FILTERS=[['','全部'],['AWAITING_MANUAL_DECISION','待人工决策'],['AWAITING_MATERIAL','待补素材'],['CONFIGURING','配置中'],['PREVIEW_READY','预览待确认'],['COMPLETED','已完成'],['FAILED','失败']];
 
 export default function VideoRepairProjects(){
   const [status,setStatus]=useState('');

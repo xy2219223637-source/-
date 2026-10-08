@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import unittest
+from unittest.mock import patch
 
-from app.services.video_repair.ai_provider import DiagnosisProviderResult
+from app.services.video_repair.ai_provider import DiagnosisProviderResult, build_multimodal_content
 from app.services.video_repair.diagnosis_v2 import diagnose_video
 
 
@@ -53,6 +54,24 @@ class SdkFailureProvider:
 
 
 class VideoRepairDiagnosisV2Tests(unittest.TestCase):
+    @patch("app.services.video_repair.ai_provider.get_storage_for_url")
+    @patch("app.services.video_repair.ai_provider._image_data_url", return_value="data:image/jpeg;base64,abc")
+    def test_multimodal_content_includes_product_reference_and_source_video(self, _image, storage):
+        storage.return_value.signed_url.return_value = "https://signed.example/video.mp4"
+        value = context()
+        value["video"]["source_url"] = "/video.mp4"
+        value["product"]["reference_images"] = [{
+            "role": "product_front", "description": "商品正面", "url": "/product.jpg",
+        }]
+        content = build_multimodal_content(value)
+        self.assertEqual([row["type"] for row in content], [
+            "text", "text", "image_url", "text", "video_url",
+        ])
+        self.assertEqual(content[2]["image_url"]["url"], "data:image/jpeg;base64,abc")
+        self.assertEqual(content[4]["video_url"]["url"], "https://signed.example/video.mp4")
+        self.assertNotIn("source_url", content[0]["text"])
+        self.assertNotIn("reference_images", content[0]["text"])
+
     def test_explicit_range_overrides_model_range(self):
         result = diagnose_video(context(), FakeProvider())
         self.assertEqual(result.issues[0].ranges[0].start_ms, 6000)

@@ -67,7 +67,10 @@ def get_learned_design_profile(product_id: int, db: Session = Depends(get_db), a
 
 @router.get("", response_model=list[ProductOut])
 def list_products(db: Session = Depends(get_db), auth: AuthContext = Depends(current_auth)) -> list[ProductOut]:
-    products = db.query(Product).filter(Product.tenant_id == auth.tenant_id).order_by(Product.created_at.desc()).all()
+    products = db.query(Product).filter(
+        Product.tenant_id == auth.tenant_id,
+        Product.category != "__material_library_repair__",
+    ).order_by(Product.created_at.desc()).all()
     return [_to_out(p) for p in products]
 
 

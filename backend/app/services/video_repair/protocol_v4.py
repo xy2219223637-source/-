@@ -2,11 +2,12 @@ from __future__ import annotations
 
 import hashlib
 import json
-from typing import Any
+from typing import Any, Literal, get_args
 
 
 SCHEMA_VERSION = "video_repair_plan.v4"
-ACTIONS = frozenset({"VISUAL_REPLACE", "AUDIO_REPLACE", "CONTENT_INSERT"})
+V4DiagnosticAction = Literal["VISUAL_REPLACE", "AUDIO_REPLACE", "CONTENT_INSERT", "UNSUPPORTED"]
+ACTIONS = frozenset(action for action in get_args(V4DiagnosticAction) if action != "UNSUPPORTED")
 
 ACTION_CAPABILITIES = {
     "VISUAL_REPLACE": {

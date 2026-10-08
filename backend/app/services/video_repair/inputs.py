@@ -23,7 +23,6 @@ def create_input(
     source_kind: str,
     audit_platform: str,
     raw_reason: str,
-    expected_result: str = "",
     suggestions: list[str],
     time_ranges: list[dict[str, float]],
     raw_payload: dict[str, Any] | None = None,
@@ -43,7 +42,7 @@ def create_input(
     if not external_ref_type and not external_ref_id:
         canonical = json.dumps({
             "source_kind": source_kind, "audit_platform": audit_platform,
-            "raw_reason": raw_reason.strip(), "expected_result": expected_result.strip(),
+            "raw_reason": raw_reason.strip(),
             "suggestions": suggestions,
             "time_ranges": time_ranges, "raw_payload": payload_snapshot,
         }, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
@@ -81,7 +80,7 @@ def create_input(
         external_ref_id=external_ref_id,
         audit_platform=audit_platform,
         raw_reason=raw_reason.strip(),
-        expected_result=expected_result.strip(),
+        expected_result="",
         suggestions_json=list(suggestions),
         time_ranges_json=list(time_ranges),
         raw_payload_json=payload_snapshot,

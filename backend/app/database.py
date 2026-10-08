@@ -81,8 +81,11 @@ def migrate_feishu_notifications(bind: Engine) -> None:
         for name, definition in additions.items():
             if name not in columns:
                 connection.execute(text(f"ALTER TABLE shooting_tasks ADD COLUMN {name} {definition}"))
-        connection.execute(text("CREATE UNIQUE INDEX IF NOT EXISTS uq_shooting_notification_uuid ON shooting_tasks (tenant_id, notification_uuid)"))
-        connection.execute(text("CREATE UNIQUE INDEX IF NOT EXISTS uq_shooting_active_recipient ON shooting_tasks (tenant_id, project_id, recipient_type, recipient_id) WHERE recipient_id <> '' AND status IN ('pending', 'in_progress')"))
+        indexes = _index_names(connection, "shooting_tasks")
+        if "uq_shooting_notification_uuid" not in indexes:
+            connection.execute(text("CREATE UNIQUE INDEX IF NOT EXISTS uq_shooting_notification_uuid ON shooting_tasks (tenant_id, notification_uuid)"))
+        if "uq_shooting_active_recipient" not in indexes:
+            connection.execute(text("CREATE UNIQUE INDEX IF NOT EXISTS uq_shooting_active_recipient ON shooting_tasks (tenant_id, project_id, recipient_type, recipient_id) WHERE recipient_id <> '' AND status IN ('pending', 'in_progress')"))
 
 
 def _table_columns(connection, table_name: str) -> set[str]:
@@ -97,6 +100,26 @@ def _table_columns(connection, table_name: str) -> set[str]:
         return {column["name"] for column in inspector.get_columns(table_name)}
     except Exception:
         return set()
+
+
+def _index_names(connection, table_name: str) -> set[str]:
+    inspector = inspect(connection)
+    try:
+        return {str(index["name"]) for index in inspector.get_indexes(table_name)}
+    except Exception:
+        return set()
+
+
+def _column_is_nullable(connection, table_name: str, column_name: str) -> bool:
+    try:
+        column = next(
+            (item for item in inspect(connection).get_columns(table_name)
+             if item["name"] == column_name),
+            None,
+        )
+        return True if column is None else bool(column.get("nullable", True))
+    except Exception:
+        return True
 
 
 def _json_column_sql(connection) -> str:
@@ -129,25 +152,29 @@ def init_db() -> None:
         for name, definition in user_additions.items():
             if name not in user_columns:
                 connection.execute(text(f"ALTER TABLE users ADD COLUMN {name} {definition}"))
-        if user_columns:
+        if user_columns and "uq_users_phone" not in _index_names(connection, "users"):
             connection.execute(text("CREATE UNIQUE INDEX IF NOT EXISTS uq_users_phone ON users (phone) WHERE phone IS NOT NULL"))
         member_columns = _table_columns(connection, "tenant_members")
         for name in ("team_id", "group_id", "role_id"):
             if member_columns and name not in member_columns:
                 connection.execute(text(f"ALTER TABLE tenant_members ADD COLUMN {name} INTEGER NULL"))
-                connection.execute(text(f"CREATE INDEX IF NOT EXISTS ix_tenant_members_{name} ON tenant_members ({name})"))
+                if f"ix_tenant_members_{name}" not in _index_names(connection, "tenant_members"):
+                    connection.execute(text(f"CREATE INDEX IF NOT EXISTS ix_tenant_members_{name} ON tenant_members ({name})"))
         # Preserve the original user's identity and tenant ownership while switching
         # the login identifier to a phone number. This migration is idempotent.
         if user_columns:
             connection.execute(text("""UPDATE users SET phone = '15271933010', is_platform_admin = TRUE
                 WHERE lower(email) = '345983950@qq.com' AND (phone IS NULL OR phone = '15271933010')
+                AND (phone IS NULL OR is_platform_admin = FALSE)
                 AND NOT EXISTS (SELECT 1 FROM users other WHERE other.phone = '15271933010' AND other.id <> users.id)"""))
             connection.execute(text("""UPDATE tenant_members SET role = 'owner', status = 'active'
-                WHERE user_id IN (SELECT id FROM users WHERE lower(email) = '345983950@qq.com')"""))
+                WHERE user_id IN (SELECT id FROM users WHERE lower(email) = '345983950@qq.com')
+                AND (role <> 'owner' OR status <> 'active')"""))
         json_default = _json_column_sql(connection)
         columns = _table_columns(connection, "video_assets")
         if columns:
-            if connection.dialect.name == "postgresql" and "project_id" in columns:
+            if (connection.dialect.name == "postgresql" and "project_id" in columns
+                    and not _column_is_nullable(connection, "video_assets", "project_id")):
                 try:
                     connection.execute(text("ALTER TABLE video_assets ALTER COLUMN project_id DROP NOT NULL"))
                 except Exception:
@@ -171,9 +198,11 @@ def init_db() -> None:
             for name, definition in additions.items():
                 if name not in columns:
                     connection.execute(text(f"ALTER TABLE video_assets ADD COLUMN {name} {definition}"))
-            connection.execute(text("CREATE INDEX IF NOT EXISTS ix_video_assets_category_id ON video_assets (category_id)"))
+            if "ix_video_assets_category_id" not in _index_names(connection, "video_assets"):
+                connection.execute(text("CREATE INDEX IF NOT EXISTS ix_video_assets_category_id ON video_assets (category_id)"))
             connection.execute(text("""UPDATE video_assets SET asset_kind = 'final_output'
-                WHERE source IN ('smart_compose_output', 'finished_remix_output')"""))
+                WHERE source IN ('smart_compose_output', 'finished_remix_output')
+                AND asset_kind <> 'final_output'"""))
         analysis_columns = _table_columns(connection, "video_asset_analyses")
         analysis_additions = {
             "input_video_seconds": "FLOAT NOT NULL DEFAULT 0",
@@ -349,6 +378,9 @@ def _ensure_default_tenant_roles() -> None:
                     member.role_id = administrator.id if member.role == "admin" else employee.id
             for role in db.query(TenantRole).filter_by(tenant_id=tenant.id, status="active").all():
                 permissions = list(role.permissions or [])
+                if role.is_system and role.code in {"employee", "administrator"} and "material_library.access" not in permissions:
+                    permissions.append("material_library.access")
+                    role.permissions = permissions
                 if "final_videos.access" in permissions and "video_repair.access" not in permissions:
                     role.permissions = [*permissions, "video_repair.access"]
         db.commit()

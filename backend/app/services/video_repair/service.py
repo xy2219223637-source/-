@@ -93,8 +93,9 @@ def serialize_task(db: Session, row: VideoRepairTask) -> dict[str, Any]:
         capabilities.append("CONTENT_INSERT")
     return {
         "id": row.id, "status": row.status, "input_id": row.input_id,
-        "schema_version": getattr(row, "schema_version", "video_repair_task.v1"),
+        "schema_version": row.schema_version,
         "product_id": getattr(row, "product_id", None),
+        "material_library_product_id": (repair_input.raw_payload_json or {}).get("material_library_product_id"),
         "draft_revision": getattr(row, "draft_revision", 1),
         "accepted_preview_id": getattr(row, "accepted_preview_id", None),
         "cancel_reason": getattr(row, "cancel_reason", "") or "",
@@ -103,7 +104,6 @@ def serialize_task(db: Session, row: VideoRepairTask) -> dict[str, Any]:
         "input": {
             "id": repair_input.id, "source_kind": repair_input.source_kind,
             "audit_platform": repair_input.audit_platform, "raw_reason": repair_input.raw_reason,
-            "expected_result": getattr(repair_input, "expected_result", "") or "",
             "suggestions": repair_input.suggestions_json or [],
             "time_ranges": repair_input.time_ranges_json or [],
             "occurred_at": repair_input.occurred_at, "created_at": repair_input.created_at,

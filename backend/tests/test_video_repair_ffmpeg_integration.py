@@ -8,13 +8,12 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from PIL import Image
-
 from app.services.video_editing.plan_patch import apply_repair_plan
 from app.services.video_editing.renderer import _ffmpeg_executable, render_variant
 from app.services.video_repair.rendering import (
     _probe_output, _render_flat_visual, _validate_rendered_output,
 )
+from scripts.qa_compare_frames import compare_frames
 
 
 def _base_plan() -> dict:
@@ -66,16 +65,16 @@ class VideoRepairFfmpegIntegrationTests(unittest.TestCase):
             probe = _probe_output(output)
             self.assertLessEqual(abs(probe["duration"] - 3), .1)
             self.assertEqual((probe["width"], probe["height"]), (320, 240))
-            before, replaced = directory / "before.png", directory / "replaced.png"
-            for timestamp, frame in ((.2, before), (1.0, replaced)):
-                subprocess.run([
-                    ffmpeg, "-y", "-ss", str(timestamp), "-i", str(output),
-                    "-frames:v", "1", str(frame),
-                ], capture_output=True, text=True, check=True, timeout=60)
-            before_rgb = Image.open(before).convert("RGB").getpixel((160, 120))
-            replaced_rgb = Image.open(replaced).convert("RGB").getpixel((160, 120))
-            self.assertGreater(before_rgb[2], before_rgb[1])
-            self.assertGreater(replaced_rgb[1], replaced_rgb[2])
+            source_checks = compare_frames(
+                original, output, same=[(.2, .2)], different=[(1.0, 1.0)],
+                ffmpeg=ffmpeg,
+            )
+            candidate_checks = compare_frames(
+                candidate, output, same=[(.75, 1.0)], different=[],
+                ffmpeg=ffmpeg,
+            )
+            self.assertTrue(all(row["passed"] for row in source_checks), source_checks)
+            self.assertTrue(all(row["passed"] for row in candidate_checks), candidate_checks)
 
     def test_all_three_repair_actions_render_playable_audio_video(self):
         try:

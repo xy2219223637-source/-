@@ -10,8 +10,9 @@ from app.database import SessionLocal
 from app.models import VideoAsset, VideoRepairInput, VideoRepairJob, VideoRepairPreview, VideoRepairTask
 from app.services.video_repair.ai_context import build_ai_context
 from app.services.video_repair.candidates import find_candidates
-from app.services.video_repair.diagnosis_v2 import diagnose_video
+from app.services.video_repair.diagnosis_v4 import V4_ACTION_GUIDANCE, diagnose_video_v4
 from app.services.video_repair.insertion_planner import recommend_insertion_positions
+from app.services.video_repair.protocol_v4 import ACTIONS
 from app.services.video_repair.service import _provider
 from app.services.video_repair.state_machine_v4 import transition
 from app.services.video_repair.v4_renderer import render_preview
@@ -33,14 +34,14 @@ def _confidence(value: float) -> str:
 
 def _v4_action(issue) -> str | None:
     settings = get_settings()
-    modalities = set(issue.affected_modalities or [])
-    if issue.category == "MISSING_PROCESS_EVIDENCE" or issue.suggested_action == "PROCESS_INSERT":
-        return "CONTENT_INSERT" if settings.video_repair_content_insert_enabled else None
-    if modalities == {"visual"} or issue.suggested_action == "VISUAL_REPLACE":
-        return "VISUAL_REPLACE"
-    if modalities and modalities <= {"audio", "caption"}:
-        return "AUDIO_REPLACE" if settings.video_repair_audio_replace_enabled else None
-    return None
+    action = issue.suggested_action
+    if action not in ACTIONS:
+        return None
+    if action == "AUDIO_REPLACE" and not settings.video_repair_audio_replace_enabled:
+        return None
+    if action == "CONTENT_INSERT" and not settings.video_repair_content_insert_enabled:
+        return None
+    return action
 
 
 def _analyze(db, task: VideoRepairTask) -> None:
@@ -48,29 +49,51 @@ def _analyze(db, task: VideoRepairTask) -> None:
     source = db.get(VideoAsset, task.source_asset_id)
     if not repair_input or not source:
         raise RuntimeError("SOURCE_MISSING: 修复输入或源成片不存在")
+    from app.services.material_library_repair import library_product_for_repair
+    library_mode = bool(library_product_for_repair(
+        db, tenant_id=task.tenant_id, repair_product_id=task.product_id))
     settings = get_settings()
+    capabilities = ["VISUAL_REPLACE"]
+    if settings.video_repair_audio_replace_enabled:
+        capabilities.append("AUDIO_REPLACE")
+    if settings.video_repair_content_insert_enabled:
+        capabilities.append("CONTENT_INSERT")
     context = build_ai_context(
         db, repair_input=repair_input, source_asset=source, base_plan={},
-        max_keyframes=settings.video_repair_ai_max_keyframes)
-    diagnosis_model = diagnose_video(
+        max_keyframes=settings.video_repair_ai_max_keyframes,
+        capabilities=capabilities)
+    context["action_guidance"] = {
+        action: guidance for action, guidance in V4_ACTION_GUIDANCE.items()
+        if action in capabilities or action == "UNSUPPORTED"
+    }
+    diagnosis_model = diagnose_video_v4(
         context, _provider() if settings.video_repair_multimodal_enabled else None,
-        prompt_version=settings.video_repair_ai_prompt_version)
+        prompt_version="video-repair-diagnosis-v4")
     primary = next((row for row in diagnosis_model.issues
                     if row.issue_id == diagnosis_model.primary_issue_id), None)
     recommended = _v4_action(primary) if primary else None
     ranges = [row.model_dump(mode="json") for row in (primary.ranges if primary else [])]
     diagnosis = diagnosis_model.model_dump(mode="json")
     diagnosis.update({
-        "schema_version": "video_repair_diagnosis.v3",
+        "schema_version": "video_repair_diagnosis.v4",
         "recommended_action": recommended,
         "confidence_level": _confidence(float(diagnosis_model.overall_confidence)),
         "evidence_sufficiency": "SUFFICIENT" if primary and ranges else "INSUFFICIENT",
         "reported_ranges": context["review"].get("explicit_time_ranges") or [],
         "suggested_ranges": ranges,
     })
+    modalities = set(primary.affected_modalities or []) if primary else set()
+    unsupported_av = bool(primary and not recommended and "visual" in modalities
+                          and ({"audio", "caption"} & modalities))
+    unsupported_caption = bool(primary and not recommended and "caption" in modalities
+                               and not unsupported_av)
     proposal: dict = {
         "action": None,
-        "summary": "AI 已定位问题，但仍需要人工补充修复素材。",
+        "summary": ("AI 判断该问题同时涉及画面与声音或字幕；当前三种返修动作无法完整修复。"
+                    if unsupported_av else
+                    "AI 判断该问题涉及字幕；当前音频替换不会修改字幕，无法完整修复。"
+                    if unsupported_caption else
+                    "AI 已定位问题，但当前三种返修动作无法完整修复，请人工判断。"),
         "requires_input": [],
         "field_sources": {
             "action": "AI_ANALYSIS" if recommended else "HUMAN_REQUIRED",
@@ -79,7 +102,21 @@ def _analyze(db, task: VideoRepairTask) -> None:
         },
     }
     candidates: list[dict] = []
-    if recommended == "VISUAL_REPLACE" and ranges:
+    if library_mode and recommended == "VISUAL_REPLACE" and ranges:
+        first_range = ranges[0]
+        start_ms = int(first_range.get("start_ms", 0))
+        end_ms = int(first_range.get("end_ms", start_ms))
+        proposal.update({
+            "summary": f"AI 建议替换 {start_ms / 1000:g}–{end_ms / 1000:g} 秒画面；请从商品素材库选择视频并裁剪。",
+            "requires_input": ["visual_material"],
+            "action_template": {
+                "type": "VISUAL_REPLACE",
+                "target_range": {"start_ms": start_ms, "end_ms": end_ms},
+                "fit_mode": "COVER", "transition": {"type": "CUT", "duration_ms": 0},
+            },
+            "field_sources": {"action": "AI_ANALYSIS", "target_range": "AI_ANALYSIS", "material": "HUMAN_SELECTION"},
+        })
+    elif recommended == "VISUAL_REPLACE" and ranges:
         first_range = ranges[0]
         start_ms = int(first_range.get("start_ms", 0))
         end_ms = int(first_range.get("end_ms", start_ms))
@@ -130,6 +167,24 @@ def _analyze(db, task: VideoRepairTask) -> None:
                 "type": "AUDIO_REPLACE",
                 "target_range": {"start_ms": int(first_range.get("start_ms", 0)), "end_ms": int(first_range.get("end_ms", 0))},
             },
+        })
+    elif library_mode and recommended == "CONTENT_INSERT":
+        first_range = ranges[0] if ranges else None
+        placement = recommend_insertion_positions(
+            context, duration_ms=round(float(source.duration_seconds or 0) * 1000))
+        start_ms = int(first_range.get("start_ms", 0)) if first_range else int(placement["recommended_ms"])
+        target_duration = max(.5, (int(first_range.get("end_ms", start_ms + 3000)) - start_ms) / 1000) if first_range else 3.0
+        proposal.update({
+            "summary": "AI 建议补充内容；请从商品素材库选择视频片段并确认插入位置与声音。",
+            "requires_input": ["visual_material", "audio"],
+            "action_template": {
+                "type": "CONTENT_INSERT", "duration_ms": round(target_duration * 1000),
+                "insert_at_ms": start_ms, "fit_mode": "COVER",
+                "transition": {"type": "CUT", "duration_ms": 0},
+            },
+            "placement": placement,
+            "field_sources": {"action": "AI_ANALYSIS", "insert_at": "AI_TIMELINE_ANALYSIS",
+                              "material": "HUMAN_SELECTION", "audio": "HUMAN_SELECTION"},
         })
     elif recommended == "CONTENT_INSERT":
         first_range = ranges[0] if ranges else None
@@ -245,6 +300,7 @@ def _execute(job_id: int) -> None:
                 db.commit()
                 render_preview(db, task, preview)
                 transition(task, "PREVIEW_READY")
+                task.error_code = task.error_message = ""
             else:
                 raise RuntimeError(f"UNSUPPORTED_JOB: {job.job_type}")
             job.status = "SUCCEEDED"

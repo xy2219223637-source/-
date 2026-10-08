@@ -15,6 +15,7 @@ USER_PERMISSION_GROUPS = [
     {"key": "content_design", "label": "内容设计", "children": [
         {"code": "design_skills.access", "label": "设计 Skill"}, {"code": "creative_projects.access", "label": "AI 创作工作台"}]},
     {"key": "video_production", "label": "视频生产", "children": [
+        {"code": "material_library.access", "label": "商品素材库"},
         {"code": "finished_assets.access", "label": "成品素材库"}, {"code": "manual_compose.access", "label": "视频编排"},
         {"code": "finished_remix.access", "label": "成品混剪"}, {"code": "final_videos.access", "label": "成片库"},
         {"code": "video_repair.access", "label": "审核失败修改"},

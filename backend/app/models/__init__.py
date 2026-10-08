@@ -11,6 +11,58 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.database import Base
 
 
+class MaterialLibraryProduct(Base):
+    __tablename__ = "material_library_products"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    tenant_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    image_url: Mapped[str] = mapped_column(String(1024), nullable=False)
+    introduction: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+
+
+class MaterialLibraryAsset(Base):
+    __tablename__ = "material_library_assets"
+    __table_args__ = (Index("ix_material_library_assets_tenant_product", "tenant_id", "product_id"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    tenant_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    product_id: Mapped[int] = mapped_column(ForeignKey("material_library_products.id"), nullable=False, index=True)
+    kind: Mapped[str] = mapped_column(String(16), nullable=False)
+    filename: Mapped[str] = mapped_column(String(512), nullable=False)
+    object_url: Mapped[str] = mapped_column(String(1024), nullable=False)
+    storage_provider: Mapped[str] = mapped_column(String(32), nullable=False)
+    size_bytes: Mapped[int] = mapped_column(Integer, nullable=False)
+    content_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    created_by: Mapped[str] = mapped_column(String(64), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+    removed_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+
+
+class MaterialLibraryRepairProductLink(Base):
+    __tablename__ = "material_library_repair_product_links"
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "library_product_id", name="uq_material_library_repair_product"),
+        UniqueConstraint("tenant_id", "repair_product_id", name="uq_material_library_repair_legacy_product"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    tenant_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    library_product_id: Mapped[int] = mapped_column(ForeignKey("material_library_products.id"), nullable=False)
+    repair_product_id: Mapped[int] = mapped_column(ForeignKey("products.id"), nullable=False)
+
+
+class MaterialLibraryRepairAssetLink(Base):
+    __tablename__ = "material_library_repair_asset_links"
+    __table_args__ = (UniqueConstraint("tenant_id", "library_asset_id", name="uq_material_library_repair_asset"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    tenant_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    library_asset_id: Mapped[int] = mapped_column(ForeignKey("material_library_assets.id"), nullable=False)
+    video_asset_id: Mapped[int] = mapped_column(ForeignKey("video_assets.id"), nullable=False)
+
+
 class Product(Base):
     __tablename__ = "products"
 
@@ -1308,7 +1360,7 @@ class VideoRepairTask(Base):
     product_id: Mapped[Optional[int]] = mapped_column(
         ForeignKey("products.id"), nullable=True, index=True)
     schema_version: Mapped[str] = mapped_column(
-        String(32), nullable=False, default="video_repair_task.v1")
+        String(32), nullable=False, default="video_repair_task.v2")
     draft_revision: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
     accepted_preview_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     cancel_reason: Mapped[str] = mapped_column(Text, nullable=False, default="")

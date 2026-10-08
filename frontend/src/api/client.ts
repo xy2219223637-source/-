@@ -25,7 +25,7 @@ import type {
   ShootingTask,
 } from '../types';
 
-const api = axios.create({
+export const api = axios.create({
   baseURL: '/api',
   timeout: 120000,
 });
@@ -196,15 +196,11 @@ export interface VideoRepairCandidate {
 export interface VideoRepairInput {
   id:number;source_kind:'MANUAL'|'INTERNAL_REVIEW'|'QIANCHUAN_MOCK'|'QIANCHUAN_PLATFORM';
   audit_platform:'INTERNAL'|'AD'|'CONTENT'|'UNKNOWN';raw_reason:string;suggestions:string[];
-  expected_result?:string;time_ranges:Array<{start:number;end:number}>;occurred_at:string;created_at:string;
-}
-
-export interface VideoRepairAsset {
-  id:number;asset_id:string;filename:string;object_url:string;duration_seconds:number;status:string;created_at:string;
+  time_ranges:Array<{start:number;end:number}>;occurred_at:string;created_at:string;
 }
 
 export interface VideoRepairTask {
-  id:number;status:string;schema_version?:string;product_id?:number|null;draft_revision?:number;
+  id:number;status:string;schema_version?:string;product_id?:number|null;material_library_product_id?:number|null;draft_revision?:number;
   accepted_preview_id?:number|null;cancel_reason?:string;capabilities?:string[];tts_available?:boolean;previews?:VideoRepairPreview[];
   input_id:number;input:VideoRepairInput;review_feedback_id:number|null;
   source_asset_id:number;base_plan_version_id:number|null;
@@ -290,25 +286,14 @@ export const qianchuanApi = {
 };
 
 export const videoRepairApi = {
-  assets: () => api.get<VideoRepairAsset[]>('/video-repair-assets').then(r=>r.data),
+  uploadLibrarySource: (libraryProductId:number,file:File) => {const form=new FormData();form.append('material_library_product_id',String(libraryProductId));form.append('file',file);return api.post<{id:number;filename:string;duration_seconds:number;product_id:number}>('/video-repair-assets/upload',form,{timeout:900000}).then(r=>r.data)},
   list: (params:{status?:string;source_asset_id?:number;page?:number;page_size?:number}={}) =>
     api.get<{items:VideoRepairTask[];page:number;page_size:number;total:number}>('/video-repair-tasks',{params}).then(r=>r.data),
-  create: (data:{source_asset_id:number;input:{source_kind:'MANUAL'|'INTERNAL_REVIEW';
-    audit_platform:'INTERNAL'|'AD'|'CONTENT'|'UNKNOWN';raw_reason:string;expected_result?:string;suggestions:string[];
-    time_ranges:Array<{start:number;end:number}>;category_hint:'VISUAL'|'COPY'|'AV'|'PROCESS'|'FULL'|'UNKNOWN'}}) =>
+  create: (data:{source_asset_id:number;material_library_product_id:number;input:{raw_reason:string;suggestions:string[]}}) =>
     api.post<VideoRepairTask>('/video-repair-tasks',data).then(r=>r.data),
   get: (taskId:number) => api.get<VideoRepairTask>(`/video-repair-tasks/${taskId}`).then(r=>r.data),
-  selectCandidate: (taskId:number,actionId:string,candidateId:string,overrideReason?:string) => api.post<VideoRepairTask>(
-    `/video-repair-tasks/${taskId}/candidates/select`,{action_id:actionId,candidate_id:candidateId,override_reason:overrideReason||null}).then(r=>r.data),
-  updateDraft: (taskId:number,data:{updated_at:string;action_type:'VISUAL_REPLACE'|'AV_SEGMENT_REPLACE'|'PROCESS_INSERT';
-    target_range:{start_ms:number;end_ms:number};selected_candidate_id?:string|null}) => api.patch<VideoRepairTask>(
-    `/video-repair-tasks/${taskId}/draft-plan`,data).then(r=>r.data),
-  approve: (taskId:number,updatedAt:string) => api.post<VideoRepairTask>(
-    `/video-repair-tasks/${taskId}/approve`,{updated_at:updatedAt}).then(r=>r.data),
-  render: (taskId:number) => api.post<VideoRepairTask>(
-    `/video-repair-tasks/${taskId}/render`,undefined,{timeout:900000}).then(r=>r.data),
   materials: (taskId:number) => api.get<VideoRepairMaterial[]>(
-    `/video-repair-tasks/${taskId}/materials`).then(r=>r.data),
+    `/video-repair-tasks/${taskId}/materials`,{timeout:900000}).then(r=>r.data),
   updateV4Draft: (taskId:number,draftRevision:number,action:Record<string,unknown>,overrideReason='') => api.patch<VideoRepairTask>(
     `/video-repair-tasks/${taskId}/draft`,{draft_revision:draftRevision,action,override_reason:overrideReason}).then(r=>r.data),
   uploadAttachment: (taskId:number,file:File) => {const data=new FormData();data.append('file',file);return api.post<VideoRepairAttachment>(
@@ -323,8 +308,6 @@ export const videoRepairApi = {
     `/video-repair-tasks/${taskId}/previews/${previewId}/retry`).then(r=>r.data),
   retryAnalysis: (taskId:number) => api.post<VideoRepairTask>(
     `/video-repair-tasks/${taskId}/retry-analysis`).then(r=>r.data),
-  cancel: (taskId:number,reason='用户取消') => api.post<VideoRepairTask>(
-    `/video-repair-tasks/${taskId}/cancel`,undefined,{params:{reason}}).then(r=>r.data),
 };
 
 export function mediaUrl(path: string): string {
