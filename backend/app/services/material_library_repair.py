@@ -11,7 +11,7 @@ from app.models import (
     MaterialLibraryAsset, MaterialLibraryProduct, MaterialLibraryRepairAssetLink,
     MaterialLibraryRepairProductLink, Product, VideoAsset,
 )
-from app.services.storage import get_storage_for_url
+from app.services.video_analysis_queue import enqueue_video_analysis
 
 logger = logging.getLogger(__name__)
 BRIDGE_CATEGORY = "__material_library_repair__"
@@ -59,7 +59,7 @@ def sync_repair_videos(db: Session, *, tenant_id: str, repair_product_id: int) -
         tenant_id=tenant_id, product_id=library.id, kind="video", removed_at=None).order_by(
             MaterialLibraryAsset.id).all()
     result: list[VideoAsset] = []
-    from app.api.video_repair import _probe_repair_video
+    queued = False
     for row in rows:
         link = db.query(MaterialLibraryRepairAssetLink).filter_by(
             tenant_id=tenant_id, library_asset_id=row.id).first()
@@ -70,30 +70,23 @@ def sync_repair_videos(db: Session, *, tenant_id: str, repair_product_id: int) -
             if mirror and not mirror.excluded and mirror.content_hash == row.content_hash:
                 result.append(mirror)
             continue
-        try:
-            path = get_storage_for_url(row.object_url).local_path(row.object_url)
-            if path is None:
-                raise ValueError("素材文件不可读取")
-            media = _probe_repair_video(path)
-            if media["duration"] <= 0:
-                raise ValueError("视频时长无效")
-        except Exception:
-            logger.warning("Unable to prepare library asset %s for repair", row.id, exc_info=True)
-            continue
         mirror = VideoAsset(
             tenant_id=tenant_id, product_id=repair_product_id, project_id=None,
             asset_id=f"asset-{uuid.uuid4().hex[:12]}", filename=row.filename,
             source=f"material_library_asset:{row.id}", library_type="repair_only",
             asset_kind="material", reusable_status="review_required",
             object_url=row.object_url, storage_provider=row.storage_provider,
-            content_hash=row.content_hash, duration_seconds=media["duration"],
-            width=media["width"], height=media["height"], fps=media["fps"],
-            has_audio=media["has_audio"], status="ready", excluded=False,
+            content_hash=row.content_hash, duration_seconds=0,
+            width=0, height=0, fps=0,
+            has_audio=False, status="validating", excluded=False,
         )
         db.add(mirror)
         db.flush()
         db.add(MaterialLibraryRepairAssetLink(
             tenant_id=tenant_id, library_asset_id=row.id, video_asset_id=mirror.id))
         result.append(mirror)
+        queued = True
     db.commit()
+    if queued:
+        enqueue_video_analysis()
     return result

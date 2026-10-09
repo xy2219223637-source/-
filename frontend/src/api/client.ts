@@ -210,7 +210,7 @@ export interface VideoRepairTask {
     reported_ranges?:Array<{start_ms:number;end_ms:number}>;suggested_ranges?:Array<{start_ms:number;end_ms:number}>;
     explanation?:string;evidence?:string[];schema_version?:string;summary?:string;
     primary_issue_id?:string|null;requires_human_range_confirmation?:boolean;overall_confidence?:number;
-    ai_proposal?:{action?:Record<string,any>|null;action_template?:Record<string,any>;summary?:string;requires_input?:string[];field_sources?:Record<string,string>;risks?:string[];
+    ai_proposal?:{action?:Record<string,any>|null;action_template?:Record<string,any>;summary?:string;requires_input?:string[];field_sources?:Record<string,string>;risks?:string[];recommended_material?:Record<string,any>|null;
       placement?:{recommended_ms:number;alternatives:number[];confidence:number;confidence_level:'HIGH'|'MEDIUM'|'LOW';basis:string;evidence:string[]}};
     material_candidates?:Array<Record<string,any>>;
     issues?:Array<{issue_id:string;category:string;description:string;affected_modalities:string[];
@@ -244,7 +244,7 @@ export interface VideoRepairMaterial {
   id:number;asset_id:string;filename:string;object_url:string;content_hash:string;
   duration_seconds:number;width:number;height:number;has_audio:boolean;asset_kind:string;
   summary?:string;recommended_range?:{start:number;end:number};description?:string;content_role?:string;
-  score?:number|null;recommendation_level?:string;reasons?:string[];warnings?:string[];
+  score?:number|null;recommendation_level?:string;reasons?:string[];warnings?:string[];audio_mode?:string;analysis_status?:string;
 }
 
 export interface VideoRepairAttachment {

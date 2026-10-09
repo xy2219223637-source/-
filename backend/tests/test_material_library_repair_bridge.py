@@ -81,19 +81,12 @@ class MaterialLibraryRepairBridgeTests(unittest.TestCase):
             auth = AuthContext("user", "tenant", "owner", "u@test.local", "Tenant")
             self.assertEqual(list_products(db=db, auth=auth), [])
 
-            class Storage:
-                def local_path(self, _url):
-                    return path
-
-            with patch("app.services.material_library_repair.get_storage_for_url", return_value=Storage()), \
-                 patch("app.api.video_repair._probe_repair_video", return_value={
-                     "duration": 8.0, "width": 1080, "height": 1920, "fps": 30,
-                     "has_audio": True}):
-                first = sync_repair_videos(db, tenant_id="tenant", repair_product_id=product.id)
-                second = sync_repair_videos(db, tenant_id="tenant", repair_product_id=product.id)
+            first = sync_repair_videos(db, tenant_id="tenant", repair_product_id=product.id)
+            second = sync_repair_videos(db, tenant_id="tenant", repair_product_id=product.id)
             self.assertEqual(len(first), 1)
             self.assertEqual(second[0].id, first[0].id)
             self.assertEqual(first[0].library_type, "repair_only")
+            self.assertEqual(first[0].status, "validating")
             self.assertEqual(first[0].content_hash, asset.content_hash)
         engine.dispose()
 

@@ -106,9 +106,21 @@ def _analyze(db, task: VideoRepairTask) -> None:
         first_range = ranges[0]
         start_ms = int(first_range.get("start_ms", 0))
         end_ms = int(first_range.get("end_ms", start_ms))
+        target_duration = max(.1, (end_ms - start_ms) / 1000)
+        candidates = find_candidates(
+            db, tenant_id=task.tenant_id, source_asset=source,
+            action="VISUAL_REPLACE", target_duration=target_duration,
+            issue_description=primary.description if primary else "",
+            recommend_score=settings.video_repair_recommend_score,
+            selectable_score=settings.video_repair_selectable_score,
+            library_only=True)
+        suggested = next((row for row in candidates if row.get("product_visibility") in {"clear", "partial"}
+                          and row.get("recommendation_level") != "BELOW_THRESHOLD"), None)
         proposal.update({
-            "summary": f"AI 建议替换 {start_ms / 1000:g}–{end_ms / 1000:g} 秒画面；请从商品素材库选择视频并裁剪。",
+            "summary": (f"AI 建议替换 {start_ms / 1000:g}–{end_ms / 1000:g} 秒画面；候选为“{suggested['description']}”，请确认截取区间。"
+                        if suggested else f"AI 建议替换 {start_ms / 1000:g}–{end_ms / 1000:g} 秒画面；尚无可靠的已分析素材，请人工选择。"),
             "requires_input": ["visual_material"],
+            "recommended_material": suggested,
             "action_template": {
                 "type": "VISUAL_REPLACE",
                 "target_range": {"start_ms": start_ms, "end_ms": end_ms},
@@ -174,9 +186,20 @@ def _analyze(db, task: VideoRepairTask) -> None:
             context, duration_ms=round(float(source.duration_seconds or 0) * 1000))
         start_ms = int(first_range.get("start_ms", 0)) if first_range else int(placement["recommended_ms"])
         target_duration = max(.5, (int(first_range.get("end_ms", start_ms + 3000)) - start_ms) / 1000) if first_range else 3.0
+        candidates = find_candidates(
+            db, tenant_id=task.tenant_id, source_asset=source,
+            action="PROCESS_INSERT", target_duration=target_duration,
+            issue_description=primary.description if primary else "",
+            recommend_score=settings.video_repair_recommend_score,
+            selectable_score=settings.video_repair_selectable_score,
+            library_only=True, allow_silent_insert=True)
+        suggested = next((row for row in candidates if row.get("product_visibility") in {"clear", "partial"}
+                          and row.get("recommendation_level") != "BELOW_THRESHOLD"), None)
         proposal.update({
-            "summary": "AI 建议补充内容；请从商品素材库选择视频片段并确认插入位置与声音。",
+            "summary": (f"AI 建议补充内容；候选为“{suggested['description']}”，请确认画面、插入位置与声音。"
+                        if suggested else "AI 建议补充内容；尚无可靠的已分析素材，请人工选择画面并确认声音。"),
             "requires_input": ["visual_material", "audio"],
+            "recommended_material": suggested,
             "action_template": {
                 "type": "CONTENT_INSERT", "duration_ms": round(target_duration * 1000),
                 "insert_at_ms": start_ms, "fit_mode": "COVER",

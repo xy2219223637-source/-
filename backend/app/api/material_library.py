@@ -10,13 +10,15 @@ from pathlib import Path
 from typing import Callable
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
+from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from app.auth import AuthContext
 from app.config import get_settings
 from app.database import get_db
 from app.models import (MaterialLibraryAsset, MaterialLibraryProduct,
-                        MaterialLibraryRepairAssetLink, VideoAsset)
+                        MaterialLibraryRepairAssetLink, MaterialLibraryRepairProductLink,
+                        VideoAsset, VideoAssetAnalysis, VideoHighlight)
 from app.permissions import require_permission
 from app.services.storage import get_storage, get_storage_by_name
 
@@ -25,6 +27,12 @@ auth_required = Depends(require_permission("material_library.access"))
 IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp", ".gif"}
 VIDEO_EXTENSIONS = {".mp4", ".mov", ".webm", ".mkv"}
 logger = logging.getLogger(__name__)
+
+
+class SegmentCorrection(BaseModel):
+    start_ms: int = Field(ge=0)
+    end_ms: int = Field(gt=0)
+    description: str = Field(min_length=1, max_length=500)
 
 
 def _kind(filename: str, header: bytes, *, image_only: bool = False) -> str:
@@ -93,10 +101,23 @@ def _product_out(row: MaterialLibraryProduct) -> dict:
             "created_at": row.created_at, "updated_at": row.updated_at}
 
 
-def _asset_out(row: MaterialLibraryAsset) -> dict:
-    return {"id": row.id, "product_id": row.product_id, "kind": row.kind,
+def _asset_out(row: MaterialLibraryAsset, db: Session | None = None) -> dict:
+    result = {"id": row.id, "product_id": row.product_id, "kind": row.kind,
             "filename": row.filename, "object_url": row.object_url,
             "size_bytes": row.size_bytes, "created_at": row.created_at}
+    if row.kind == "video" and db is not None:
+        link = db.query(MaterialLibraryRepairAssetLink).filter_by(
+            tenant_id=row.tenant_id, library_asset_id=row.id).first()
+        video = db.query(VideoAsset).filter_by(
+            tenant_id=row.tenant_id, id=link.video_asset_id).first() if link else None
+        analysis = db.query(VideoAssetAnalysis).filter_by(
+            tenant_id=row.tenant_id, asset_id=video.id).order_by(
+                VideoAssetAnalysis.id.desc()).first() if video else None
+        result["analysis_status"] = video.status if video else "pending"
+        result["analysis_summary"] = analysis.summary if analysis and analysis.status == "completed" else ""
+        result["analysis_error"] = analysis.error_message if analysis and video.status == "analysis_failed" and analysis.status == "failed" else ""
+        result["segments"] = (analysis.analysis_json or {}).get("highlights", []) if analysis and analysis.status == "completed" else []
+    return result
 
 
 @router.get("/products")
@@ -128,6 +149,22 @@ async def create_product(introduction: str = Form(...), image: UploadFile = File
 @router.get("/products/{product_id}")
 def get_product(product_id: int, db: Session = Depends(get_db), auth: AuthContext = auth_required):
     return _product_out(_product(db, auth.tenant_id, product_id))
+
+
+@router.get("/products/{product_id}/finished-videos")
+def list_finished_videos(product_id: int, db: Session = Depends(get_db), auth: AuthContext = auth_required):
+    _product(db, auth.tenant_id, product_id)
+    link = db.query(MaterialLibraryRepairProductLink).filter_by(
+        tenant_id=auth.tenant_id, library_product_id=product_id).first()
+    if link is None:
+        return []
+    rows = db.query(VideoAsset).filter_by(
+        tenant_id=auth.tenant_id, product_id=link.repair_product_id,
+        asset_kind="final_output", excluded=False).filter(
+            VideoAsset.source != "video_repair_upload").order_by(VideoAsset.id.desc()).all()
+    return [{"id": row.id, "filename": row.filename, "object_url": row.object_url,
+             "duration_seconds": row.duration_seconds, "created_at": row.created_at,
+             "status": row.status} for row in rows]
 
 
 @router.patch("/products/{product_id}")
@@ -166,7 +203,15 @@ def list_assets(product_id: int, db: Session = Depends(get_db), auth: AuthContex
     _product(db, auth.tenant_id, product_id)
     rows = db.query(MaterialLibraryAsset).filter_by(tenant_id=auth.tenant_id, product_id=product_id,
                                                     removed_at=None).order_by(MaterialLibraryAsset.id.desc()).all()
-    return [_asset_out(row) for row in rows]
+    video_ids = {row.id for row in rows if row.kind == "video"}
+    linked_ids = {link.library_asset_id for link in db.query(MaterialLibraryRepairAssetLink).filter(
+        MaterialLibraryRepairAssetLink.tenant_id == auth.tenant_id,
+        MaterialLibraryRepairAssetLink.library_asset_id.in_(video_ids)).all()} if video_ids else set()
+    if video_ids - linked_ids:
+        from app.services.material_library_repair import ensure_repair_product, sync_repair_videos
+        product = ensure_repair_product(db, tenant_id=auth.tenant_id, library_product_id=product_id)
+        sync_repair_videos(db, tenant_id=auth.tenant_id, repair_product_id=product.id)
+    return [_asset_out(row, db) for row in rows]
 
 
 @router.post("/products/{product_id}/assets", status_code=201)
@@ -180,7 +225,11 @@ async def upload_asset(product_id: int, file: UploadFile = File(...), db: Sessio
             tenant_id=auth.tenant_id, product_id=product_id, content_hash=content_hash,
             removed_at=None).first())
     if existing:
-        return _asset_out(existing)
+        if existing.kind == "video":
+            from app.services.material_library_repair import ensure_repair_product, sync_repair_videos
+            product = ensure_repair_product(db, tenant_id=auth.tenant_id, library_product_id=product_id)
+            sync_repair_videos(db, tenant_id=auth.tenant_id, repair_product_id=product.id)
+        return _asset_out(existing, db)
     row = MaterialLibraryAsset(tenant_id=auth.tenant_id, product_id=product_id, kind=kind,
                                filename=filename, object_url=url, storage_provider=provider,
                                size_bytes=size, content_hash=digest, created_by=auth.user_id)
@@ -192,7 +241,82 @@ async def upload_asset(product_id: int, file: UploadFile = File(...), db: Sessio
         db.rollback()
         await get_storage_by_name(provider).delete(url)
         raise
-    return _asset_out(row)
+    if kind == "video":
+        from app.services.material_library_repair import ensure_repair_product, sync_repair_videos
+        product = ensure_repair_product(db, tenant_id=auth.tenant_id, library_product_id=product_id)
+        sync_repair_videos(db, tenant_id=auth.tenant_id, repair_product_id=product.id)
+    return _asset_out(row, db)
+
+
+@router.post("/products/{product_id}/assets/{asset_id}/reanalyze")
+def reanalyze_asset(product_id: int, asset_id: int, db: Session = Depends(get_db),
+                    auth: AuthContext = auth_required):
+    _product(db, auth.tenant_id, product_id)
+    row = db.query(MaterialLibraryAsset).filter_by(
+        id=asset_id, tenant_id=auth.tenant_id, product_id=product_id,
+        kind="video", removed_at=None).first()
+    if row is None:
+        raise HTTPException(404, "视频素材不存在")
+    link = db.query(MaterialLibraryRepairAssetLink).filter_by(
+        tenant_id=auth.tenant_id, library_asset_id=asset_id).first()
+    if link is None:
+        from app.services.material_library_repair import ensure_repair_product, sync_repair_videos
+        product = ensure_repair_product(db, tenant_id=auth.tenant_id, library_product_id=product_id)
+        sync_repair_videos(db, tenant_id=auth.tenant_id, repair_product_id=product.id)
+        link = db.query(MaterialLibraryRepairAssetLink).filter_by(
+            tenant_id=auth.tenant_id, library_asset_id=asset_id).first()
+    video = db.query(VideoAsset).filter_by(
+        id=link.video_asset_id, tenant_id=auth.tenant_id).one()
+    if video.status in {"validating", "queued_for_analysis", "analyzing"}:
+        return _asset_out(row, db)
+    video.status = "queued_for_analysis" if video.duration_seconds > 0 else "validating"
+    db.commit()
+    from app.services.video_analysis_queue import enqueue_video_analysis
+    enqueue_video_analysis()
+    return _asset_out(row, db)
+
+
+@router.patch("/products/{product_id}/assets/{asset_id}/segments/{highlight_id}")
+def correct_segment(product_id: int, asset_id: int, highlight_id: str,
+                    payload: SegmentCorrection, db: Session = Depends(get_db),
+                    auth: AuthContext = auth_required):
+    _product(db, auth.tenant_id, product_id)
+    row = db.query(MaterialLibraryAsset).filter_by(
+        id=asset_id, tenant_id=auth.tenant_id, product_id=product_id,
+        kind="video", removed_at=None).first()
+    link = db.query(MaterialLibraryRepairAssetLink).filter_by(
+        tenant_id=auth.tenant_id, library_asset_id=asset_id).first() if row else None
+    video = db.query(VideoAsset).filter_by(
+        id=link.video_asset_id, tenant_id=auth.tenant_id).first() if link else None
+    if not video:
+        raise HTTPException(404, "视频素材不存在")
+    if payload.end_ms - payload.start_ms < 400 or payload.end_ms > round(video.duration_seconds * 1000):
+        raise HTTPException(422, "片段时间范围无效")
+    analysis = db.query(VideoAssetAnalysis).filter_by(
+        tenant_id=auth.tenant_id, asset_id=video.id, status="completed").order_by(
+            VideoAssetAnalysis.id.desc()).first()
+    highlight = db.query(VideoHighlight).filter_by(
+        tenant_id=auth.tenant_id, asset_id=video.id,
+        analysis_id=analysis.id, highlight_id=highlight_id).first() if analysis else None
+    if not highlight:
+        raise HTTPException(404, "分析片段不存在")
+    description = payload.description.strip()
+    if not description:
+        raise HTTPException(422, "片段描述不能为空")
+    highlight.start_seconds = payload.start_ms / 1000
+    highlight.end_seconds = payload.end_ms / 1000
+    highlight.description = description
+    analysis_json = dict(analysis.analysis_json or {})
+    segments = [dict(item) for item in analysis_json.get("highlights", [])]
+    for item in segments:
+        if item.get("highlight_id") == highlight_id:
+            item.update(start=highlight.start_seconds, end=highlight.end_seconds,
+                        description=description, corrected_by_user=True)
+            break
+    analysis_json["highlights"] = segments
+    analysis.analysis_json = analysis_json
+    db.commit()
+    return _asset_out(row, db)
 
 
 @router.delete("/products/{product_id}/assets/{asset_id}", status_code=204)

@@ -256,7 +256,7 @@ def list_v4_materials(task_id: int, db: Session = Depends(get_db),
         "id": row.id, "asset_id": row.asset_id, "filename": row.filename,
         "object_url": row.object_url, "content_hash": row.content_hash,
         "duration_seconds": row.duration_seconds, "width": row.width, "height": row.height,
-        "has_audio": row.has_audio, "asset_kind": row.asset_kind,
+        "has_audio": row.has_audio, "asset_kind": row.asset_kind, "analysis_status": row.status,
         "summary": summaries.get(row.id, ""),
         "recommended_range": (candidate_by_asset.get(row.id) or {}).get("source_range"),
         "description": (candidate_by_asset.get(row.id) or {}).get("description", row.filename if library_mode else ""),
@@ -264,7 +264,8 @@ def list_v4_materials(task_id: int, db: Session = Depends(get_db),
         "score": (candidate_by_asset.get(row.id) or {}).get("score"),
         "recommendation_level": (candidate_by_asset.get(row.id) or {}).get("recommendation_level", ""),
         "reasons": (candidate_by_asset.get(row.id) or {}).get("reasons", []),
-        "warnings": (candidate_by_asset.get(row.id) or {}).get("warnings", ["素材未做内容分析，请人工核对画面和声音"] if library_mode else []),
+        "audio_mode": (candidate_by_asset.get(row.id) or {}).get("audio_mode", "needs_review"),
+        "warnings": (candidate_by_asset.get(row.id) or {}).get("warnings", ["分析尚未完成或没有匹配本次修改的片段，请人工核对"] if library_mode else []),
     } for row in rows]
 
 

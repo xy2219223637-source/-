@@ -24,11 +24,12 @@ def find_candidates(db: Session, *, tenant_id: str, source_asset: VideoAsset,
                     forbidden_source_ranges: dict[int, list[tuple[float, float]]] | None = None,
                     issue_description: str = "", target_text: str = "",
                     repair_context: dict[str, Any] | None = None,
-                    recommend_score: float = .75, selectable_score: float = .60) -> list[dict[str, Any]]:
+                    recommend_score: float = .75, selectable_score: float = .60,
+                    library_only: bool = False, allow_silent_insert: bool = False) -> list[dict[str, Any]]:
     """Return auditable source ranges, scoped to the same tenant and product."""
     roles = ACTION_ROLES.get(action, set())
     rows = (
-        db.query(VideoAsset, VideoHighlight)
+        db.query(VideoAsset, VideoAssetAnalysis, VideoHighlight)
         .join(VideoAssetAnalysis, VideoAssetAnalysis.asset_id == VideoAsset.id)
         .join(VideoHighlight, VideoHighlight.analysis_id == VideoAssetAnalysis.id)
         .filter(
@@ -43,15 +44,16 @@ def find_candidates(db: Session, *, tenant_id: str, source_asset: VideoAsset,
             VideoHighlight.tenant_id == tenant_id,
             VideoHighlight.asset_id == VideoAsset.id,
             VideoHighlight.end_seconds > VideoHighlight.start_seconds,
+            *((VideoAsset.library_type == "repair_only", VideoAsset.asset_kind == "material") if library_only else ()),
         )
         .all()
     )
     result: list[dict[str, Any]] = []
-    for asset, highlight in rows:
+    for asset, analysis, highlight in rows:
         duration = float(highlight.end_seconds - highlight.start_seconds)
-        if action != "PROCESS_INSERT" and duration + 0.05 < target_duration:
+        if (action != "PROCESS_INSERT" or library_only) and duration + 0.05 < target_duration:
             continue
-        if action in {"AV_SEGMENT_REPLACE", "PROCESS_INSERT"} and not asset.has_audio:
+        if action in {"AV_SEGMENT_REPLACE", "PROCESS_INSERT"} and not asset.has_audio and not allow_silent_insert:
             continue
         if action == "PROCESS_INSERT" and highlight.content_role not in ACTION_ROLES[action]:
             continue
@@ -84,6 +86,12 @@ def find_candidates(db: Session, *, tenant_id: str, source_asset: VideoAsset,
             "asset_kind": asset.asset_kind, "quality_score": float(highlight.score),
             "same_orientation": True, "reusable_status": asset.reusable_status,
         }
+        if library_only:
+            detail = next((item for item in (analysis.analysis_json or {}).get("highlights", [])
+                           if item.get("highlight_id") == highlight.highlight_id), {})
+            candidate["product_visibility"] = detail.get("product_visibility", "uncertain")
+            candidate["audio_mode"] = detail.get("audio_mode", "needs_review")
+            candidate["on_screen_text"] = detail.get("on_screen_text", [])
         context = repair_context or {
             "narrative": {"target_intent": issue_description, "target_summary": target_text}}
         assessment = assess_continuity(
@@ -92,6 +100,8 @@ def find_candidates(db: Session, *, tenant_id: str, source_asset: VideoAsset,
         candidate.update(assessment)
         if asset.reusable_status == "review_required":
             candidate["warnings"].append("素材尚未标记为可直接复用，请在预览中人工确认")
+        if library_only and candidate["product_visibility"] in {"none", "uncertain"}:
+            candidate["warnings"].append("商品在该片段中未清晰确认，请人工核对")
         result.append(candidate)
     result.sort(key=lambda row: (-row["score"], row["source_asset_id"], row["highlight_id"]))
     return result[:limit]

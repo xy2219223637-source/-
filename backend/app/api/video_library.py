@@ -184,6 +184,17 @@ def _extract_frames(source: Path, duration: float, target: Path) -> list[Path]:
     return sorted(target.glob("frame-*.jpg"))
 
 
+def _repair_shots(source: Path | None, duration: float) -> list[dict[str, float]]:
+    if source is None:
+        return []
+    try:
+        from app.services.director_workflow import _detect_shot_ranges
+        ranges = _detect_shot_ranges(source, duration)
+        return [{"start": start, "end": end} for start, end in ranges[:40]]
+    except Exception:
+        return []
+
+
 def _normalize_analysis(asset: VideoAsset, result: dict[str, Any], transcript: Optional[dict[str, Any]] = None) -> dict[str, Any]:
     highlights = []
     words = (transcript or {}).get("words", [])
@@ -209,14 +220,24 @@ def _normalize_analysis(asset: VideoAsset, result: dict[str, Any], transcript: O
                 track_role = "reject"
             content_role = str(item.get("content_role") or roles[0])
             highlight_index += 1
-            highlights.append({"highlight_id": f"{asset.asset_id}-h{highlight_index:02d}", "start": round(span_start, 3), "end": round(span_end, 3),
+            highlight = {"highlight_id": f"{asset.asset_id}-h{highlight_index:02d}", "start": round(span_start, 3), "end": round(span_end, 3),
                 "description": str(item.get("description") or "有价值候选片段"), "reason": str(item.get("reason") or "模型判断具有剪辑价值"),
                 "recommended_roles": [str(role) for role in roles], "content_role": content_role, "track_role": track_role,
                 "speech_present": speech_present, "lip_visible": lip_visible, "speech_text": exact_speech or str(item.get("speech_text") or ""),
                 "speaker_id": str(item.get("speaker_id") or (f"{asset.asset_id}-speaker-1" if track_role == "a_roll" else "")),
                 "audio_strategy": "keep_original" if track_role == "a_roll" else "mute",
                 "shot_type": str(item.get("shot_type") or "unknown"), "selling_points": [str(x) for x in item.get("selling_points", [])],
-                "score": min(1.0, max(0.0, float(item.get("score", .7))))})
+                "score": min(1.0, max(0.0, float(item.get("score", .7))))}
+            if asset.library_type == "repair_only":
+                visibility = str(item.get("product_visibility") or "uncertain")
+                highlight["product_visibility"] = visibility if visibility in {"clear", "partial", "none", "uncertain"} else "uncertain"
+                highlight["on_screen_text"] = [str(value) for value in (item.get("on_screen_text") or []) if str(value).strip()][:10]
+                mode = str(item.get("audio_mode") or "needs_review")
+                highlight["audio_mode"] = mode if mode in {"mute_ok", "keep_original", "needs_review"} else "needs_review"
+                highlight["audio_strategy"] = "keep_original" if highlight["audio_mode"] == "keep_original" and bool(exact_speech) else "mute"
+                if highlight["audio_mode"] == "keep_original" and not exact_speech:
+                    highlight["audio_mode"] = "needs_review"
+            highlights.append(highlight)
     if not highlights:
         raise ValueError("模型没有返回合法 highlights")
     automatic_tags = [str(tag).strip() for tag in (result.get("video_tags") or result.get("material_types") or []) if str(tag).strip()]
@@ -244,14 +265,15 @@ async def analyze_video_asset(asset_db_id: int, force: bool = False) -> None:
         asset = db.query(VideoAsset).filter(VideoAsset.id == asset_db_id).first()
         if not asset or asset.excluded:
             return
+        prompt_version = "material-repair-v1" if asset.library_type == "repair_only" else PROMPT_VERSION
         cached = db.query(VideoAssetAnalysis).filter(VideoAssetAnalysis.asset_id == asset.id,
             VideoAssetAnalysis.model == get_settings().llm_vision_model,
-            VideoAssetAnalysis.prompt_version == PROMPT_VERSION,
+            VideoAssetAnalysis.prompt_version == prompt_version,
             VideoAssetAnalysis.status == "completed").order_by(VideoAssetAnalysis.id.desc()).first()
-        if cached and not force:
+        if cached and not force and asset.library_type != "repair_only":
             asset.status = "analyzed"; db.commit(); return
         analysis = VideoAssetAnalysis(tenant_id=asset.tenant_id, asset_id=asset.id, schema_version="1.0",
-            model=get_settings().llm_vision_model, prompt_version=PROMPT_VERSION, status="analyzing",
+            model=get_settings().llm_vision_model, prompt_version=prompt_version, status="analyzing",
             summary="", analysis_json={}, input_video_seconds=asset.duration_seconds, request_count=0, retry_count=0)
         db.add(analysis); asset.status = "analyzing"; db.commit(); db.refresh(analysis)
         transcript: dict[str, Any] = {}
@@ -273,7 +295,21 @@ async def analyze_video_asset(asset_db_id: int, force: bool = False) -> None:
                     "每段原声必须与原画面绑定，即使说话者没有出镜也标为 a_roll；识别是否存在烧录字幕和原 BGM。"
                     if asset.library_type == "finished" else
                     "这是半成品素材。区分可保留原声的人物口播 a_roll 与可静音重配的商品/使用/效果 b_roll。")
-                prompt = f"""分析一条时长 {asset.duration_seconds:.3f} 秒的美妆短视频。{material_instruction}
+                if asset.library_type == "repair_only":
+                    source = _asset_storage(asset).local_path(asset.object_url)
+                    shots = _repair_shots(source, asset.duration_seconds)
+                    product = db.query(Product).filter_by(id=asset.product_id, tenant_id=asset.tenant_id).first()
+                    prompt = f"""分析这条 {asset.duration_seconds:.3f} 秒的商品视频素材，供审核失败视频局部返修时检索画面。
+商品资料：{(product.description if product else '')[:1500]}。
+已检测镜头区间（秒）：{json.dumps(shots, ensure_ascii=False)}。
+按切镜和可独立使用的动作变化分段；同一连续动作不要仅因商品短暂离开画面而拆碎。
+只返回 JSON：summary、burned_subtitles、has_background_music、highlights。
+每个 highlights 项包含 start、end、description、product_visibility、audio_mode、on_screen_text、content_role、speech_present、speech_text、score。
+product_visibility 只能是 clear、partial、none、uncertain；audio_mode 只能是 mute_ok、keep_original、needs_review。
+content_role 使用 usage、product_demo、selling_point、proof、core_content；仅描述实际看见和听见的事实，不推断功效。
+时间须在视频范围内并尽量对齐镜头或动作边界；口播如需保留必须完整。看不清或听不清时写 uncertain 或 needs_review，不要猜测。"""
+                else:
+                    prompt = f"""分析一条时长 {asset.duration_seconds:.3f} 秒的美妆短视频。{material_instruction}
 只返回 JSON，包含 summary, video_tags, people{{count,description}}, product{{visible,name,exposure}}, actions, scenes,
 speech{{summary,selling_points}}, emotion{{intensity,description}}, material_types, recommended_positions,
 usability{{score,summary,issues}}, burned_subtitles, has_background_music, highlights。
@@ -294,7 +330,7 @@ content_role 使用 hook、pain_point、selling_point、brand_trust、usage、pr
                     if not source: raise RuntimeError("无法从 OSS 获取视频")
                     with tempfile.TemporaryDirectory(prefix=f"analyze-{asset.id}-") as directory:
                         frames = _extract_frames(source, asset.duration_seconds, Path(directory))
-                        result = await LLMClient().chat_vision(prompt + "当前输入为按时间顺序均匀抽取的关键帧，无法确认的口播内容请留空。",
+                        result = await LLMClient().chat_vision(prompt + "当前输入仅为均匀抽取的关键帧；无法确认动作边界时使用镜头区间，无法确认的口播和商品可见程度请标为不确定。",
                             [str(frame) for frame in frames], temperature=.2, max_tokens=4096, as_json=True)
                 normalized = _normalize_analysis(asset, result, transcript)
                 if transcript_error:

@@ -36,6 +36,8 @@ const VideoRepairProjects = lazy(() => import('./pages/VideoRepairProjects'));
 const VideoRepairCreate = lazy(() => import('./pages/VideoRepairCreate'));
 const VideoRepairWorkspace = lazy(() => import('./pages/VideoRepairWorkspace'));
 const MaterialLibrary = lazy(() => import('./pages/MaterialLibrary'));
+const EcommerceProducts = lazy(() => import('./pages/EcommerceProducts'));
+const ProductFinishedLibrary = lazy(() => import('./pages/ProductFinishedLibrary'));
 const ManualComposeProjects = lazy(() => import('./pages/ManualComposeProjects'));
 const ManualComposeWorkspace = lazy(() => import('./pages/ManualComposeWorkspace'));
 const PlatformAdmin = lazy(() => import('./pages/PlatformAdmin'));
@@ -85,6 +87,10 @@ export default function App() {
             <Route path="video-repair" element={<VideoRepairProjects />} />
             <Route path="material-library" element={<MaterialLibrary />} />
             <Route path="material-library/:productId" element={<MaterialLibrary />} />
+            <Route path="ecommerce-products" element={<EcommerceProducts />} />
+            <Route path="ecommerce-products/:productId" element={<EcommerceProducts />} />
+            <Route path="product-finished-library" element={<ProductFinishedLibrary />} />
+            <Route path="product-finished-library/:productId" element={<ProductFinishedLibrary />} />
             <Route path="video-repair/new" element={<VideoRepairCreate />} />
             <Route path="video-repair/:taskId" element={<VideoRepairWorkspace />} />
             <Route path="qianchuan/oauth/result" element={<QianchuanOAuthResult />} />
