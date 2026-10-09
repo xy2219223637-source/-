@@ -10,12 +10,12 @@ from app.models import TenantMember, TenantRole
 USER_PERMISSION_GROUPS = [
     {"key": "workspace", "label": "工作台", "children": [{"code": "dashboard.view", "label": "工作台"}]},
     {"key": "product_brand", "label": "商品与品牌", "children": [
-        {"code": "products.access", "label": "商品管理"}, {"code": "knowledge.access", "label": "知识库"},
+        {"code": "products.access", "label": "商品管理"}, {"code": "ecommerce_products.access", "label": "电商商品管理"},
+        {"code": "ecommerce_assets.access", "label": "电商素材与成品库"}, {"code": "knowledge.access", "label": "知识库"},
         {"code": "brand_visuals.access", "label": "品牌视觉"}]},
     {"key": "content_design", "label": "内容设计", "children": [
         {"code": "design_skills.access", "label": "设计 Skill"}, {"code": "creative_projects.access", "label": "AI 创作工作台"}]},
     {"key": "video_production", "label": "视频生产", "children": [
-        {"code": "material_library.access", "label": "商品素材库"},
         {"code": "finished_assets.access", "label": "成品素材库"}, {"code": "manual_compose.access", "label": "视频编排"},
         {"code": "finished_remix.access", "label": "成品混剪"}, {"code": "final_videos.access", "label": "成片库"},
         {"code": "video_repair.access", "label": "审核失败修改"},

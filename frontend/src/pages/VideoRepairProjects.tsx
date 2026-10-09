@@ -1,5 +1,5 @@
 import {useCallback,useEffect,useState} from 'react';
-import {ArrowRight,Loader2,Plus,Wrench} from 'lucide-react';
+import {ArrowRight,Loader2,Wrench} from 'lucide-react';
 import {Link} from 'react-router-dom';
 import {mediaUrl,videoRepairApi} from '../api/client';
 import type {VideoRepairTask} from '../api/client';
@@ -15,7 +15,7 @@ export default function VideoRepairProjects(){
   const load=useCallback(async()=>{setLoading(true);setError('');try{setTasks((await videoRepairApi.list(status?{status}:{})).items)}catch{setError('修复任务加载失败')}finally{setLoading(false)}},[status]);
   useEffect(()=>{void load()},[load]);
   return <div className="mx-auto max-w-7xl space-y-6 animate-fade-in">
-    <header className="flex flex-wrap items-end justify-between gap-4"><div><div className="mb-2 text-xs tracking-[.18em] text-[var(--muted)]">VIDEO REPAIR</div><h1 className="font-display text-4xl">审核失败修改</h1><p className="mt-2 text-sm text-[var(--muted)]">基于已有成片定位问题并生成新的修改版本，原成片不会被覆盖。</p></div><Link className="primary" to="/video-repair/new"><Plus size={16}/>新建修改任务</Link></header>
+    <header className="flex flex-wrap items-end justify-between gap-4"><div><div className="mb-2 text-xs tracking-[.18em] text-[var(--muted)]">VIDEO REPAIR</div><h1 className="font-display text-4xl">审核失败修改</h1><p className="mt-2 text-sm text-[var(--muted)]">查看已有修改任务。</p></div></header>
     <div className="flex flex-wrap gap-2">{FILTERS.map(([value,label])=><button key={value||'all'} type="button" onClick={()=>setStatus(value)} className={status===value?'primary':'btn-secondary'}>{label}</button>)}</div>
     {error&&<p role="alert" className="rounded border border-rose-200 bg-rose-50 p-3 text-sm text-rose-800">{error}</p>}
     {loading?<div className="grid min-h-56 place-items-center"><Loader2 className="animate-spin"/></div>:tasks.length?<div className="grid gap-4 lg:grid-cols-2">{tasks.map(task=><Link key={task.id} to={`/video-repair/${task.id}`} className="panel group grid grid-cols-[8rem_1fr] gap-4 p-4 transition hover:border-violet-300">

@@ -6,7 +6,7 @@ from datetime import datetime, timedelta
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api import admin, auth, auto_edit, brands, creative, dashboard, director, knowledge, material_library, products, quality, skills, templates, operations, production, storage, video_library, video_taxonomy, videos
+from app.api import admin, auth, auto_edit, brands, creative, dashboard, director, ecommerce_products, ecommerce_video_library, ecommerce_video_taxonomy, knowledge, products, quality, skills, templates, operations, production, storage, video_library, video_taxonomy, videos
 from app.config import get_settings
 from app.database import SessionLocal, engine, init_db
 from app.models import AuditLog, CreativeBatchJob, CreativeGeneration
@@ -59,7 +59,9 @@ async def audit_requests(request, call_next):
 app.add_middleware(RequestTraceMiddleware)
 
 app.include_router(products.router, prefix="/api")
-app.include_router(material_library.router, prefix="/api")
+app.include_router(ecommerce_products.router, prefix="/api")
+app.include_router(ecommerce_video_library.router, prefix="/api")
+app.include_router(ecommerce_video_taxonomy.router, prefix="/api")
 app.include_router(auth.router, prefix="/api")
 app.include_router(admin.platform_router, prefix="/api")
 app.include_router(admin.tenant_router, prefix="/api")

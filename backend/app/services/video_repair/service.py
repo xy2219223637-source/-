@@ -95,7 +95,6 @@ def serialize_task(db: Session, row: VideoRepairTask) -> dict[str, Any]:
         "id": row.id, "status": row.status, "input_id": row.input_id,
         "schema_version": row.schema_version,
         "product_id": getattr(row, "product_id", None),
-        "material_library_product_id": (repair_input.raw_payload_json or {}).get("material_library_product_id"),
         "draft_revision": getattr(row, "draft_revision", 1),
         "accepted_preview_id": getattr(row, "accepted_preview_id", None),
         "cancel_reason": getattr(row, "cancel_reason", "") or "",

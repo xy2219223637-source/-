@@ -1,5 +1,5 @@
 import {useCallback,useEffect,useState} from 'react';
-import {Download,Loader2,Rocket,Send,Wrench} from 'lucide-react';
+import {Download,Loader2,Rocket,Send} from 'lucide-react';
 import {Link,useParams} from 'react-router-dom';
 import {mediaUrl,productApi,videoLibraryApi,videoTaxonomyApi} from '../api/client';
 import {VideoTaxonomyEditor} from '../components/VideoTaxonomyEditor';
@@ -64,7 +64,6 @@ export default function FinalVideoDetail(){
       <VideoDetailHeading title={product?.name||'成片详情'} asset={video} fallback="/final-videos" backLabel="返回成片库" sourceCount={summary?.source_count}/>
       <div className="flex flex-wrap items-center justify-end gap-3 pb-4">
         <div className="flex flex-wrap gap-2"><a className="btn-secondary" href={mediaUrl(video.object_url)} download><Download size={15}/>下载视频</a>
-          <Link className="btn-secondary" to="/video-repair/new"><Wrench size={15}/>审核失败修改</Link>
           <button className="btn-secondary" onClick={()=>setPushNotice(true)}><Send size={15}/>上传素材</button>
           <button className="primary inline-flex items-center gap-2" onClick={()=>setPlanOpen(true)}><Rocket size={15}/>推送投流</button></div>
       </div>

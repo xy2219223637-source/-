@@ -35,6 +35,10 @@ const dashboardLink = { to: '/', label: '工作台', icon: LayoutDashboard, end:
 const routePreloaders: Record<string, () => Promise<unknown>> = {
   '/': () => import('../pages/Dashboard'),
   '/products': () => import('../pages/Products'),
+  '/ecommerce-products': () => import('../pages/EcommerceProducts'),
+  '/ecommerce-video-assets': () => import('../pages/EcommerceVideoLibrary'),
+  '/ecommerce-final-videos': () => import('../pages/EcommerceVideoLibrary'),
+  '/tenant-admin/ecommerce-taxonomy': () => import('../pages/EcommerceVideoTaxonomy'),
   '/knowledge': () => import('../pages/Knowledge'),
   '/brand-visuals': () => import('../pages/BrandVisuals'),
   '/design-skills': () => import('../pages/DesignSkills'),
@@ -44,9 +48,6 @@ const routePreloaders: Record<string, () => Promise<unknown>> = {
   '/video-projects': () => import('../pages/VideoProjects'),
   '/final-videos': () => import('../pages/FinalVideoLibrary'),
   '/video-repair': () => import('../pages/VideoRepairProjects'),
-  '/material-library': () => import('../pages/MaterialLibrary'),
-  '/ecommerce-products': () => import('../pages/EcommerceProducts'),
-  '/product-finished-library': () => import('../pages/ProductFinishedLibrary'),
   '/manual-video-compose': () => import('../pages/ManualComposeProjects'),
   '/task-center': () => import('../pages/TaskCenter'),
   '/tenant-admin/taxonomy': () => import('../pages/VideoTaxonomy'),
@@ -65,6 +66,9 @@ const navGroups = [
     label: '商品与品牌',
     items: [
       { to: '/products', label: '商品管理', icon: PackagePlus },
+      { to: '/ecommerce-products', label: '电商商品管理', icon: PackagePlus },
+      { to: '/ecommerce-video-assets', label: '商品素材库', icon: Film },
+      { to: '/ecommerce-final-videos', label: '商品成品库', icon: Library },
       { to: '/knowledge', label: '知识库', icon: BookOpen },
       { to: '/brand-visuals', label: '品牌视觉', icon: Palette },
     ],
@@ -84,9 +88,6 @@ const navGroups = [
       { to: '/finished-video-remix', label: '成品混剪', icon: Video },
       { to: '/final-videos', label: '成片库', icon: Library },
       { to: '/video-repair', label: '审核失败修改', icon: Wrench },
-      { to: '/ecommerce-products', label: '电商商品管理', icon: PackagePlus },
-      { to: '/material-library', label: '商品素材库', icon: Library },
-      { to: '/product-finished-library', label: '商品成品库', icon: Film },
       { to: '/director-inspiration', label: '编导灵感', icon: Clapperboard },
       { to: '/shooting-tasks', label: '拍摄任务', icon: ClipboardList },
     ],
@@ -100,15 +101,13 @@ const navGroups = [
 ];
 
 const routePermissions: Record<string, string> = {
-  '/': 'dashboard.view', '/products': 'products.access', '/knowledge': 'knowledge.access',
+  '/': 'dashboard.view', '/products': 'products.access', '/ecommerce-products': 'ecommerce_products.access',
+  '/ecommerce-video-assets': 'ecommerce_assets.access', '/ecommerce-final-videos': 'ecommerce_assets.access', '/knowledge': 'knowledge.access',
   '/brand-visuals': 'brand_visuals.access', '/design-skills': 'design_skills.access',
   '/creative-projects': 'creative_projects.access', '/finished-video-assets': 'finished_assets.access',
   '/manual-video-compose': 'manual_compose.access', '/finished-video-remix': 'finished_remix.access',
   '/final-videos': 'final_videos.access', '/director-inspiration': 'director.access',
   '/video-repair': 'video_repair.access',
-  '/material-library': 'material_library.access',
-  '/ecommerce-products': 'material_library.access',
-  '/product-finished-library': 'material_library.access',
   '/shooting-tasks': 'shooting_tasks.access', '/task-center': 'task_center.access',
 };
 

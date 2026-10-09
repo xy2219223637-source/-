@@ -11,12 +11,6 @@ class VideoRepairInputCreate(BaseModel):
     suggestions: list[str] = Field(default_factory=list, max_length=20)
 
 
-class VideoRepairTaskCreate(BaseModel):
-    source_asset_id: int = Field(gt=0)
-    material_library_product_id: int = Field(gt=0)
-    input: VideoRepairInputCreate
-
-
 class VideoRepairInputRead(BaseModel):
     id: int
     source_kind: str
@@ -33,7 +27,6 @@ class RepairTaskRead(BaseModel):
     status: str
     schema_version: str = "video_repair_task.v2"
     product_id: int | None = None
-    material_library_product_id: int | None = None
     draft_revision: int = 1
     accepted_preview_id: int | None = None
     cancel_reason: str = ""

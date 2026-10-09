@@ -378,9 +378,6 @@ def _ensure_default_tenant_roles() -> None:
                     member.role_id = administrator.id if member.role == "admin" else employee.id
             for role in db.query(TenantRole).filter_by(tenant_id=tenant.id, status="active").all():
                 permissions = list(role.permissions or [])
-                if role.is_system and role.code in {"employee", "administrator"} and "material_library.access" not in permissions:
-                    permissions.append("material_library.access")
-                    role.permissions = permissions
                 if "final_videos.access" in permissions and "video_repair.access" not in permissions:
                     role.permissions = [*permissions, "video_repair.access"]
         db.commit()

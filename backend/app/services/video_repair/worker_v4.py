@@ -49,9 +49,6 @@ def _analyze(db, task: VideoRepairTask) -> None:
     source = db.get(VideoAsset, task.source_asset_id)
     if not repair_input or not source:
         raise RuntimeError("SOURCE_MISSING: 修复输入或源成片不存在")
-    from app.services.material_library_repair import library_product_for_repair
-    library_mode = bool(library_product_for_repair(
-        db, tenant_id=task.tenant_id, repair_product_id=task.product_id))
     settings = get_settings()
     capabilities = ["VISUAL_REPLACE"]
     if settings.video_repair_audio_replace_enabled:
@@ -102,33 +99,7 @@ def _analyze(db, task: VideoRepairTask) -> None:
         },
     }
     candidates: list[dict] = []
-    if library_mode and recommended == "VISUAL_REPLACE" and ranges:
-        first_range = ranges[0]
-        start_ms = int(first_range.get("start_ms", 0))
-        end_ms = int(first_range.get("end_ms", start_ms))
-        target_duration = max(.1, (end_ms - start_ms) / 1000)
-        candidates = find_candidates(
-            db, tenant_id=task.tenant_id, source_asset=source,
-            action="VISUAL_REPLACE", target_duration=target_duration,
-            issue_description=primary.description if primary else "",
-            recommend_score=settings.video_repair_recommend_score,
-            selectable_score=settings.video_repair_selectable_score,
-            library_only=True)
-        suggested = next((row for row in candidates if row.get("product_visibility") in {"clear", "partial"}
-                          and row.get("recommendation_level") != "BELOW_THRESHOLD"), None)
-        proposal.update({
-            "summary": (f"AI 建议替换 {start_ms / 1000:g}–{end_ms / 1000:g} 秒画面；候选为“{suggested['description']}”，请确认截取区间。"
-                        if suggested else f"AI 建议替换 {start_ms / 1000:g}–{end_ms / 1000:g} 秒画面；尚无可靠的已分析素材，请人工选择。"),
-            "requires_input": ["visual_material"],
-            "recommended_material": suggested,
-            "action_template": {
-                "type": "VISUAL_REPLACE",
-                "target_range": {"start_ms": start_ms, "end_ms": end_ms},
-                "fit_mode": "COVER", "transition": {"type": "CUT", "duration_ms": 0},
-            },
-            "field_sources": {"action": "AI_ANALYSIS", "target_range": "AI_ANALYSIS", "material": "HUMAN_SELECTION"},
-        })
-    elif recommended == "VISUAL_REPLACE" and ranges:
+    if recommended == "VISUAL_REPLACE" and ranges:
         first_range = ranges[0]
         start_ms = int(first_range.get("start_ms", 0))
         end_ms = int(first_range.get("end_ms", start_ms))
@@ -179,35 +150,6 @@ def _analyze(db, task: VideoRepairTask) -> None:
                 "type": "AUDIO_REPLACE",
                 "target_range": {"start_ms": int(first_range.get("start_ms", 0)), "end_ms": int(first_range.get("end_ms", 0))},
             },
-        })
-    elif library_mode and recommended == "CONTENT_INSERT":
-        first_range = ranges[0] if ranges else None
-        placement = recommend_insertion_positions(
-            context, duration_ms=round(float(source.duration_seconds or 0) * 1000))
-        start_ms = int(first_range.get("start_ms", 0)) if first_range else int(placement["recommended_ms"])
-        target_duration = max(.5, (int(first_range.get("end_ms", start_ms + 3000)) - start_ms) / 1000) if first_range else 3.0
-        candidates = find_candidates(
-            db, tenant_id=task.tenant_id, source_asset=source,
-            action="PROCESS_INSERT", target_duration=target_duration,
-            issue_description=primary.description if primary else "",
-            recommend_score=settings.video_repair_recommend_score,
-            selectable_score=settings.video_repair_selectable_score,
-            library_only=True, allow_silent_insert=True)
-        suggested = next((row for row in candidates if row.get("product_visibility") in {"clear", "partial"}
-                          and row.get("recommendation_level") != "BELOW_THRESHOLD"), None)
-        proposal.update({
-            "summary": (f"AI 建议补充内容；候选为“{suggested['description']}”，请确认画面、插入位置与声音。"
-                        if suggested else "AI 建议补充内容；尚无可靠的已分析素材，请人工选择画面并确认声音。"),
-            "requires_input": ["visual_material", "audio"],
-            "recommended_material": suggested,
-            "action_template": {
-                "type": "CONTENT_INSERT", "duration_ms": round(target_duration * 1000),
-                "insert_at_ms": start_ms, "fit_mode": "COVER",
-                "transition": {"type": "CUT", "duration_ms": 0},
-            },
-            "placement": placement,
-            "field_sources": {"action": "AI_ANALYSIS", "insert_at": "AI_TIMELINE_ANALYSIS",
-                              "material": "HUMAN_SELECTION", "audio": "HUMAN_SELECTION"},
         })
     elif recommended == "CONTENT_INSERT":
         first_range = ranges[0] if ranges else None

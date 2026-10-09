@@ -1,23 +1,14 @@
 from __future__ import annotations
 
-import asyncio
-from io import BytesIO
-from pathlib import Path
-import subprocess
-import tempfile
 import unittest
-from unittest.mock import AsyncMock, patch
-from types import SimpleNamespace
 
-from fastapi import HTTPException, UploadFile
+from fastapi import HTTPException
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
 from app.database import Base
-from app.auth import AuthContext
-from app.api.video_repair import _probe_repair_video, create_repair, upload_repair_source
-from app.models import Product, Tenant, User, VideoAsset, VideoRepairInput
-from app.schemas.video_repair import VideoRepairInputCreate, VideoRepairTaskCreate
+from app.models import Product, Tenant, User, VideoAsset
+from app.schemas.video_repair import VideoRepairInputCreate
 from app.services.video_repair.ai_context import build_ai_context
 from app.services.video_repair.inputs import create_input
 from app.services.video_repair.migration import migrate_video_repair
@@ -100,81 +91,6 @@ class VideoRepairInputTests(unittest.TestCase):
             self.assertNotIn("expected_result", context["review"])
             self.assertEqual(context["review"]["category_hint"], "UNKNOWN")
 
-    def test_local_upload_links_video_to_selected_product(self):
-        import imageio_ffmpeg
-
-        with tempfile.TemporaryDirectory() as directory:
-            path = Path(directory) / "source.mp4"
-            subprocess.run([
-                imageio_ffmpeg.get_ffmpeg_exe(), "-hide_banner", "-loglevel", "error",
-                "-f", "lavfi", "-i", "color=c=black:s=160x90:r=25",
-                "-f", "lavfi", "-i", "sine=frequency=440:sample_rate=44100",
-                "-t", "1", "-c:v", "mpeg4", "-c:a", "aac", str(path),
-            ], check=True, capture_output=True, timeout=30)
-            video_bytes = path.read_bytes()
-        storage = type("Storage", (), {"name": "aliyun_oss", "upload": AsyncMock(return_value="/uploaded.mp4")})()
-        auth = AuthContext("owner", "tenant", "owner", "owner@example.test", "Tenant")
-        with self.sessions() as db, patch("app.api.video_repair.get_video_storage", return_value=storage), \
-                patch("app.services.director_workflow._ffprobe_executable", return_value=""), \
-                patch("app.api.video_repair.get_settings", return_value=SimpleNamespace(
-                    video_repair_v4_enabled=True, video_repair_async_worker_enabled=True,
-                    director_video_max_upload_mb=100, video_library_max_duration_seconds=300)), \
-                patch("app.services.material_library_repair.ensure_repair_product", return_value=db.get(Product, 1)), \
-                patch("app.api.video_repair.enqueue_video_analysis") as enqueue:
-            def verify_saved_before_analysis():
-                self.assertEqual(storage.upload.await_count, 1)
-                self.assertEqual(db.query(VideoAsset).filter_by(source="video_repair_upload").count(), 1)
-            enqueue.side_effect = verify_saved_before_analysis
-            result = asyncio.run(upload_repair_source(
-                material_library_product_id=1,
-                file=UploadFile(filename="v1.mp4", file=BytesIO(video_bytes)),
-                db=db, auth=auth))
-            asset = db.get(VideoAsset, result["id"])
-            self.assertEqual(asset.product_id, 1)
-            self.assertEqual(asset.asset_kind, "final_output")
-            self.assertEqual(asset.source, "video_repair_upload")
-            self.assertGreater(asset.duration_seconds, 0)
-            self.assertTrue(asset.has_audio)
-            self.assertEqual(storage.upload.await_count, 1)
-            enqueue.assert_called_once()
-
-    def test_create_task_persists_no_manual_hint_or_range(self):
-        auth = AuthContext("owner", "tenant", "owner", "owner@example.test", "Tenant")
-        payload = VideoRepairTaskCreate(source_asset_id=1, material_library_product_id=1,
-                                        input=VideoRepairInputCreate(
-            raw_reason="6 到 10 秒画面错误", suggestions=["替换真实画面"]))
-        with self.sessions() as db, \
-                patch("app.api.video_repair.get_settings", return_value=SimpleNamespace(
-                    video_repair_v4_enabled=True, video_repair_async_worker_enabled=True)), \
-                patch("app.services.material_library_repair.ensure_repair_product", return_value=db.get(Product, 1)), \
-                patch("app.api.video_repair.create_v4_task") as create_v4_task, \
-                patch("app.api.video_repair.serialize_task", return_value={"id": 42}):
-            self.assertEqual(create_repair(payload, db=db, auth=auth), {"id": 42})
-            row = db.query(VideoRepairInput).one()
-            self.assertEqual(row.source_kind, "MANUAL")
-            self.assertEqual(row.audit_platform, "INTERNAL")
-            self.assertEqual(row.expected_result, "")
-            self.assertEqual(row.time_ranges_json, [])
-            self.assertEqual(row.raw_payload_json, {"material_library_product_id": 1})
-            self.assertEqual(row.suggestions_json, ["替换真实画面"])
-            create_v4_task.assert_called_once()
-
-    def test_video_probe_without_system_ffprobe_preserves_audio(self):
-        import imageio_ffmpeg
-
-        with tempfile.TemporaryDirectory() as directory:
-            path = Path(directory) / "sample.mp4"
-            subprocess.run([
-                imageio_ffmpeg.get_ffmpeg_exe(), "-hide_banner", "-loglevel", "error",
-                "-f", "lavfi", "-i", "color=c=black:s=160x90:r=25",
-                "-f", "lavfi", "-i", "sine=frequency=440:sample_rate=44100",
-                "-t", "1", "-c:v", "mpeg4", "-c:a", "aac", str(path),
-            ], check=True, capture_output=True, timeout=30)
-            with patch("app.services.director_workflow._ffprobe_executable", return_value=""):
-                media = _probe_repair_video(path)
-            self.assertGreater(media["duration"], 0)
-            self.assertEqual((media["width"], media["height"]), (160, 90))
-            self.assertTrue(media["has_audio"])
 
 
 if __name__ == "__main__":

@@ -1,78 +1,41 @@
-import {useEffect, useState} from 'react';
-import {Link, useNavigate, useParams} from 'react-router-dom';
-import {ImagePlus, Loader2, Plus} from 'lucide-react';
-import {materialLibraryApi} from '../api/materialLibrary';
-import type {LibraryProduct} from '../api/materialLibrary';
+import { useEffect, useState } from 'react';
+import { ArrowRight, Box, Image as ImageIcon, Loader2, Plus } from 'lucide-react';
+import { Link } from 'react-router-dom';
+import { mediaUrl, ecommerceProductApi } from '../api/client';
+import type { Product } from '../types';
 
-function message(error:unknown){
-  const value=error as {response?:{data?:{detail?:string}};message?:string};
-  return value.response?.data?.detail||value.message||'操作失败';
+function completeness(product: Product) {
+  const fields = [product.name, product.category, product.brand_name, product.description, product.target_users, product.specifications];
+  const filled = fields.filter((value) => String(value || '').trim()).length + (product.image_urls.length ? 1 : 0);
+  return Math.round(filled / 7 * 100);
 }
 
-export default function EcommerceProducts(){
-  const {productId}=useParams();
-  const id=Number(productId);
-  const navigate=useNavigate();
-  const [products,setProducts]=useState<LibraryProduct[]>([]);
-  const [product,setProduct]=useState<LibraryProduct|null>(null);
-  const [introduction,setIntroduction]=useState('');
-  const [image,setImage]=useState<File|null>(null);
-  const [editing,setEditing]=useState(false);
-  const [creating,setCreating]=useState(false);
-  const [loading,setLoading]=useState(true);
-  const [busy,setBusy]=useState(false);
-  const [error,setError]=useState('');
+export default function ProductsPage() {
+  const [products, setProducts] = useState<Product[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
 
-  useEffect(()=>{
-    let active=true;
-    setLoading(true);setError('');setEditing(false);setCreating(false);setImage(null);setProduct(null);
-    if(productId){
-      materialLibraryApi.product(id).then(row=>{if(active){setProduct(row);setIntroduction(row.introduction)}})
-        .catch(value=>{if(active)setError(message(value))}).finally(()=>{if(active)setLoading(false)});
-    }else{
-      materialLibraryApi.products().then(rows=>{if(active)setProducts(rows)})
-        .catch(value=>{if(active)setError(message(value))}).finally(()=>{if(active)setLoading(false)});
-    }
-    return()=>{active=false};
-  },[productId,id]);
+  useEffect(() => {
+    ecommerceProductApi.list().then(setProducts).catch(() => setError('商品列表加载失败')).finally(() => setLoading(false));
+  }, []);
 
-  async function save(event:React.FormEvent){
-    event.preventDefault();
-    if(busy||!introduction.trim()||(creating&&!image))return;
-    setBusy(true);setError('');
-    try{
-      if(creating&&image){
-        const row=await materialLibraryApi.create(image,introduction.trim());
-        navigate(`/ecommerce-products/${row.id}`);
-      }else if(product){
-        const row=await materialLibraryApi.update(product.id,introduction.trim(),image||undefined);
-        setProduct(row);setEditing(false);setImage(null);
-      }
-    }catch(value){setError(message(value))}finally{setBusy(false)}
-  }
+  if (loading) return <div className="h-64 grid place-items-center text-[var(--muted)]"><Loader2 className="animate-spin" /></div>;
 
-  return <div className="mx-auto max-w-6xl space-y-6 animate-fade-in">
-    <header className="flex flex-wrap items-start justify-between gap-3"><div>
-      {productId&&<Link to="/ecommerce-products" className="text-sm text-[var(--muted)]">← 返回电商商品管理</Link>}
-      <h1 className="font-display text-4xl mt-1">电商商品管理</h1>
-      <p className="mt-2 text-sm text-[var(--muted)]">维护商品图片和介绍，素材与成品按商品分别查看。</p>
-    </div>{!productId&&!creating&&<button type="button" className="primary" onClick={()=>{setCreating(true);setIntroduction('');setImage(null)}}><Plus size={16}/>新建商品</button>}</header>
-    {error&&<p role="alert" className="rounded bg-rose-50 p-3 text-sm text-rose-800">{error}</p>}
-    {loading?<div className="panel flex items-center gap-2 p-6"><Loader2 className="animate-spin" size={18}/>加载中…</div>:productId?product&&<>
-      <section className="panel p-5">{editing?<form onSubmit={save} className="space-y-4">
-        <h2 className="font-medium">编辑商品</h2>
-        <label className="field"><span>产品图片（不更换可留空）</span><input type="file" accept=".jpg,.jpeg,.png,.webp,.gif,image/*" onChange={event=>setImage(event.target.files?.[0]||null)}/></label>
-        <label className="field"><span>产品介绍 *</span><textarea className="input min-h-32" maxLength={10000} value={introduction} onChange={event=>setIntroduction(event.target.value)}/></label>
-        <div className="flex gap-2"><button className="primary" disabled={busy||!introduction.trim()}>保存</button><button type="button" className="btn-secondary" onClick={()=>{setEditing(false);setIntroduction(product.introduction);setImage(null)}}>取消</button></div>
-      </form>:<div className="flex flex-col gap-5 sm:flex-row"><img src={product.image_url} alt="产品图片" className="h-44 w-44 rounded object-cover border border-[var(--border)]"/><div className="min-w-0 flex-1"><h2 className="font-medium">产品介绍</h2><p className="mt-2 whitespace-pre-wrap break-words text-sm">{product.introduction}</p><button type="button" className="btn-secondary mt-4" onClick={()=>setEditing(true)}>编辑商品</button></div></div>}</section>
-      <div className="flex flex-wrap gap-3"><Link className="btn-secondary" to={`/material-library/${product.id}`}>查看商品素材</Link><Link className="btn-secondary" to={`/product-finished-library/${product.id}`}>查看商品成品</Link></div>
-    </>:<>
-      {creating&&<form className="panel space-y-4 p-6" onSubmit={save}><h2 className="font-medium">新建商品</h2>
-        <label className="field"><span>产品图片 *</span><input type="file" accept=".jpg,.jpeg,.png,.webp,.gif,image/*" required onChange={event=>setImage(event.target.files?.[0]||null)}/></label>
-        <label className="field"><span>产品介绍 *</span><textarea className="input min-h-32" maxLength={10000} required value={introduction} onChange={event=>setIntroduction(event.target.value)} placeholder="填写产品介绍"/></label>
-        <div className="flex gap-2"><button className="primary" disabled={busy||!image||!introduction.trim()}>{busy?<Loader2 size={16} className="animate-spin"/>:<ImagePlus size={16}/>}创建商品</button><button className="btn-secondary" type="button" onClick={()=>setCreating(false)}>取消</button></div>
-      </form>}
-      {!products.length&&!creating?<div className="panel p-10 text-center text-sm text-[var(--muted)]">暂无商品，点击“新建商品”开始建立档案。</div>:<div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">{products.map(row=><Link key={row.id} to={`/ecommerce-products/${row.id}`} className="panel overflow-hidden transition-shadow hover:shadow-md"><img src={row.image_url} alt="产品图片" className="h-48 w-full object-cover"/><div className="p-4"><p className="line-clamp-2 whitespace-pre-wrap break-words text-sm">{row.introduction}</p><span className="mt-2 block text-xs text-[var(--muted)]">管理商品 →</span></div></Link>)}</div>}
-    </>}
+  return <div className="space-y-6 animate-fade-in">
+    <header className="flex flex-wrap items-end justify-between gap-4">
+      <div><div className="text-xs font-medium text-[var(--accent)]">PRODUCTS</div><h1 className="font-display text-4xl mt-2">电商商品管理</h1><p className="text-sm text-[var(--muted)] mt-2">独立管理电商业务的商品资料与素材。</p></div>
+      <Link to="/ecommerce-products/new" className="btn-primary"><Plus size={15}/>创建商品</Link>
+    </header>
+    {error && <div className="rounded-xl border border-red-200 bg-red-50 text-red-700 px-5 py-4">{error}</div>}
+    {products.length === 0 ? <section className="panel py-16 text-center"><Box size={28} className="mx-auto text-[var(--muted)]"/><p className="text-sm text-[var(--muted)] mt-3">还没有商品</p><Link to="/ecommerce-products/new" className="btn-primary mt-4 inline-flex"><Plus size={14}/>创建第一个商品</Link></section> :
+      <section className="panel overflow-hidden"><div className="panel-header flex justify-between"><h2 className="font-medium">全部商品</h2><span className="text-xs text-[var(--muted)]">共 {products.length} 个</span></div><div className="divide-y divide-[var(--border)]">{products.map((product) => {
+        const score = completeness(product); const cover = product.image_urls[0] || product.detail_image_urls[0];
+        return <Link key={product.id} to={`/ecommerce-products/${product.id}`} className="grid sm:grid-cols-[64px_1fr_180px_120px_24px] gap-4 items-center px-5 py-4 hover:bg-[var(--bg-elevated)] transition-colors">
+          {cover ? <img src={mediaUrl(cover)} alt="" className="w-16 h-16 rounded-lg object-cover border border-[var(--border)]"/> : <div className="w-16 h-16 rounded-lg bg-[var(--bg-elevated)] grid place-items-center text-[var(--muted)]"><ImageIcon size={20}/></div>}
+          <div className="min-w-0"><div className="font-medium truncate">{product.name}</div><div className="text-xs text-[var(--muted)] mt-1">{product.brand_name || '未填写品牌'} · {product.category || '未分类'} · ¥{product.price}</div></div>
+          <div><div className="flex justify-between text-[11px] text-[var(--muted)] mb-1"><span>资料完整度</span><span>{score}%</span></div><div className="h-1.5 rounded-full bg-[#e8e5de] overflow-hidden"><div className="h-full bg-[var(--accent)]" style={{width:`${score}%`}}/></div></div>
+          <div className="text-xs text-[var(--muted)] sm:text-right">{new Date(product.updated_at).toLocaleDateString()} 更新</div><ArrowRight size={15} className="text-[var(--muted)]"/>
+        </Link>;
+      })}</div></section>}
   </div>;
 }

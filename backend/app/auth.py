@@ -81,10 +81,11 @@ def current_auth(request: Request, credentials: Optional[HTTPAuthorizationCreden
     if member.role != "owner":
         path = request.url.path
         route_permissions = (
-            ("/api/material-library", "material_library.access"),
             ("/api/director-projects/shooting-tasks", "shooting_tasks.access"),
             ("/api/video-repair", "video_repair.access"),
-            ("/api/dashboard", "dashboard.view"), ("/api/products", "products.access"),
+            ("/api/dashboard", "dashboard.view"), ("/api/ecommerce-products", "ecommerce_products.access"),
+            ("/api/ecommerce-video-assets", "ecommerce_assets.access"), ("/api/ecommerce-video-taxonomy", "ecommerce_assets.access"),
+            ("/api/products", "products.access"),
             ("/api/knowledge", "knowledge.access"), ("/api/brand-visuals", "brand_visuals.access"),
             ("/api/design-skills", "design_skills.access"), ("/api/creative-projects", "creative_projects.access"),
             ("/api/detail-page-templates", "creative_projects.access"), ("/api/video-assets", "finished_assets.access"),

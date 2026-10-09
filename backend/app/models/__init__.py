@@ -11,58 +11,6 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.database import Base
 
 
-class MaterialLibraryProduct(Base):
-    __tablename__ = "material_library_products"
-
-    id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    tenant_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
-    image_url: Mapped[str] = mapped_column(String(1024), nullable=False)
-    introduction: Mapped[str] = mapped_column(Text, nullable=False)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
-    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
-
-
-class MaterialLibraryAsset(Base):
-    __tablename__ = "material_library_assets"
-    __table_args__ = (Index("ix_material_library_assets_tenant_product", "tenant_id", "product_id"),)
-
-    id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    tenant_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
-    product_id: Mapped[int] = mapped_column(ForeignKey("material_library_products.id"), nullable=False, index=True)
-    kind: Mapped[str] = mapped_column(String(16), nullable=False)
-    filename: Mapped[str] = mapped_column(String(512), nullable=False)
-    object_url: Mapped[str] = mapped_column(String(1024), nullable=False)
-    storage_provider: Mapped[str] = mapped_column(String(32), nullable=False)
-    size_bytes: Mapped[int] = mapped_column(Integer, nullable=False)
-    content_hash: Mapped[str] = mapped_column(String(64), nullable=False)
-    created_by: Mapped[str] = mapped_column(String(64), nullable=False)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
-    removed_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
-
-
-class MaterialLibraryRepairProductLink(Base):
-    __tablename__ = "material_library_repair_product_links"
-    __table_args__ = (
-        UniqueConstraint("tenant_id", "library_product_id", name="uq_material_library_repair_product"),
-        UniqueConstraint("tenant_id", "repair_product_id", name="uq_material_library_repair_legacy_product"),
-    )
-
-    id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    tenant_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
-    library_product_id: Mapped[int] = mapped_column(ForeignKey("material_library_products.id"), nullable=False)
-    repair_product_id: Mapped[int] = mapped_column(ForeignKey("products.id"), nullable=False)
-
-
-class MaterialLibraryRepairAssetLink(Base):
-    __tablename__ = "material_library_repair_asset_links"
-    __table_args__ = (UniqueConstraint("tenant_id", "library_asset_id", name="uq_material_library_repair_asset"),)
-
-    id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    tenant_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
-    library_asset_id: Mapped[int] = mapped_column(ForeignKey("material_library_assets.id"), nullable=False)
-    video_asset_id: Mapped[int] = mapped_column(ForeignKey("video_assets.id"), nullable=False)
-
-
 class Product(Base):
     __tablename__ = "products"
 
@@ -90,6 +38,33 @@ class Product(Base):
     )
     assets: Mapped[list["ProductAsset"]] = relationship(
         "ProductAsset", back_populates="product", cascade="all, delete-orphan"
+    )
+
+
+class EcommerceProduct(Base):
+    __tablename__ = "ecommerce_products"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    tenant_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    name: Mapped[str] = mapped_column(String(256), nullable=False)
+    category: Mapped[str] = mapped_column(String(128), nullable=False, default="")
+    price: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
+    description: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    target_users: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    brand_name: Mapped[str] = mapped_column(String(256), nullable=False, default="")
+    ingredients: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    usage_method: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    specifications: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    learned_profile_enabled: Mapped[bool] = mapped_column(nullable=False, default=True)
+    image_urls: Mapped[Optional[list]] = mapped_column(JSON, nullable=True, default=list)
+    detail_image_urls: Mapped[Optional[list]] = mapped_column(JSON, nullable=True, default=list)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    assets: Mapped[list["EcommerceProductAsset"]] = relationship(
+        "EcommerceProductAsset", back_populates="product", cascade="all, delete-orphan"
+    )
+    facts: Mapped[list["EcommerceProductFact"]] = relationship(
+        "EcommerceProductFact", back_populates="product", cascade="all, delete-orphan"
     )
 
 
@@ -865,6 +840,50 @@ class ProductAsset(Base):
     product: Mapped[Optional["Product"]] = relationship("Product", back_populates="assets")
 
 
+class EcommerceProductAsset(Base):
+    __tablename__ = "ecommerce_product_assets"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    tenant_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    product_id: Mapped[int] = mapped_column(ForeignKey("ecommerce_products.id"), nullable=False, index=True)
+    name: Mapped[str] = mapped_column(String(256), nullable=False)
+    asset_type: Mapped[str] = mapped_column(String(64), nullable=False, default="product_image")
+    file_url: Mapped[str] = mapped_column(String(1024), nullable=False)
+    mime_type: Mapped[str] = mapped_column(String(128), nullable=False, default="")
+    description: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    tags: Mapped[Optional[list]] = mapped_column(JSON, nullable=True, default=list)
+    material_role: Mapped[str] = mapped_column(String(64), nullable=False, default="auto")
+    priority: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    locked: Mapped[bool] = mapped_column(nullable=False, default=False)
+    excluded: Mapped[bool] = mapped_column(nullable=False, default=False)
+    benchmark_role: Mapped[str] = mapped_column(String(64), nullable=False, default="none")
+    protection: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    product: Mapped["EcommerceProduct"] = relationship("EcommerceProduct", back_populates="assets")
+
+
+class EcommerceProductFact(Base):
+    __tablename__ = "ecommerce_product_facts"
+    __table_args__ = (UniqueConstraint("tenant_id", "product_id", "fact_key", name="uq_ecommerce_product_fact_key"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    tenant_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    product_id: Mapped[int] = mapped_column(ForeignKey("ecommerce_products.id", ondelete="CASCADE"), nullable=False, index=True)
+    fact_key: Mapped[str] = mapped_column(String(128), nullable=False)
+    label: Mapped[str] = mapped_column(String(256), nullable=False)
+    value: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    source_type: Mapped[str] = mapped_column(String(64), nullable=False, default="manual")
+    source_ref: Mapped[str] = mapped_column(String(1024), nullable=False, default="")
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="pending")
+    confidence: Mapped[float] = mapped_column(Float, nullable=False, default=1.0)
+    conflict_values: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
+    confirmed_by: Mapped[str] = mapped_column(String(64), nullable=False, default="")
+    confirmed_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    product: Mapped["EcommerceProduct"] = relationship("EcommerceProduct", back_populates="facts")
+
+
 class AuditLog(Base):
     __tablename__ = "audit_logs"
 
@@ -1590,3 +1609,193 @@ class QianchuanCapabilityProbe(Base):
     response_summary: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
     probed_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.utcnow)
     expires_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+
+
+# Ecommerce video library: independent business tables; no foreign key to the original product or video library.
+class EcommerceVideoAsset(Base):
+    __tablename__ = "ecommerce_video_assets"
+    __table_args__ = (UniqueConstraint("tenant_id", "asset_id", name="ecommerce_uq_tenant_video_asset"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    tenant_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    product_id: Mapped[int] = mapped_column(ForeignKey("ecommerce_products.id"), nullable=False, index=True)
+    category_id: Mapped[Optional[int]] = mapped_column(ForeignKey("ecommerce_video_categories.id"), nullable=True, index=True)
+    asset_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    filename: Mapped[str] = mapped_column(String(512), nullable=False)
+    source: Mapped[str] = mapped_column(String(256), nullable=False, default="manual_upload")
+    library_type: Mapped[str] = mapped_column(String(32), nullable=False, default="finished", index=True)
+    asset_kind: Mapped[str] = mapped_column(String(32), nullable=False, default="material", index=True)
+    reusable_status: Mapped[str] = mapped_column(String(32), nullable=False, default="review_required")
+    burned_subtitles: Mapped[bool] = mapped_column(nullable=False, default=False)
+    has_background_music: Mapped[bool] = mapped_column(nullable=False, default=False)
+    object_url: Mapped[str] = mapped_column(String(1024), nullable=False)
+    storage_provider: Mapped[str] = mapped_column(String(32), nullable=False, default="aliyun_oss")
+    content_hash: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    duration_seconds: Mapped[float] = mapped_column(Float, nullable=False, default=0)
+    width: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    height: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    fps: Mapped[float] = mapped_column(Float, nullable=False, default=0)
+    has_audio: Mapped[bool] = mapped_column(nullable=False, default=False)
+    ai_tags: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
+    manual_tags: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
+    removed_ai_tags: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
+    excluded: Mapped[bool] = mapped_column(nullable=False, default=False)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="uploaded")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+class EcommerceVideoCategory(Base):
+    __tablename__ = "ecommerce_video_categories"
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "object_type", "code", name="ecommerce_uq_video_category_code"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    tenant_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    object_type: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+    parent_id: Mapped[Optional[int]] = mapped_column(ForeignKey("ecommerce_video_categories.id"), nullable=True, index=True)
+    name: Mapped[str] = mapped_column(String(128), nullable=False)
+    code: Mapped[str] = mapped_column(String(128), nullable=False)
+    sort_order: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="active", index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+class EcommerceVideoTagGroup(Base):
+    __tablename__ = "ecommerce_video_tag_groups"
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "code", name="ecommerce_uq_video_tag_group_code"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    tenant_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    name: Mapped[str] = mapped_column(String(128), nullable=False)
+    code: Mapped[str] = mapped_column(String(128), nullable=False)
+    applies_to: Mapped[str] = mapped_column(String(32), nullable=False, default="both", index=True)
+    inherit_to_final: Mapped[bool] = mapped_column(nullable=False, default=True)
+    sort_order: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="active", index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+class EcommerceVideoTag(Base):
+    __tablename__ = "ecommerce_video_tags"
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "scope", "owner_id", "code", name="ecommerce_uq_video_tag_owner_code"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    tenant_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    group_id: Mapped[Optional[int]] = mapped_column(ForeignKey("ecommerce_video_tag_groups.id"), nullable=True, index=True)
+    name: Mapped[str] = mapped_column(String(128), nullable=False)
+    code: Mapped[str] = mapped_column(String(128), nullable=False)
+    scope: Mapped[str] = mapped_column(String(32), nullable=False, default="public", index=True)
+    owner_id: Mapped[str] = mapped_column(String(64), nullable=False, default="", index=True)
+    applies_to: Mapped[str] = mapped_column(String(32), nullable=False, default="both", index=True)
+    sort_order: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="active", index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+class EcommerceVideoAssetTag(Base):
+    __tablename__ = "ecommerce_video_asset_tags"
+    __table_args__ = (
+        UniqueConstraint("asset_id", "tag_id", name="ecommerce_uq_video_asset_tag"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    tenant_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    asset_id: Mapped[int] = mapped_column(ForeignKey("ecommerce_video_assets.id"), nullable=False, index=True)
+    tag_id: Mapped[int] = mapped_column(ForeignKey("ecommerce_video_tags.id"), nullable=False, index=True)
+    source: Mapped[str] = mapped_column(String(32), nullable=False, default="manual")
+    confidence: Mapped[float] = mapped_column(Float, nullable=False, default=1.0)
+    confirmed: Mapped[bool] = mapped_column(nullable=False, default=True)
+    created_by: Mapped[str] = mapped_column(String(64), nullable=False, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+class EcommerceVideoFilterPreset(Base):
+    __tablename__ = "ecommerce_video_filter_presets"
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "owner_id", "object_type", "name", name="ecommerce_uq_video_filter_preset_name"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    tenant_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    owner_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    object_type: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+    name: Mapped[str] = mapped_column(String(128), nullable=False)
+    filters: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+class EcommerceVideoTaxonomyState(Base):
+    __tablename__ = "ecommerce_video_taxonomy_states"
+
+    tenant_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    initialized_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+class EcommerceVideoAssetAnalysis(Base):
+    __tablename__ = "ecommerce_video_asset_analyses"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    tenant_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    asset_id: Mapped[int] = mapped_column(ForeignKey("ecommerce_video_assets.id"), nullable=False, index=True)
+    schema_version: Mapped[str] = mapped_column(String(16), nullable=False, default="1.0")
+    model: Mapped[str] = mapped_column(String(128), nullable=False, default="placeholder")
+    prompt_version: Mapped[str] = mapped_column(String(64), nullable=False, default="placeholder-v1")
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="completed")
+    summary: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    analysis_json: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    input_video_seconds: Mapped[float] = mapped_column(Float, nullable=False, default=0)
+    request_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    retry_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    error_message: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    completed_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+
+class EcommerceVideoUploadSession(Base):
+    __tablename__ = "ecommerce_video_upload_sessions"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    tenant_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    product_id: Mapped[int] = mapped_column(ForeignKey("ecommerce_products.id"), nullable=False, index=True)
+    video_asset_id: Mapped[Optional[int]] = mapped_column(ForeignKey("ecommerce_video_assets.id"), nullable=True, index=True)
+    library_type: Mapped[str] = mapped_column(String(32), nullable=False, default="finished")
+    asset_kind: Mapped[str] = mapped_column(String(32), nullable=False, default="material")
+    filename: Mapped[str] = mapped_column(String(512), nullable=False)
+    content_type: Mapped[str] = mapped_column(String(128), nullable=False, default="application/octet-stream")
+    size_bytes: Mapped[int] = mapped_column(Integer, nullable=False)
+    object_key: Mapped[str] = mapped_column(String(1024), nullable=False, unique=True)
+    storage_provider: Mapped[str] = mapped_column(String(32), nullable=False, default="aliyun_oss")
+    multipart_upload_id: Mapped[str] = mapped_column(String(256), nullable=False)
+    part_size: Mapped[int] = mapped_column(Integer, nullable=False)
+    part_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="uploading")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    completed_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+
+class EcommerceVideoHighlight(Base):
+    __tablename__ = "ecommerce_video_highlights"
+    __table_args__ = (UniqueConstraint("tenant_id", "highlight_id", name="ecommerce_uq_tenant_video_highlight"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    tenant_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    asset_id: Mapped[int] = mapped_column(ForeignKey("ecommerce_video_assets.id"), nullable=False, index=True)
+    analysis_id: Mapped[int] = mapped_column(ForeignKey("ecommerce_video_asset_analyses.id"), nullable=False, index=True)
+    highlight_id: Mapped[str] = mapped_column(String(96), nullable=False, index=True)
+    start_seconds: Mapped[float] = mapped_column(Float, nullable=False)
+    end_seconds: Mapped[float] = mapped_column(Float, nullable=False)
+    description: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    reason: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    recommended_roles: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
+    content_role: Mapped[str] = mapped_column(String(64), nullable=False, default="core_content")
+    track_role: Mapped[str] = mapped_column(String(16), nullable=False, default="b_roll")
+    speech_present: Mapped[bool] = mapped_column(nullable=False, default=False)
+    lip_visible: Mapped[bool] = mapped_column(nullable=False, default=False)
+    speech_text: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    speaker_id: Mapped[str] = mapped_column(String(96), nullable=False, default="")
+    audio_strategy: Mapped[str] = mapped_column(String(32), nullable=False, default="mute")
+    shot_type: Mapped[str] = mapped_column(String(64), nullable=False, default="unknown")
+    selling_points: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
+    score: Mapped[float] = mapped_column(Float, nullable=False, default=0.5)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)

@@ -4,7 +4,7 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
-from app.models import MaterialLibraryAsset, Product, ProductAsset, ProductFact, VideoAsset, VideoAssetAnalysis
+from app.models import Product, ProductAsset, ProductFact, VideoAsset, VideoAssetAnalysis
 from app.services.video_repair.analysis_normalization import normalize_analysis
 from app.services.video_repair.capabilities import REPAIR_CAPABILITIES
 from app.services.video_repair.time_extraction import prioritized_time_ranges
@@ -60,9 +60,6 @@ def build_ai_context(db: Session, *, repair_input: Any, source_asset: VideoAsset
         status="confirmed").all()
     product = db.query(Product).filter_by(
         tenant_id=source_asset.tenant_id, id=source_asset.product_id).first()
-    from app.services.material_library_repair import library_product_for_repair
-    library_product = library_product_for_repair(
-        db, tenant_id=source_asset.tenant_id, repair_product_id=source_asset.product_id)
     reference_assets = []
     if product:
         reference_assets = db.query(ProductAsset).filter(
@@ -84,15 +81,6 @@ def build_ai_context(db: Session, *, repair_input: Any, source_asset: VideoAsset
             "description": "商品管理主图",
             "url": url,
         } for url in (product.image_urls or [])[:2]]
-    if library_product:
-        library_images = db.query(MaterialLibraryAsset).filter_by(
-            tenant_id=source_asset.tenant_id, product_id=library_product.id,
-            kind="image", removed_at=None).order_by(MaterialLibraryAsset.id.desc()).limit(2).all()
-        reference_images = [{"asset_id": None, "role": "product_image",
-                             "description": "素材库商品图片", "url": library_product.image_url}]
-        reference_images.extend({"asset_id": row.id, "role": "library_image",
-                                 "description": row.filename, "url": row.object_url}
-                                for row in library_images)
     return {
         "review": {
             "raw_reason": repair_input.raw_reason,
@@ -114,13 +102,11 @@ def build_ai_context(db: Session, *, repair_input: Any, source_asset: VideoAsset
         "observations": _observations(analysis, max_keyframes),
         "product": {
             "product_id": source_asset.product_id,
-            "name": library_product.introduction[:100] if library_product else (product.name if product else ""),
+            "name": product.name if product else "",
             "brand_name": product.brand_name if product else "",
-            "category": "" if library_product else (product.category if product else ""),
-            "known_facts": ([{"key": "introduction", "label": "产品介绍",
-                              "value": library_product.introduction}] if library_product else
-                            [{"key": row.fact_key, "label": row.label, "value": row.value}
-                             for row in facts]),
+            "category": product.category if product else "",
+            "known_facts": [{"key": row.fact_key, "label": row.label, "value": row.value}
+                            for row in facts],
             "reference_images": reference_images,
         },
         "capabilities": list(capabilities) if capabilities is not None else list(REPAIR_CAPABILITIES),
