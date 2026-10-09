@@ -57,7 +57,7 @@ export default function FinalVideoDetail(){
     <div className="lineage-ui lineage-detail">
       <VideoDetailHeading title={product?.name||'成片详情'} asset={video} fallback="/final-videos" backLabel="返回成片库" sourceCount={summary?.source_count}/>
       <div className="flex flex-wrap items-center justify-end gap-3 pb-4">
-        <div className="flex gap-2"><a className="btn-secondary" href={mediaUrl(video.object_url)} download><Download size={15}/>下载视频</a><button className="primary inline-flex items-center gap-2" onClick={()=>setPushNotice(true)}><Send size={15}/>推送到千川</button></div>
+        <div className="flex flex-wrap gap-2"><Link className="btn-secondary" to={`/video-refinements?source_asset_id=${video.id}`}>在精修工作台打开</Link><a className="btn-secondary" href={mediaUrl(video.object_url)} download><Download size={15}/>下载视频</a><button className="primary inline-flex items-center gap-2" onClick={()=>setPushNotice(true)}><Send size={15}/>推送到千川</button></div>
       </div>
       <VideoDetailOverview key={video.id} asset={video} productName={product?.name||'未命名商品'} preview={preview} onEdit={()=>setEditingTaxonomy(true)} referenceCount={summary?.reference_count}/>
       <VideoLineage key={video.id} asset={video} onLocate={preview.locate} onSummary={setSummary} analytics={<QianchuanAnalysis uploads={uploads} error={uploadError} reload={()=>setUploadRevision(value=>value+1)} onManage={()=>setPushNotice(true)}/>}/>

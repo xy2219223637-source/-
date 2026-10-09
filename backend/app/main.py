@@ -6,12 +6,13 @@ from datetime import datetime, timedelta
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api import admin, auth, auto_edit, brands, creative, dashboard, director, knowledge, products, quality, skills, templates, operations, production, storage, video_library, video_taxonomy, videos
+from app.api import admin, auth, auto_edit, brands, creative, dashboard, director, knowledge, products, quality, skills, templates, operations, production, storage, video_library, video_taxonomy, video_refinement, videos
 from app.config import get_settings
 from app.database import SessionLocal, engine, init_db
 from app.models import AuditLog, CreativeBatchJob, CreativeGeneration
 from app.services.production_queue import start_worker, stop_worker
 from app.services.video_analysis_queue import start_video_analysis_worker, stop_video_analysis_worker
+from app.services.refinement_queue import start_refinement_worker, stop_refinement_worker
 from app.services.redis_client import get_redis
 from app.services.feishu_logging import RequestTraceMiddleware, trace_fields
 from app.api import qianchuan
@@ -76,6 +77,7 @@ app.include_router(director.router, prefix="/api")
 app.include_router(auto_edit.router, prefix="/api")
 app.include_router(qianchuan.router, prefix="/api")
 app.include_router(video_library.router, prefix="/api")
+app.include_router(video_refinement.router, prefix="/api")
 app.include_router(video_taxonomy.router, prefix="/api")
 app.include_router(video_lineage.router, prefix="/api")
 
@@ -110,12 +112,14 @@ def on_startup() -> None:
         db.close()
     start_worker()
     start_video_analysis_worker()
+    start_refinement_worker()
     start_qianchuan_worker()
 
 @app.on_event("shutdown")
 def on_shutdown() -> None:
     stop_worker()
     stop_video_analysis_worker()
+    stop_refinement_worker()
     stop_qianchuan_worker()
 
 

@@ -168,6 +168,12 @@ class AliyunOSSProvider:
         self.bucket.put_object_from_file(key, str(path), headers=headers)
         return OBJECT_ROUTE + _token(key)
 
+    def object_etag(self, url: str) -> str:
+        key = object_key(url)
+        if not key:
+            raise ValueError("不是 OSS 对象地址")
+        return str(self.bucket.head_object(key).etag).strip('"')
+
     def local_path(self, url: str) -> Optional[Path]:
         key = object_key(url)
         if not key:
@@ -325,6 +331,12 @@ class PrivateS3Provider:
                                 ExtraArgs={"ContentType": content_type})
         return _provider_object_url(self.name, key)
 
+    def object_etag(self, url: str) -> str:
+        provider, key = object_ref(url)
+        if provider != self.name or not key:
+            raise ValueError("不是私有 S3 对象地址")
+        return str(self.client.head_object(Bucket=self.bucket_name, Key=key)["ETag"]).strip('"')
+
     def local_path(self, url: str) -> Optional[Path]:
         provider, key = object_ref(url)
         if provider != self.name or not key:
@@ -415,6 +427,9 @@ class StorageService:
 
     def save_bytes(self, data: bytes, filename: str, subdir: str) -> str:
         return self.provider.save_bytes(data, filename, subdir)
+
+    def object_etag(self, url: str) -> str:
+        return self.provider.object_etag(url)
 
     def local_path(self, url: str) -> Optional[Path]:
         return self.provider.local_path(url)
