@@ -65,9 +65,12 @@ class VideoWorkflowTests(unittest.TestCase):
                                library_type="finished", reusable_status="reusable", generation_depth=2)
         review = SimpleNamespace(tenant_id="t1", product_id=1, status="analyzed", excluded=False, asset_kind="material",
                                  library_type="finished", reusable_status="review_required", generation_depth=1)
+        unanalysed = SimpleNamespace(tenant_id="t1", product_id=1, status="analysis_failed", excluded=False, asset_kind="material",
+                                     library_type="finished", reusable_status="review_required", generation_depth=2)
         self.assertTrue(asset_eligible_for_project(semi, "t1", 1, "smart_compose"))
         self.assertFalse(asset_eligible_for_project(semi, "t1", 1, "manual_compose"))
         self.assertTrue(asset_eligible_for_project(finished, "t1", 1, "manual_compose"))
+        self.assertTrue(asset_eligible_for_project(unanalysed, "t1", 1, "manual_compose"))
         self.assertFalse(asset_eligible_for_project(finished, "t1", 1, "smart_compose"))
         self.assertTrue(asset_eligible_for_project(finished, "t1", 1, "finished_remix"))
         self.assertFalse(asset_eligible_for_project(semi, "t1", 1, "finished_remix"))
