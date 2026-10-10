@@ -9,6 +9,7 @@ from typing import Optional
 
 from sqlalchemy.orm import Session
 
+from app.config import get_settings
 from app.database import SessionLocal
 from app.models import VideoAsset, VideoAssetAnalysis
 from app.services.redis_client import (
@@ -124,6 +125,9 @@ def recover_interrupted_video_analyses(db: Session) -> int:
 
 def start_video_analysis_worker() -> None:
     global _thread
+    if not get_settings().video_analysis_worker_enabled:
+        logger.info("Video analysis worker disabled for this instance")
+        return
     db = SessionLocal()
     try:
         # An analyzing row cannot still have a live in-process task after restart.
