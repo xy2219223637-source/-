@@ -25,7 +25,7 @@ import type {
   ShootingTask,
 } from '../types';
 
-const api = axios.create({
+export const api = axios.create({
   baseURL: '/api',
   timeout: 120000,
 });
@@ -139,6 +139,121 @@ export interface QianchuanMaterialReport {
   per_second: {status: 'unavailable'; message: string};
 }
 
+export interface QianchuanPlanCapabilities {
+  enabled: boolean;
+  write_enabled: boolean;
+  worker_enabled: boolean;
+  binding_id: string | null;
+  credential_version: number | null;
+  can_create: boolean;
+  capabilities: {name: string; conclusion: string; probed_at: string; expires_at: string}[];
+}
+
+export interface QianchuanAwemeOption {
+  id: string;
+  name: string;
+  show_id: string;
+  avatar_url: string;
+  status: string;
+  has_live_permission: boolean | null;
+  has_video_permission: boolean | null;
+  has_publish_permission: boolean | null;
+  bind_types: string[];
+}
+
+export interface QianchuanAwemePage {
+  items: QianchuanAwemeOption[];
+  page: number;
+  page_size: number;
+  total_number: number;
+  total_page: number;
+}
+
+export interface QianchuanProductOption {
+  id: string;
+  name: string;
+  image_url: string;
+  category_name: string;
+  channel_type: string;
+}
+
+export interface QianchuanProductPage {
+  items: QianchuanProductOption[];
+  cursor: number | null;
+  has_more: boolean;
+  page_size: number;
+}
+
+export interface VideoRepairCandidate {
+  id:string; source_asset_id:number; source_asset_public_id:string; highlight_id:string;
+  source_range:{start:number;end:number}; duration_seconds:number; content_role:string;
+  description:string; object_url:string; has_audio:boolean; content_hash?:string; score?:number;
+  recommendation_level?:'RECOMMENDED'|'SELECTABLE_WITH_WARNING'|'BELOW_THRESHOLD';
+  semantic_mode?:string;reasons?:string[];warnings?:string[];
+  score_breakdown?:Record<string,number>;
+}
+
+export interface VideoRepairInput {
+  id:number;source_kind:'MANUAL'|'INTERNAL_REVIEW'|'QIANCHUAN_MOCK'|'QIANCHUAN_PLATFORM';
+  audit_platform:'INTERNAL'|'AD'|'CONTENT'|'UNKNOWN';raw_reason:string;suggestions:string[];
+  time_ranges:Array<{start:number;end:number}>;occurred_at:string;created_at:string;
+}
+
+export interface VideoRepairTask {
+  id:number;status:string;schema_version?:string;product_id?:number|null;draft_revision?:number;
+  ecommerce_output_asset_id?:number|null;
+  accepted_preview_id?:number|null;cancel_reason?:string;capabilities?:string[];tts_available?:boolean;previews?:VideoRepairPreview[];
+  input_id:number;input:VideoRepairInput;review_feedback_id:number|null;
+  source_asset_id:number;base_plan_version_id:number|null;
+  diagnosis:{normalized_category?:string;content_fixable?:boolean;affected_modalities?:string[];
+    issue_ranges?:Array<{start:number;end:number;precision:string;source:string;confidence:number;evidence:string}>;
+    recommended_action?:string;confidence_level?:string;evidence_sufficiency?:string;
+    reported_ranges?:Array<{start_ms:number;end_ms:number}>;suggested_ranges?:Array<{start_ms:number;end_ms:number}>;
+    explanation?:string;evidence?:string[];schema_version?:string;summary?:string;
+    primary_issue_id?:string|null;requires_human_range_confirmation?:boolean;overall_confidence?:number;
+    ai_proposal?:{action?:Record<string,any>|null;action_template?:Record<string,any>;summary?:string;requires_input?:string[];field_sources?:Record<string,string>;risks?:string[];recommended_material?:Record<string,any>|null;
+      placement?:{recommended_ms:number;alternatives:number[];confidence:number;confidence_level:'HIGH'|'MEDIUM'|'LOW';basis:string;evidence:string[]}};
+    material_candidates?:Array<Record<string,any>>;
+    issues?:Array<{issue_id:string;category:string;description:string;affected_modalities:string[];
+      ranges:Array<{start_ms:number;end_ms:number;precision:string;source:string;confidence:number}>;
+      evidence:Array<{source:string;start_ms?:number|null;end_ms?:number|null;description:string}>;
+      confidence:number;suggested_action:string}>;meta?:{mode?:string;model?:string|null;prompt_version?:string}};
+  repair_plan:{schema_version?:string;render_mode?:'PLAN'|'FLAT_VISUAL';primary_action?:string;actions?:Array<{action_id:string;type:string;
+    target_range:{start?:number;end?:number;start_ms?:number;end_ms?:number};affected_track?:string;
+    affected_tracks?:string[];duration_policy?:string;selected_candidate_id?:string|null;
+    recommended_candidate_id?:string|null;selection_override_reason?:string|null;
+    candidate_ids?:string[];candidates?:VideoRepairCandidate[];predicted_effects?:{
+      total_duration_delta_ms?:number;visual_changed?:boolean;audio_changed?:boolean;caption_changed?:boolean;
+    }}>;warnings?:string[];generated_by?:{diagnosis_mode?:string;model?:string|null;prompt_version?:string};
+    repair_context?:{schema_version:string;context_window:{pre:{start_ms:number;end_ms:number};target:{start_ms:number;end_ms:number};post:{start_ms:number;end_ms:number}};
+      narrative:{pre_summary:string;target_intent:string;target_summary?:string;post_summary:string;required_bridge?:string};
+      evidence?:Array<{source:string;confidence:number;description:string}>}};
+  selected_candidates:Record<string,string>; output_asset_id:number|null; output_plan_version_id:number|null;
+  source_asset:{id:number;asset_id:string;filename:string;object_url:string;duration_seconds:number;status:string};
+  output_asset:{id:number;asset_id:string;filename:string;object_url:string;duration_seconds:number;status:string}|null;
+  error_code:string;error_message:string;approved_at:string|null;started_at:string|null;completed_at:string|null;
+  created_at:string;updated_at:string;
+}
+
+export interface VideoRepairPreview {
+  id:number;task_id?:number;draft_revision:number;plan_hash:string;status:string;object_url:string;
+  content_hash:string;duration_seconds:number;width:number;height:number;error_code:string;
+  error_message:string;created_at:string;completed_at:string|null;
+}
+
+export interface VideoRepairMaterial {
+  id:number;asset_id:string;filename:string;object_url:string;content_hash:string;
+  duration_seconds:number;width:number;height:number;has_audio:boolean;asset_kind:string;
+  summary?:string;recommended_range?:{start:number;end:number};description?:string;content_role?:string;
+  score?:number|null;recommendation_level?:string;reasons?:string[];warnings?:string[];audio_mode?:string;analysis_status?:string;
+  ecommerce_has_analyzed_segments?:boolean;
+}
+
+export interface VideoRepairAttachment {
+  id:number;kind:string;source:string;filename?:string;object_url:string;content_hash:string;
+  duration_ms?:number;status:string;
+}
+
 const pendingReports = new Map<string, Promise<QianchuanMaterialReport>>();
 function loadQianchuanReport(id: string, days: number) {
   const key = JSON.stringify([localStorage.getItem('access_token'), id, days]);
@@ -164,6 +279,38 @@ export const qianchuanApi = {
   uploads: (video_asset_id: number) => api.get<QianchuanUpload[]>('/qianchuan/uploads', {params: {video_asset_id}}).then(r => r.data),
   retryUpload: (id: string) => api.post<QianchuanUpload>(`/qianchuan/uploads/${encodeURIComponent(id)}/retry`).then(r => r.data),
   report: loadQianchuanReport,
+  planCapabilities: (binding_id?: string) => api.get<QianchuanPlanCapabilities>(
+    '/qianchuan/plan-capabilities', {params: binding_id ? {binding_id} : {}}).then(r => r.data),
+  awemes: (bindingId: string, params: {keyword?: string; page?: number; page_size?: number} = {}) =>
+    api.get<QianchuanAwemePage>(`/qianchuan/accounts/${encodeURIComponent(bindingId)}/awemes`, {params}).then(r => r.data),
+  products: (bindingId: string, params: {aweme_id?: string; keyword?: string; cursor?: number; page_size?: number} = {}) =>
+    api.get<QianchuanProductPage>(`/qianchuan/accounts/${encodeURIComponent(bindingId)}/products`, {params}).then(r => r.data),
+};
+
+export const videoRepairApi = {
+  uploadSource: (ecommerceProductId:number,file:File) => {const form=new FormData();form.append('ecommerce_product_id',String(ecommerceProductId));form.append('file',file);return api.post<{id:number;filename:string;duration_seconds:number;product_id:number}>('/video-repair-assets/upload',form,{timeout:900000}).then(r=>r.data)},
+  create: (data:{source_asset_id:number;ecommerce_product_id:number;input:{raw_reason:string;suggestions:string[]}}) =>
+    api.post<VideoRepairTask>('/video-repair-tasks',data).then(r=>r.data),
+  uploadMaterial: (taskId:number,file:File) => {const form=new FormData();form.append('file',file);return api.post<{id:number;filename:string;duration_seconds:number}>(`/video-repair-tasks/${taskId}/materials/upload`,form,{timeout:900000}).then(r=>r.data)},
+  list: (params:{status?:string;source_asset_id?:number;page?:number;page_size?:number}={}) =>
+    api.get<{items:VideoRepairTask[];page:number;page_size:number;total:number}>('/video-repair-tasks',{params}).then(r=>r.data),
+  get: (taskId:number) => api.get<VideoRepairTask>(`/video-repair-tasks/${taskId}`).then(r=>r.data),
+  materials: (taskId:number) => api.get<VideoRepairMaterial[]>(
+    `/video-repair-tasks/${taskId}/materials`,{timeout:900000}).then(r=>r.data),
+  updateV4Draft: (taskId:number,draftRevision:number,action:Record<string,unknown>,overrideReason='') => api.patch<VideoRepairTask>(
+    `/video-repair-tasks/${taskId}/draft`,{draft_revision:draftRevision,action,override_reason:overrideReason}).then(r=>r.data),
+  uploadAttachment: (taskId:number,file:File) => {const data=new FormData();data.append('file',file);return api.post<VideoRepairAttachment>(
+    `/video-repair-tasks/${taskId}/attachments`,data,{headers:{'Content-Type':'multipart/form-data'}}).then(r=>r.data)},
+  createTts: (taskId:number,text:string,voice='') => api.post<VideoRepairAttachment>(
+    `/video-repair-tasks/${taskId}/tts`,{text,voice},{timeout:180000}).then(r=>r.data),
+  createPreview: (taskId:number) => api.post<VideoRepairPreview>(
+    `/video-repair-tasks/${taskId}/previews`).then(r=>r.data),
+  acceptPreview: (taskId:number,previewId:number,draftRevision:number) => api.post<VideoRepairTask>(
+    `/video-repair-tasks/${taskId}/previews/${previewId}/accept`,{draft_revision:draftRevision}).then(r=>r.data),
+  retryPreview: (taskId:number,previewId:number) => api.post<VideoRepairPreview>(
+    `/video-repair-tasks/${taskId}/previews/${previewId}/retry`).then(r=>r.data),
+  retryAnalysis: (taskId:number) => api.post<VideoRepairTask>(
+    `/video-repair-tasks/${taskId}/retry-analysis`).then(r=>r.data),
 };
 
 export function mediaUrl(path: string): string {
@@ -240,6 +387,57 @@ export const productApi = {
   uploadMask:async(productId:number,assetId:number,file:File)=>{const form=new FormData();form.append('file',file);return api.post<ProductAsset>(`/products/${productId}/assets/${assetId}/mask`,form).then(r=>r.data)},
 };
 
+export const ecommerceProductApi = {
+  list: () => api.get<Product[]>('/ecommerce-products').then((r) => r.data),
+  readiness: (id: number) => api.get(`/ecommerce-products/${id}/readiness`).then((r) => r.data),
+  imageAdmission: (id: number) => api.get(`/ecommerce-products/${id}/image-admission`).then((r) => r.data),
+  facts: (id: number) => api.get(`/ecommerce-products/${id}/facts`).then((r) => r.data),
+  saveFact: (id: number, data: {fact_key: string; label: string; value: string; source_type?: string; source_ref?: string}) =>
+    api.put(`/ecommerce-products/${id}/facts`, data).then((r) => r.data),
+  confirmFact: (id: number, factId: number, value?: string) =>
+    api.post(`/ecommerce-products/${id}/facts/${factId}/confirm`, undefined, {params: value !== undefined ? {value} : undefined}).then((r) => r.data),
+  get: (id: number) => api.get<Product>(`/ecommerce-products/${id}`).then((r) => r.data),
+  create: (data: ProductCreate) => api.post<Product>('/ecommerce-products', data).then((r) => { return r.data; }),
+  update: (id: number, data: Partial<ProductCreate>) =>
+    api.put<Product>(`/ecommerce-products/${id}`, data).then((r) => { return r.data; }),
+  remove: (id: number) => api.delete(`/ecommerce-products/${id}`).then((r) => { return r.data; }),
+  uploadImage: async (file: File) => {
+    const form = new FormData();
+    form.append('file', file);
+    const { data } = await api.post<{ url: string }>('/ecommerce-products/upload-image', form);
+    return data.url;
+  },
+  uploadProductImages: async (productId: number, files: File[], imageType: 'product' | 'detail') => {
+    const form = new FormData();
+    form.append('image_type', imageType);
+    files.forEach((f) => form.append('files', f));
+    const { data } = await api.post<Product>(`/ecommerce-products/${productId}/images`, form);
+    return data;
+  },
+  listAssets: (productId: number) =>
+    api.get<ProductAsset[]>(`/ecommerce-products/${productId}/assets`).then((r) => r.data),
+  uploadAssets: async (
+    productId: number,
+    files: File[],
+    meta: { asset_type: string; description?: string; tags?: string },
+  ) => {
+    const form = new FormData();
+    form.append('asset_type', meta.asset_type);
+    form.append('description', meta.description || '');
+    form.append('tags', meta.tags || '');
+    files.forEach((file) => form.append('files', file));
+    const { data } = await api.post<ProductAsset[]>(`/ecommerce-products/${productId}/assets`, form);
+    return data;
+  },
+  removeAsset: (productId: number, assetId: number) =>
+    api.delete(`/ecommerce-products/${productId}/assets/${assetId}`).then((r) => r.data),
+  updateAsset: (productId: number, assetId: number, data: Pick<ProductAsset, 'description' | 'tags' | 'material_role' | 'priority' | 'locked' | 'excluded' | 'benchmark_role' | 'protection'>) =>
+    api.put<ProductAsset>(`/ecommerce-products/${productId}/assets/${assetId}`, data).then((r) => r.data),
+  autoMask:(productId:number,assetId:number)=>api.post<ProductAsset>(`/ecommerce-products/${productId}/assets/${assetId}/auto-mask`).then(r=>r.data),
+  analyzeProtection:(productId:number,assetId:number)=>api.post<ProductAsset>(`/ecommerce-products/${productId}/assets/${assetId}/analyze-protection`,undefined,{timeout:180000}).then(r=>r.data),
+  uploadMask:async(productId:number,assetId:number,file:File)=>{const form=new FormData();form.append('file',file);return api.post<ProductAsset>(`/ecommerce-products/${productId}/assets/${assetId}/mask`,form).then(r=>r.data)},
+};
+
 export const videoApi = {
   list: () => api.get<import('../types').VideoProject[]>('/video-projects').then(r => r.data),
   get: (id: number) => api.get<import('../types').VideoProject>(`/video-projects/${id}`).then(r => r.data),
@@ -311,6 +509,55 @@ export const videoTaxonomyApi = {
   createPreset: (data:{object_type:import('../types').VideoObjectType;name:string;filters:Record<string,unknown>}) => api.post<import('../types').VideoFilterPreset>('/video-taxonomy/presets',data).then(r=>r.data),
   updatePreset: (id:number,data:{name?:string;filters?:Record<string,unknown>}) => api.put<import('../types').VideoFilterPreset>(`/video-taxonomy/presets/${id}`,data).then(r=>r.data),
   deletePreset: (id:number) => api.delete(`/video-taxonomy/presets/${id}`).then(r=>r.data),
+};
+
+export const ecommerceVideoLibraryApi = {
+  list: (productId?:number,libraryType?:'finished',assetKind:'material'|'final_output'='material') => api.get<import('../types').VideoLibraryAsset[]>('/ecommerce-video-assets',{params:{...(productId?{product_id:productId}:{}),...(libraryType?{library_type:libraryType}:{}),asset_kind:assetKind}}).then(r=>r.data),
+  get: (id:number) => api.get<import('../types').VideoLibraryAsset>(`/ecommerce-video-assets/${id}`).then(r=>r.data),
+  upload: async (productId:number,files:File[],source='manual_upload',onProgress?:(loaded:number,total:number,percent:number)=>void,libraryType:'finished'='finished',assetKind:'material'|'final_output'='material') => {
+    const total=files.reduce((sum,file)=>sum+file.size,0);let completedBytes=0;const results:import('../types').VideoLibraryAsset[]=[];
+    for(const file of files){
+      const form=new FormData();
+      form.append('product_id',String(productId));form.append('source',source);
+      form.append('library_type',libraryType);form.append('asset_kind',assetKind);
+      form.append('files',file);
+      const uploaded=await api.post<import('../types').VideoLibraryAsset[]>('/ecommerce-video-assets',form,{
+        timeout:600000,
+        onUploadProgress:event=>{
+          const loaded=completedBytes+Math.min(event.loaded,file.size);
+          onProgress?.(loaded,total,total?Math.min(99,Math.round(loaded/total*100)):0);
+        },
+      }).then(r=>r.data);
+      completedBytes+=file.size;onProgress?.(completedBytes,total,total?Math.round(completedBytes/total*100):0);
+      results.push(...uploaded);
+    }
+    return results;
+  },
+  exclude: (id:number,excluded:boolean) => api.put<import('../types').VideoLibraryAsset>(`/ecommerce-video-assets/${id}/excluded`,{excluded}).then(r=>r.data),
+  updateReusableStatus: (id:number,reusable_status:import('../types').VideoReusableStatus) =>
+    api.put<import('../types').VideoLibraryAsset>(`/ecommerce-video-assets/${id}/reusable-status`,{reusable_status}).then(r=>r.data),
+  updateTags: (id:number,data:{manual_tags:string[];removed_ai_tags:string[]}) => api.put<import('../types').VideoLibraryAsset>(`/ecommerce-video-assets/${id}/tags`,data).then(r=>r.data),
+  reanalyze: (id:number) => api.post<import('../types').VideoLibraryAsset>(`/ecommerce-video-assets/${id}/reanalyze`).then(r=>r.data),
+};
+
+export const ecommerceVideoTaxonomyApi = {
+  catalog: (objectType:import('../types').VideoObjectType,includeInactive=false) => api.get<import('../types').VideoTaxonomyCatalog>('/ecommerce-video-taxonomy/catalog',{params:{object_type:objectType,include_inactive:includeInactive}}).then(r=>r.data),
+  createCategory: (data:{object_type:import('../types').VideoObjectType;name:string;code?:string;parent_id:number|null;sort_order?:number}) => api.post<import('../types').VideoCategoryDefinition>('/ecommerce-video-taxonomy/categories',data).then(r=>r.data),
+  updateCategory: (id:number,data:Partial<{name:string;code:string;parent_id:number|null;sort_order:number;status:'active'|'inactive'}>) => api.put<import('../types').VideoCategoryDefinition>(`/ecommerce-video-taxonomy/categories/${id}`,data).then(r=>r.data),
+  deleteCategory: (id:number) => api.delete(`/ecommerce-video-taxonomy/categories/${id}`).then(r=>r.data),
+  mergeCategory: (id:number,targetId:number) => api.post(`/ecommerce-video-taxonomy/categories/${id}/merge`,{target_id:targetId}).then(r=>r.data),
+  createGroup: (data:{name:string;code?:string;applies_to:import('../types').VideoTagAppliesTo;inherit_to_final:boolean;sort_order?:number}) => api.post<import('../types').VideoTagGroupDefinition>('/ecommerce-video-taxonomy/groups',data).then(r=>r.data),
+  updateGroup: (id:number,data:Partial<{name:string;code:string;applies_to:import('../types').VideoTagAppliesTo;inherit_to_final:boolean;sort_order:number;status:'active'|'inactive'}>) => api.put<import('../types').VideoTagGroupDefinition>(`/ecommerce-video-taxonomy/groups/${id}`,data).then(r=>r.data),
+  deleteGroup: (id:number) => api.delete(`/ecommerce-video-taxonomy/groups/${id}`).then(r=>r.data),
+  createPublicTag: (data:{name:string;code?:string;group_id:number;applies_to:import('../types').VideoTagAppliesTo;sort_order?:number}) => api.post<import('../types').VideoTaxonomyTag>('/ecommerce-video-taxonomy/tags',data).then(r=>r.data),
+  createPersonalTag: (data:{name:string;applies_to:import('../types').VideoTagAppliesTo}) => api.post<import('../types').VideoTaxonomyTag>('/ecommerce-video-taxonomy/personal-tags',data).then(r=>r.data),
+  updateTag: (id:number,data:Partial<{name:string;code:string;group_id:number|null;applies_to:import('../types').VideoTagAppliesTo;sort_order:number;status:'active'|'inactive'}>) => api.put<import('../types').VideoTaxonomyTag>(`/ecommerce-video-taxonomy/tags/${id}`,data).then(r=>r.data),
+  deleteTag: (id:number) => api.delete(`/ecommerce-video-taxonomy/tags/${id}`).then(r=>r.data),
+  mergeTag: (id:number,targetId:number) => api.post(`/ecommerce-video-taxonomy/tags/${id}/merge`,{target_id:targetId}).then(r=>r.data),
+  updateAssets: (data:{asset_ids:number[];set_category?:boolean;category_id?:number|null;add_tag_ids?:number[];remove_tag_ids?:number[]}) => api.put<{updated_asset_ids:number[];added_assignments:number}>('/ecommerce-video-taxonomy/assets/batch',data).then(r=>r.data),
+  createPreset: (data:{object_type:import('../types').VideoObjectType;name:string;filters:Record<string,unknown>}) => api.post<import('../types').VideoFilterPreset>('/ecommerce-video-taxonomy/presets',data).then(r=>r.data),
+  updatePreset: (id:number,data:{name?:string;filters?:Record<string,unknown>}) => api.put<import('../types').VideoFilterPreset>(`/ecommerce-video-taxonomy/presets/${id}`,data).then(r=>r.data),
+  deletePreset: (id:number) => api.delete(`/ecommerce-video-taxonomy/presets/${id}`).then(r=>r.data),
 };
 
 function directorProjectRows(payload: unknown): DirectorProject[] {

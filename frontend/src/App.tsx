@@ -7,6 +7,12 @@ const Dashboard = lazy(() => import('./pages/Dashboard'));
 const ProductCreate = lazy(() => import('./pages/ProductCreate'));
 const ProductsPage = lazy(() => import('./pages/Products'));
 const ProductDetail = lazy(() => import('./pages/ProductDetail'));
+const EcommerceProducts = lazy(() => import('./pages/EcommerceProducts'));
+const EcommerceProductCreate = lazy(() => import('./pages/EcommerceProductCreate'));
+const EcommerceProductDetail = lazy(() => import('./pages/EcommerceProductDetail'));
+const EcommerceVideoLibrary = lazy(() => import('./pages/EcommerceVideoLibrary'));
+const EcommerceVideoDetail = lazy(() => import('./pages/EcommerceVideoDetail'));
+const EcommerceVideoTaxonomy = lazy(() => import('./pages/EcommerceVideoTaxonomy'));
 const KnowledgePage = lazy(() => import('./pages/Knowledge'));
 const Login = lazy(() => import('./pages/Login'));
 const ChangePassword = lazy(() => import('./pages/ChangePassword'));
@@ -32,6 +38,9 @@ const VideoAssetLibrary = lazy(() => import('./pages/VideoAssetLibrary'));
 const VideoAssetDetail = lazy(() => import('./pages/VideoAssetDetail'));
 const FinalVideoLibrary = lazy(() => import('./pages/FinalVideoLibrary'));
 const FinalVideoDetail = lazy(() => import('./pages/FinalVideoDetail'));
+const VideoRepairProjects = lazy(() => import('./pages/VideoRepairProjects'));
+const VideoRepairCreate = lazy(() => import('./pages/VideoRepairCreate'));
+const VideoRepairWorkspace = lazy(() => import('./pages/VideoRepairWorkspace'));
 const ManualComposeProjects = lazy(() => import('./pages/ManualComposeProjects'));
 const ManualComposeWorkspace = lazy(() => import('./pages/ManualComposeWorkspace'));
 const PlatformAdmin = lazy(() => import('./pages/PlatformAdmin'));
@@ -55,6 +64,14 @@ export default function App() {
             <Route path="products/new" element={<ProductCreate />} />
             <Route path="products" element={<ProductsPage />} />
             <Route path="products/:id" element={<ProductDetail />} />
+            <Route path="ecommerce-products" element={<EcommerceProducts />} />
+            <Route path="ecommerce-products/new" element={<EcommerceProductCreate />} />
+            <Route path="ecommerce-products/:id" element={<EcommerceProductDetail />} />
+            <Route path="ecommerce-video-assets" element={<EcommerceVideoLibrary assetKind="material" />} />
+            <Route path="ecommerce-video-assets/:id" element={<EcommerceVideoDetail assetKind="material" />} />
+            <Route path="ecommerce-final-videos" element={<EcommerceVideoLibrary assetKind="final_output" />} />
+            <Route path="ecommerce-final-videos/:id" element={<EcommerceVideoDetail assetKind="final_output" />} />
+            <Route path="ecommerce-video-taxonomy" element={<Navigate to="/tenant-admin/ecommerce-taxonomy" replace />} />
             <Route path="knowledge" element={<KnowledgePage />} />
             <Route path="design-skills" element={<DesignSkillsPage />} />
             <Route path="brand-visuals" element={<BrandVisualsPage />} />
@@ -78,6 +95,9 @@ export default function App() {
             <Route path="finished-video-assets/:id" element={<VideoAssetDetail libraryType="finished" title="成品素材库" />} />
             <Route path="final-videos" element={<FinalVideoLibrary />} />
             <Route path="final-videos/:id" element={<FinalVideoDetail />} />
+            <Route path="video-repair" element={<VideoRepairProjects />} />
+            <Route path="video-repair/new" element={<VideoRepairCreate />} />
+            <Route path="video-repair/:taskId" element={<VideoRepairWorkspace />} />
             <Route path="qianchuan/oauth/result" element={<QianchuanOAuthResult />} />
             <Route path="manual-video-compose" element={<ManualComposeProjects />} />
             <Route path="manual-video-compose/:id" element={<ManualComposeWorkspace />} />
@@ -85,6 +105,7 @@ export default function App() {
             <Route path="tenant-admin" element={<TenantAdmin />} />
             <Route path="tenant-admin/roles" element={<TenantRoles />} />
             <Route path="tenant-admin/taxonomy" element={<VideoTaxonomyPage />} />
+            <Route path="tenant-admin/ecommerce-taxonomy" element={<EcommerceVideoTaxonomy />} />
             <Route path="smart-video-compose" element={<PerformanceVideoProjectsPage editMode="smart_compose" title="智能成片" description="只用半成品素材，按 Hook→卖点→品牌信任→痛点→展示→使用→效果→直播间 CTA 生成成片，并自动进入成片库。" />} />
             <Route path="smart-video-compose/:id" element={<AutoEditWorkspace />} />
             <Route path="finished-video-remix" element={<PerformanceVideoProjectsPage editMode="finished_remix" title="成品混剪" description="只用已审核可复用的成品素材，保留原声、原画面和原字幕，按相邻语义衔接生成多个去重版本。" />} />

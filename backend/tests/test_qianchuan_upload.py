@@ -107,7 +107,8 @@ class UploadTests(QianchuanAuthorizationTests):
 
     def test_new_personal_connection_does_not_reuse_old_binding_upload(self):
         old_upload = self.create_upload().json()
-        self.browser.delete(PREFIX + '/connections/' + self.connection_id, headers=self.headers)
+        removed = self.browser.post(PREFIX + '/connections/' + self.connection_id + '/remove', headers=self.headers)
+        self.assertEqual(removed.status_code, 204)
         _, new_connection_id = self.completed()
         self.service.sync_connection(new_connection_id)
         accounts = self.browser.get(PREFIX + '/accounts', headers=self.headers).json()['connections']

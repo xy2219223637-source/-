@@ -20,6 +20,7 @@ from app.api.auto_edit import (
     score_transition,
 )
 from app.services.video_analysis_queue import recover_interrupted_video_analyses
+from app.services.video_editing.renderer import _ffmpeg_executable
 from app.api.video_library import _apply_reusable_status
 
 
@@ -91,6 +92,8 @@ class VideoWorkflowTests(unittest.TestCase):
         variant = _manual_plan(project, assets)
         self.assertEqual([clip["asset_id"] for clip in variant["narrative_segments"]], ["a2", "a1"])
         self.assertEqual(variant["narrative_segments"][0]["source_range"], {"start": 0.0, "end": 3.0})
+        self.assertEqual([clip["asset_id"] for clip in variant["video_track"]], ["a2", "a1"])
+        self.assertEqual(variant["video_track"][0]["timeline_range"], {"start": 0.0, "end": 3.0})
         self.assertEqual(variant["actual_duration_seconds"], 7.5)
         self.assertEqual(variant["structure_snapshot"][1]["title"], "证明")
 
@@ -178,24 +181,27 @@ class VideoWorkflowTests(unittest.TestCase):
         db.commit.assert_called_once()
 
     def test_ffmpeg_finished_clip_keeps_mixed_audio(self):
-        if subprocess.run(["ffmpeg", "-version"], capture_output=True).returncode != 0:
+        try:
+            ffmpeg = _ffmpeg_executable()
+        except RuntimeError:
             self.skipTest("ffmpeg not available")
         with tempfile.TemporaryDirectory() as directory:
             source = Path(directory) / "source.mp4"
             clip = Path(directory) / "clip.mp4"
             subprocess.run([
-                "ffmpeg", "-y", "-f", "lavfi", "-i", "color=c=red:s=320x240:d=3",
+                ffmpeg, "-y", "-f", "lavfi", "-i", "color=c=red:s=320x240:d=3",
                 "-f", "lavfi", "-i", "sine=frequency=220:duration=3",
                 "-f", "lavfi", "-i", "sine=frequency=880:duration=3",
                 "-filter_complex", "[1:a][2:a]amix=inputs=2:duration=first[aout]",
                 "-map", "0:v", "-map", "[aout]", "-shortest", "-c:v", "libx264", "-c:a", "aac", str(source),
             ], capture_output=True, check=True)
-            subprocess.run(finished_clip_ffmpeg_command(source, 0.2, 1.5, clip, 320, 240), capture_output=True, check=True)
-            probe = subprocess.run([
-                "ffprobe", "-v", "error", "-select_streams", "a", "-show_entries", "stream=codec_type",
-                "-of", "csv=p=0", str(clip),
+            command = finished_clip_ffmpeg_command(source, 0.2, 1.5, clip, 320, 240)
+            command[0] = ffmpeg
+            subprocess.run(command, capture_output=True, check=True)
+            subprocess.run([
+                ffmpeg, "-v", "error", "-i", str(clip), "-map", "0:a:0",
+                "-f", "null", "NUL",
             ], capture_output=True, text=True, check=True)
-            self.assertIn("audio", probe.stdout)
 
 
 if __name__ == "__main__":

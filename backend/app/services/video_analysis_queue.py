@@ -10,7 +10,7 @@ from typing import Optional
 from sqlalchemy.orm import Session
 
 from app.database import SessionLocal
-from app.models import VideoAsset, VideoAssetAnalysis
+from app.models import VideoAsset, VideoAssetAnalysis, EcommerceVideoAsset, EcommerceVideoAssetAnalysis
 from app.services.redis_client import (
     notify_video_analysis_queue,
     task_lock,
@@ -51,6 +51,23 @@ def _run_asset(asset_id: int) -> None:
     asyncio.run(analyze_video_asset(asset_id))
 
 
+def _next_ecommerce_asset_id() -> Optional[int]:
+    db = SessionLocal()
+    try:
+        asset = db.query(EcommerceVideoAsset).filter(
+            EcommerceVideoAsset.status == "queued_for_analysis",
+            EcommerceVideoAsset.excluded.is_(False),
+        ).order_by(EcommerceVideoAsset.created_at, EcommerceVideoAsset.id).first()
+        return asset.id if asset else None
+    finally:
+        db.close()
+
+
+def _run_ecommerce_asset(asset_id: int) -> None:
+    from app.api.ecommerce_video_library import analyze_video_asset
+    asyncio.run(analyze_video_asset(asset_id))
+
+
 def _next_validation_id() -> Optional[int]:
     db = SessionLocal()
     try:
@@ -62,6 +79,21 @@ def _next_validation_id() -> Optional[int]:
 
 def _run_validation(asset_id: int) -> None:
     from app.api.video_library import validate_video_asset
+    validate_video_asset(asset_id)
+
+
+def _next_ecommerce_validation_id() -> Optional[int]:
+    db = SessionLocal()
+    try:
+        asset = db.query(EcommerceVideoAsset).filter(EcommerceVideoAsset.status == "validating").order_by(
+            EcommerceVideoAsset.created_at, EcommerceVideoAsset.id).first()
+        return asset.id if asset else None
+    finally:
+        db.close()
+
+
+def _run_ecommerce_validation(asset_id: int) -> None:
+    from app.api.ecommerce_video_library import validate_video_asset
     validate_video_asset(asset_id)
 
 
@@ -82,9 +114,38 @@ def _loop() -> None:
                 else:
                     wait_for_video_analysis_queue(1)
                 continue
+            ecommerce_validation_id = _next_ecommerce_validation_id()
+            if ecommerce_validation_id is not None:
+                lock = task_lock(f"ecommerce-video-validation-{ecommerce_validation_id}")
+                if lock is None:
+                    _run_ecommerce_validation(ecommerce_validation_id)
+                elif lock.acquire(blocking=False):
+                    try:
+                        _run_ecommerce_validation(ecommerce_validation_id)
+                    finally:
+                        try: lock.release()
+                        except Exception: pass
+                else:
+                    wait_for_video_analysis_queue(1)
+                continue
             asset_id = _next_asset_id()
-            if asset_id is None:
+            ecommerce_asset_id = _next_ecommerce_asset_id() if asset_id is None else None
+            if asset_id is None and ecommerce_asset_id is None:
                 wait_for_video_analysis_queue(1)
+                continue
+
+            if ecommerce_asset_id is not None:
+                lock = task_lock(f"ecommerce-video-analysis-{ecommerce_asset_id}")
+                if lock is None:
+                    _run_ecommerce_asset(ecommerce_asset_id)
+                elif lock.acquire(blocking=False):
+                    try:
+                        _run_ecommerce_asset(ecommerce_asset_id)
+                    finally:
+                        try: lock.release()
+                        except Exception: pass
+                else:
+                    wait_for_video_analysis_queue(1)
                 continue
 
             lock = task_lock(f"video-analysis-{asset_id}")
@@ -122,12 +183,29 @@ def recover_interrupted_video_analyses(db: Session) -> int:
     return int(count or 0)
 
 
+def recover_interrupted_ecommerce_video_analyses(db: Session) -> int:
+    """Recover analysis jobs stored only in the ecommerce video tables."""
+    db.query(EcommerceVideoAssetAnalysis).filter(EcommerceVideoAssetAnalysis.status == "analyzing").update(
+        {
+            EcommerceVideoAssetAnalysis.status: "interrupted",
+            EcommerceVideoAssetAnalysis.error_message: "服务重启，分析任务已自动重新排队",
+            EcommerceVideoAssetAnalysis.completed_at: datetime.utcnow(),
+        }, synchronize_session=False,
+    )
+    ecommerce_count = db.query(EcommerceVideoAsset).filter(EcommerceVideoAsset.status == "analyzing").update(
+        {EcommerceVideoAsset.status: "queued_for_analysis"}, synchronize_session=False,
+    )
+    db.commit()
+    return int(ecommerce_count or 0)
+
+
 def start_video_analysis_worker() -> None:
     global _thread
     db = SessionLocal()
     try:
         # An analyzing row cannot still have a live in-process task after restart.
         recover_interrupted_video_analyses(db)
+        recover_interrupted_ecommerce_video_analyses(db)
     finally:
         db.close()
 

@@ -6,7 +6,7 @@ from datetime import datetime, timedelta
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api import admin, auth, auto_edit, brands, creative, dashboard, director, knowledge, products, quality, skills, templates, operations, production, storage, video_library, video_taxonomy, videos
+from app.api import admin, auth, auto_edit, brands, creative, dashboard, director, ecommerce_products, ecommerce_video_library, ecommerce_video_taxonomy, knowledge, products, quality, skills, templates, operations, production, storage, video_library, video_taxonomy, videos
 from app.config import get_settings
 from app.database import SessionLocal, engine, init_db
 from app.models import AuditLog, CreativeBatchJob, CreativeGeneration
@@ -14,10 +14,11 @@ from app.services.production_queue import start_worker, stop_worker
 from app.services.video_analysis_queue import start_video_analysis_worker, stop_video_analysis_worker
 from app.services.redis_client import get_redis
 from app.services.feishu_logging import RequestTraceMiddleware, trace_fields
-from app.api import qianchuan
+from app.api import qianchuan, qianchuan_plans, video_repair
 from app.api import video_lineage
 from app.services.qianchuan.service import get_qianchuan_service, install_log_filters
 from app.services.qianchuan.worker import start_qianchuan_worker, stop_qianchuan_worker
+from app.services.video_repair.worker_v4 import start_video_repair_worker, stop_video_repair_worker
 
 install_log_filters()
 
@@ -58,6 +59,9 @@ async def audit_requests(request, call_next):
 app.add_middleware(RequestTraceMiddleware)
 
 app.include_router(products.router, prefix="/api")
+app.include_router(ecommerce_products.router, prefix="/api")
+app.include_router(ecommerce_video_library.router, prefix="/api")
+app.include_router(ecommerce_video_taxonomy.router, prefix="/api")
 app.include_router(auth.router, prefix="/api")
 app.include_router(admin.platform_router, prefix="/api")
 app.include_router(admin.tenant_router, prefix="/api")
@@ -75,9 +79,11 @@ app.include_router(videos.router, prefix="/api")
 app.include_router(director.router, prefix="/api")
 app.include_router(auto_edit.router, prefix="/api")
 app.include_router(qianchuan.router, prefix="/api")
+app.include_router(qianchuan_plans.router, prefix="/api")
 app.include_router(video_library.router, prefix="/api")
 app.include_router(video_taxonomy.router, prefix="/api")
 app.include_router(video_lineage.router, prefix="/api")
+app.include_router(video_repair.router, prefix="/api")
 
 @app.on_event("startup")
 def on_startup() -> None:
@@ -111,12 +117,14 @@ def on_startup() -> None:
     start_worker()
     start_video_analysis_worker()
     start_qianchuan_worker()
+    start_video_repair_worker()
 
 @app.on_event("shutdown")
 def on_shutdown() -> None:
     stop_worker()
     stop_video_analysis_worker()
     stop_qianchuan_worker()
+    stop_video_repair_worker()
 
 
 @app.get("/api/health")
