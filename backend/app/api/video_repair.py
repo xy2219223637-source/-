@@ -14,7 +14,7 @@ from app.api.auto_edit import _probe
 from app.auth import AuthContext, current_auth
 from app.config import get_settings
 from app.database import get_db
-from app.models import EcommerceProduct, Product, Tenant, VideoAsset, VideoAssetAnalysis, VideoRepairAttachment, VideoRepairJob, VideoRepairPreview, VideoRepairTask
+from app.models import EcommerceProduct, EcommerceVideoAsset, EcommerceVideoAssetAnalysis, EcommerceVideoHighlight, Product, Tenant, VideoAsset, VideoAssetAnalysis, VideoRepairAttachment, VideoRepairInput, VideoRepairJob, VideoRepairPreview, VideoRepairTask
 from app.schemas.video_repair import (
     RepairTaskPage, RepairTaskRead,
     PreviewAccept, TTSCreate, V4DraftUpdate, VideoRepairTaskCreate,
@@ -23,6 +23,7 @@ from app.services.storage import get_storage, get_video_storage
 from app.services.tts import synthesize_speech
 from app.services.video_analysis_queue import enqueue_video_analysis
 from app.services.video_repair.inputs import create_input
+from app.services.video_repair.ecommerce_materials import sync_ecommerce_materials
 from app.services.video_repair.service import (
     create_v4_task, owned_task, serialize_task,
 )
@@ -44,6 +45,13 @@ def _repair_product(db: Session, tenant_id: str, ecommerce_product_id: int) -> P
     marker = f"__ecommerce_repair_{ecommerce.id}__"
     product = db.query(Product).filter_by(tenant_id=tenant_id, category=marker).first()
     if not product:
+        matches = db.query(Product).filter_by(
+            tenant_id=tenant_id, name=ecommerce.name, category=ecommerce.category,
+            brand_name=ecommerce.brand_name, description=ecommerce.description,
+            specifications=ecommerce.specifications, price=ecommerce.price,
+        ).all()
+        if len(matches) == 1:
+            return matches[0]
         product = Product(tenant_id=tenant_id, category=marker)
         db.add(product)
     for field in ("name", "description", "brand_name", "target_users", "ingredients",
@@ -187,11 +195,19 @@ def _v4_task(db: Session, auth: AuthContext, task_id: int) -> VideoRepairTask:
 def _validate_ai_draft(diagnosis: dict, action: dict, override_reason: str) -> None:
     proposal = (diagnosis or {}).get("ai_proposal") or {}
     template = proposal.get("action") or proposal.get("action_template") or {}
+    required = set(proposal.get("requires_input") or [])
+    if not template and diagnosis.get("recommended_action") == "VISUAL_REPLACE" and "visual_material" in required:
+        ranges = diagnosis.get("suggested_ranges") or []
+        if ranges:
+            template = {
+                "type": "VISUAL_REPLACE",
+                "target_range": {"start_ms": int(ranges[0]["start_ms"]), "end_ms": int(ranges[0]["end_ms"])},
+                "fit_mode": "COVER", "transition": {"type": "CUT", "duration_ms": 0},
+            }
     if override_reason.strip() or not template.get("type"):
         raise HTTPException(422, detail={
             "code": "AI_PROPOSAL_REQUIRED", "message": "当前仅支持接受 AI 方案或要求重新分析"})
     allowed = set()
-    required = set(proposal.get("requires_input") or [])
     if "insert_position" in required and template["type"] == "CONTENT_INSERT":
         allowed.add("insert_at_ms")
     if "audio" in required and template["type"] in {"AUDIO_REPLACE", "CONTENT_INSERT"}:
@@ -220,6 +236,8 @@ def update_v4_task_draft(task_id: int, payload: V4DraftUpdate,
 def list_v4_materials(task_id: int, db: Session = Depends(get_db),
                       auth: AuthContext = Depends(current_auth)):
     task = _v4_task(db, auth, task_id)
+    sync_ecommerce_materials(db, task)
+    db.commit()
     query = db.query(VideoAsset).filter_by(
         tenant_id=task.tenant_id, product_id=task.product_id, excluded=False).filter(
         VideoAsset.id != task.source_asset_id)
@@ -228,6 +246,22 @@ def list_v4_materials(task_id: int, db: Session = Depends(get_db),
     for candidate in (task.diagnosis_json or {}).get("material_candidates", []):
         candidate_by_asset.setdefault(candidate.get("source_asset_id"), candidate)
     summaries = {}
+    repair_input = db.get(VideoRepairInput, task.input_id)
+    ecommerce_product_id = (repair_input.raw_payload_json or {}).get("ecommerce_product_id") if repair_input else None
+    ecommerce_analyzed_hashes = set()
+    if ecommerce_product_id:
+        ecommerce_analyzed_hashes = {content_hash for (content_hash,) in (
+            db.query(EcommerceVideoAsset.content_hash)
+            .join(EcommerceVideoAssetAnalysis, EcommerceVideoAssetAnalysis.asset_id == EcommerceVideoAsset.id)
+            .join(EcommerceVideoHighlight, EcommerceVideoHighlight.analysis_id == EcommerceVideoAssetAnalysis.id)
+            .filter(EcommerceVideoAsset.tenant_id == task.tenant_id,
+                    EcommerceVideoAsset.product_id == ecommerce_product_id,
+                    EcommerceVideoAsset.asset_kind == "material",
+                    EcommerceVideoAssetAnalysis.tenant_id == task.tenant_id,
+                    EcommerceVideoHighlight.tenant_id == task.tenant_id,
+                    EcommerceVideoHighlight.asset_id == EcommerceVideoAsset.id,
+                    EcommerceVideoAssetAnalysis.status == "completed")
+            .distinct().all())}
     if rows:
         analyses = db.query(VideoAssetAnalysis).filter(
             VideoAssetAnalysis.tenant_id == task.tenant_id,
@@ -241,6 +275,7 @@ def list_v4_materials(task_id: int, db: Session = Depends(get_db),
         "object_url": row.object_url, "content_hash": row.content_hash,
         "duration_seconds": row.duration_seconds, "width": row.width, "height": row.height,
         "has_audio": row.has_audio, "asset_kind": row.asset_kind, "analysis_status": row.status,
+        "ecommerce_has_analyzed_segments": bool(row.content_hash and row.content_hash in ecommerce_analyzed_hashes),
         "summary": summaries.get(row.id, ""),
         "recommended_range": (candidate_by_asset.get(row.id) or {}).get("source_range"),
         "description": (candidate_by_asset.get(row.id) or {}).get("description", ""),

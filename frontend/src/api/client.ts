@@ -246,6 +246,7 @@ export interface VideoRepairMaterial {
   duration_seconds:number;width:number;height:number;has_audio:boolean;asset_kind:string;
   summary?:string;recommended_range?:{start:number;end:number};description?:string;content_role?:string;
   score?:number|null;recommendation_level?:string;reasons?:string[];warnings?:string[];audio_mode?:string;analysis_status?:string;
+  ecommerce_has_analyzed_segments?:boolean;
 }
 
 export interface VideoRepairAttachment {

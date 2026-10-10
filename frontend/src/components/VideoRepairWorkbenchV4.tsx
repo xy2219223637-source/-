@@ -40,7 +40,12 @@ export default function VideoRepairWorkbenchV4({initialTask}: {initialTask: Vide
   const proposal = diagnosis.ai_proposal;
   const proposalAction = proposal?.action as Action | undefined;
   const proposalTemplate = proposal?.action_template as Action | undefined;
-  const proposed = proposalAction?.type ? proposalAction : proposalTemplate;
+  const fallbackRange = diagnosis.suggested_ranges?.[0];
+  const fallbackVisualTemplate: Action | undefined = !proposalAction?.type && !proposalTemplate?.type &&
+    diagnosis.recommended_action === 'VISUAL_REPLACE' && proposal?.requires_input?.includes('visual_material') && fallbackRange
+    ? {type:'VISUAL_REPLACE', target_range:{start_ms:fallbackRange.start_ms,end_ms:fallbackRange.end_ms},
+      fit_mode:'COVER', transition:{type:'CUT',duration_ms:0}} : undefined;
+  const proposed: Action | undefined = proposalAction?.type ? proposalAction : proposalTemplate?.type ? proposalTemplate : fallbackVisualTemplate;
   const planAction = (task.repair_plan as {action?: Action})?.action;
   const displayAction = planAction || proposed;
   const displayType = String(displayAction?.type || diagnosis.recommended_action || '');
@@ -54,6 +59,8 @@ export default function VideoRepairWorkbenchV4({initialTask}: {initialTask: Vide
   const active = ['ANALYZING', 'PREVIEW_QUEUED', 'PREVIEW_RENDERING'].includes(task.status);
   const latest = task.previews?.[0];
   const needsVisualMaterial = !!proposal?.requires_input?.includes('visual_material');
+  const productMaterials = materials.filter(row => row.asset_kind === 'material' && row.duration_seconds > 0);
+  const ecommerceAnalyzedMaterials = productMaterials.filter(row => row.ecommerce_has_analyzed_segments);
   const suggestedMaterial=proposal?.recommended_material;
   const selectedMaterial = materials.find(row => row.id === Number(materialId || suggestedMaterial?.source_asset_id || proposed?.visual?.ref_id || proposed?.material?.ref_id));
   const requiredVisualSeconds = proposed?.type === 'VISUAL_REPLACE'
@@ -77,7 +84,7 @@ export default function VideoRepairWorkbenchV4({initialTask}: {initialTask: Vide
   useEffect(() => {
     setMaterialsLoading(true);
     videoRepairApi.materials(task.id).then(setMaterials).catch(reason => setError(message(reason))).finally(()=>setMaterialsLoading(false));
-  }, [task.id]);
+  }, [task.id, task.status]);
   useEffect(()=>{
     if(suggestedMaterial?.source_asset_id){
       setMaterialId(String(suggestedMaterial.source_asset_id));
@@ -198,13 +205,15 @@ export default function VideoRepairWorkbenchV4({initialTask}: {initialTask: Vide
       <section className="rounded border bg-white p-4"><h3 className="text-sm font-semibold">原始 V1</h3><video aria-label="原始 V1 视频" className="mt-3 aspect-video w-full bg-black object-contain" controls src={mediaUrl(task.source_asset.object_url)}/><p className="mt-2 text-xs text-[var(--muted)]">{task.source_asset.filename} · {task.source_asset.duration_seconds.toFixed(1)} 秒</p></section>
       <section className="rounded border border-violet-200 bg-violet-50 p-4"><h3 className="text-sm font-semibold text-violet-950">审核事实与 AI 提案</h3><p className="mt-2 text-sm">{task.input.raw_reason}</p><dl className="mt-4 grid grid-cols-[6rem_1fr] gap-2 text-xs"><dt>建议动作</dt><dd>{unsupportedAv ? '音画整段替换（暂不支持）' : unsupportedAction ? '当前动作暂不支持' : actionLabels[diagnosis.recommended_action || ''] || '需要人工判断'}</dd><dt>置信度</dt><dd>{diagnosis.confidence_level || Math.round((diagnosis.overall_confidence || 0) * 100) + '%'}</dd><dt>证据充分性</dt><dd>{diagnosis.evidence_sufficiency || '—'}</dd><dt>理由</dt><dd>{facts?.description || diagnosis.summary || '—'}</dd></dl><div className="mt-4 rounded border border-violet-200 bg-white p-3"><p className="text-xs font-semibold">AI 方案摘要</p><p className="mt-1 text-sm">{summary}</p>{proposal?.placement && <div className="mt-2 rounded bg-slate-50 p-2 text-xs"><p><strong>插入点判断：</strong>{(proposal.placement.recommended_ms / 1000).toFixed(1)} 秒 · {proposal.placement.confidence_level} {Math.round(proposal.placement.confidence * 100)}%</p><p className="mt-1 text-[var(--muted)]">{proposal.placement.basis}</p>{proposal.placement.alternatives.length > 0 && <p className="mt-1">备选：{proposal.placement.alternatives.map(value => (value / 1000).toFixed(1) + ' 秒').join(' / ')}</p>}</div>}{displayAction?.target_range && <p className="mt-1 text-xs text-[var(--muted)]">目标区间：{(displayAction.target_range.start_ms / 1000).toFixed(1)}–{(displayAction.target_range.end_ms / 1000).toFixed(1)} 秒</p>}{proposal?.risks?.map(row => <p key={row} className="mt-1 text-xs text-amber-700">注意：{row}</p>)}</div></section>
     </div>
+    {needsVisualMaterial && !materialsLoading && productMaterials.length > 0 && <p className="rounded border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">已找到 {productMaterials.length} 条有时长的可选视频；电商商品素材库中 {ecommerceAnalyzedMaterials.length} 条具有已分析片段。当前没有符合本次替换条件的 AI 候选，可在下方人工预览并选择。</p>}
     <section className="rounded border bg-white p-4"><h3 className="text-sm font-semibold">1. 人工审核 AI 方案</h3><label className="field mt-3 max-w-xl"><span>审核决定</span><select aria-label="人工审核决定" className="input-select" value={decision} onChange={e => setDecision(e.target.value as Decision)}><option value="">请选择</option><option value="ACCEPT_AI">接受 AI 方案</option><option value="REANALYZE">要求 AI 重新分析</option></select></label>
       {decision === 'ACCEPT_AI' && <div className="mt-4 rounded bg-emerald-50 p-4"><p className="text-sm">将按上方 AI 提案保存方案并生成真实视频预览。</p>
         {needsVisualMaterial && <div className="mt-3 rounded border border-emerald-200 bg-white p-3 space-y-3">
           <p className="text-sm font-semibold">选择或上传替换画面</p>
+          {!materialsLoading && productMaterials.length > 0 && <p className="text-xs text-amber-800">电商商品素材库中 {ecommerceAnalyzedMaterials.length} 条具有已分析片段；这里仍可人工预览并选择有时长的视频。</p>}
           <label className="btn-secondary inline-flex cursor-pointer"><Upload size={14}/>{busy==='material'?'上传中':'手动上传替换视频'}<input className="hidden" type="file" accept=".mp4,.mov,.mkv,.webm,.m4v,video/*" disabled={!!busy} onChange={e=>e.target.files?.[0]&&uploadMaterial(e.target.files[0])}/></label>
           {!!diagnosis.material_candidates?.length&&<div className="space-y-2"><p className="text-xs font-medium">AI 候选片段（请预览确认）</p>{diagnosis.material_candidates.slice(0,3).map((candidate,index)=><button type="button" key={String(candidate.id||index)} className="block w-full rounded border border-[var(--border)] p-2 text-left text-xs hover:bg-emerald-50" onClick={()=>{setMaterialId(String(candidate.source_asset_id));setTrimStart(String(candidate.source_range?.start||0))}}><b>{candidate.description}</b><span className="ml-2 text-[var(--muted)]">{Number(candidate.source_range?.start||0).toFixed(1)}–{Number(candidate.source_range?.end||0).toFixed(1)} 秒</span><p className="mt-1">{candidate.reasons?.join('；')||'请核对是否匹配审核问题'}</p>{candidate.warnings?.map((warning:string)=><p key={warning} className="text-amber-700">{warning}</p>)}</button>)}</div>}
-          <label className="field"><span>视频素材</span><select aria-label="选择返修素材" className="input-select" value={materialId} onChange={e=>{setMaterialId(e.target.value);setTrimStart('0')}}><option value="">请选择素材</option>{materials.filter(row=>row.asset_kind==='material'&&row.duration_seconds>0).map(row=><option key={row.id} value={row.id}>{row.filename} · {row.duration_seconds.toFixed(1)} 秒</option>)}</select></label>
+          <label className="field"><span>视频素材</span><select aria-label="选择返修素材" className="input-select" value={materialId} onChange={e=>{setMaterialId(e.target.value);setTrimStart('0')}}><option value="">请选择素材</option>{productMaterials.map(row=><option key={row.id} value={row.id}>{row.filename} · {row.duration_seconds.toFixed(1)} 秒</option>)}</select></label>
           {selectedMaterial&&<><video ref={materialPreview} controls preload="metadata" src={mediaUrl(selectedMaterial.object_url)} className="w-full max-w-lg aspect-video bg-black"/><label className="field max-w-xs"><span>从素材第几秒开始截取</span><input aria-label="素材截取起点" className="input" type="number" min={0} max={Math.max(0,selectedMaterial.duration_seconds-requiredVisualSeconds)} step="0.1" value={trimStart} onChange={e=>setTrimStart(e.target.value)}/></label><p className="text-xs text-[var(--muted)]">将截取 {requiredVisualSeconds.toFixed(1)} 秒；请人工核对画面和声音。只有分析确认口播完整时才会提供沿用原声选项。</p></>}
           {materialsLoading&&<p className="text-sm text-sky-800">正在读取素材视频时长，首次使用可能需要从云端下载。</p>}
           {!materialsLoading&&!materials.some(row=>row.asset_kind==='material')&&<p className="text-sm text-amber-800">还没有可用的替换视频，请在这里手动上传。</p>}

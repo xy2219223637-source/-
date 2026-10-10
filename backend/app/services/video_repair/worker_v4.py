@@ -11,6 +11,7 @@ from app.models import VideoAsset, VideoRepairInput, VideoRepairJob, VideoRepair
 from app.services.video_repair.ai_context import build_ai_context
 from app.services.video_repair.candidates import find_candidates
 from app.services.video_repair.diagnosis_v4 import V4_ACTION_GUIDANCE, diagnose_video_v4
+from app.services.video_repair.ecommerce_materials import sync_ecommerce_materials
 from app.services.video_repair.insertion_planner import recommend_insertion_positions
 from app.services.video_repair.protocol_v4 import ACTIONS
 from app.services.video_repair.service import _provider
@@ -49,6 +50,7 @@ def _analyze(db, task: VideoRepairTask) -> None:
     source = db.get(VideoAsset, task.source_asset_id)
     if not repair_input or not source:
         raise RuntimeError("SOURCE_MISSING: 修复输入或源成片不存在")
+    sync_ecommerce_materials(db, task)
     settings = get_settings()
     capabilities = ["VISUAL_REPLACE"]
     if settings.video_repair_audio_replace_enabled:
@@ -141,6 +143,12 @@ def _analyze(db, task: VideoRepairTask) -> None:
         else:
             proposal["requires_input"] = ["visual_material"]
             proposal["summary"] = "AI 已确定画面替换区间，但没有找到达到可用门槛的同商品素材。"
+            proposal["action_template"] = {
+                "type": "VISUAL_REPLACE",
+                "target_range": {"start_ms": start_ms, "end_ms": end_ms},
+                "fit_mode": "COVER",
+                "transition": {"type": "CUT", "duration_ms": 0},
+            }
     elif recommended == "AUDIO_REPLACE" and ranges:
         first_range = ranges[0]
         proposal.update({

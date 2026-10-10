@@ -8,6 +8,7 @@ from io import BytesIO
 from pathlib import Path
 from typing import Optional
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
+from sqlalchemy import not_
 from sqlalchemy.orm import Session
 
 from app.config import get_settings
@@ -70,6 +71,7 @@ def list_products(db: Session = Depends(get_db), auth: AuthContext = Depends(cur
     products = db.query(Product).filter(
         Product.tenant_id == auth.tenant_id,
         Product.category != "__material_library_repair__",
+        not_(Product.category.like(r"\_\_ecommerce\_repair\_%\_\_", escape="\\")),
     ).order_by(Product.created_at.desc()).all()
     return [_to_out(p) for p in products]
 
