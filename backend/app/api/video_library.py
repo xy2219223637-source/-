@@ -183,6 +183,11 @@ def _extract_frames(source: Path, duration: float, target: Path) -> list[Path]:
     return sorted(target.glob("frame-*.jpg"))
 
 
+def _is_finished_for_analysis(asset: VideoAsset) -> bool:
+    return asset.library_type == "finished" or (
+        asset.source == "video_repair_upload" and asset.asset_kind == "final_output")
+
+
 def _normalize_analysis(asset: VideoAsset, result: dict[str, Any], transcript: Optional[dict[str, Any]] = None) -> dict[str, Any]:
     highlights = []
     words = (transcript or {}).get("words", [])
@@ -195,7 +200,7 @@ def _normalize_analysis(asset: VideoAsset, result: dict[str, Any], transcript: O
         start, end = max(0.0, start), min(asset.duration_seconds, end)
         if end - start < .4:
             continue
-        spans = _split_finished_span(start, end, words) if asset.library_type == "finished" else [(start, end)]
+        spans = _split_finished_span(start, end, words) if _is_finished_for_analysis(asset) else [(start, end)]
         roles = item.get("recommended_positions") or item.get("recommended_roles") or ["core_content"]
         for span_start, span_end in spans:
             matching_words = [word for word in words
@@ -203,8 +208,8 @@ def _normalize_analysis(asset: VideoAsset, result: dict[str, Any], transcript: O
             exact_speech = "".join(str(word.get("text") or "") for word in matching_words).strip()
             speech_present = bool(exact_speech or item.get("speech_present"))
             lip_visible = bool(item.get("lip_visible"))
-            track_role = str(item.get("track_role") or ("a_roll" if speech_present and (lip_visible or asset.library_type == "finished") else "b_roll"))
-            if track_role == "a_roll" and (not speech_present or (asset.library_type != "finished" and not lip_visible) or not (exact_speech or str(item.get("speech_text") or "").strip())):
+            track_role = str(item.get("track_role") or ("a_roll" if speech_present and (lip_visible or _is_finished_for_analysis(asset)) else "b_roll"))
+            if track_role == "a_roll" and (not speech_present or (not _is_finished_for_analysis(asset) and not lip_visible) or not (exact_speech or str(item.get("speech_text") or "").strip())):
                 track_role = "reject"
             content_role = str(item.get("content_role") or roles[0])
             highlight_index += 1
@@ -226,7 +231,7 @@ def _normalize_analysis(asset: VideoAsset, result: dict[str, Any], transcript: O
     result["video_tags"] = list(dict.fromkeys(automatic_tags))[:20]
     result["schema_version"] = "1.0"; result["asset_id"] = asset.asset_id; result["highlights"] = highlights
     result["library_type"] = asset.library_type
-    asset.burned_subtitles = bool(result.get("burned_subtitles", asset.library_type == "finished"))
+    asset.burned_subtitles = bool(result.get("burned_subtitles", _is_finished_for_analysis(asset)))
     asset.has_background_music = bool(result.get("has_background_music", False))
     if asset.generation_depth > 1:
         asset.reusable_status = "blocked"
@@ -272,7 +277,7 @@ async def analyze_video_asset(asset_db_id: int, force: bool = False) -> None:
                 analysis.request_count += 1; analysis.retry_count = attempt; db.commit()
                 material_instruction = ("这是已剪辑成品。按完整语义句、原始镜头边界和自然停顿切成 4～15 秒的可复用段落；"
                     "每段原声必须与原画面绑定，即使说话者没有出镜也标为 a_roll；识别是否存在烧录字幕和原 BGM。"
-                    if asset.library_type == "finished" else
+                    if _is_finished_for_analysis(asset) else
                     "这是半成品素材。区分可保留原声的人物口播 a_roll 与可静音重配的商品/使用/效果 b_roll。")
                 prompt = f"""分析一条时长 {asset.duration_seconds:.3f} 秒的美妆短视频。{material_instruction}
 只返回 JSON，包含 summary, video_tags, people{{count,description}}, product{{visible,name,exposure}}, actions, scenes,

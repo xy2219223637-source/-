@@ -65,6 +65,7 @@ export default function VideoUploadDialog({libraryType,assetKind='material',prod
   const [pendingAssignmentIds,setPendingAssignmentIds]=useState<number[]>([]);
 
   const parents=useMemo(()=>workingCatalog.categories.filter(item=>item.parent_id===null&&item.status==='active'),[workingCatalog.categories]);
+  const categoryRequired=parents.length>0;
   const children=useMemo(()=>workingCatalog.categories.filter(item=>item.parent_id===Number(parentCategoryId)&&item.status==='active'),[workingCatalog.categories,parentCategoryId]);
   const groups=useMemo(()=>workingCatalog.groups.filter(group=>group.status==='active'&&workingCatalog.public_tags.some(tag=>tag.group_id===group.id&&tag.status==='active')),[workingCatalog]);
   const activeGroup=groups.find(group=>group.id===activeGroupId)??null;
@@ -163,14 +164,14 @@ export default function VideoUploadDialog({libraryType,assetKind='material',prod
   async function applyTaxonomy(assetIds:number[]){
     await ecommerceVideoTaxonomyApi.updateAssets({
       asset_ids:assetIds,
-      set_category:true,
-      category_id:Number(categoryId),
+      set_category:Boolean(categoryId),
+      category_id:categoryId?Number(categoryId):undefined,
       add_tag_ids:[...selectedPublicTagIds,...selectedPersonalTagIds],
     });
   }
 
   async function uploadTargets(targets:UploadItem[]){
-    if(!categoryId){setError('请选择二级分类');return}
+    if(categoryRequired&&!categoryId){setError('请选择二级分类');return}
     if(!targets.length)return;
     setUploading(true);setError('');setAssignmentError('');setOverallPercent(0);
     const totalBytes=targets.reduce((total,item)=>total+item.file.size,0);
@@ -254,7 +255,7 @@ export default function VideoUploadDialog({libraryType,assetKind='material',prod
         </section>
 
         <section className="mt-7 border-t border-[var(--border)] pt-5" aria-labelledby="upload-category-heading">
-          <div className="mb-3 flex items-center gap-2"><h3 id="upload-category-heading" className="text-sm font-medium">2. 视频分类</h3><span className="text-xs text-red-600">必填</span></div>
+          <div className="mb-3 flex items-center gap-2"><h3 id="upload-category-heading" className="text-sm font-medium">2. 视频分类</h3><span className="text-xs text-red-600">{categoryRequired?'必填':'暂无分类，可先上传'}</span></div>
           <div className="grid gap-3 sm:grid-cols-2">
             <label className="field"><span>一级分类</span><select className="input-select" value={parentCategoryId} disabled={hasStarted} onChange={event=>changeParent(event.target.value)}><option value="">请选择一级分类</option>{parents.map(parent=><option key={parent.id} value={parent.id}>{parent.name}</option>)}</select></label>
             <label className="field"><span>二级分类</span><select className="input-select" value={categoryId} disabled={!parentCategoryId||hasStarted} onChange={event=>changeCategory(event.target.value)}><option value="">请选择二级分类</option>{children.map(child=><option key={child.id} value={child.id}>{child.name}</option>)}</select></label>
@@ -286,7 +287,7 @@ export default function VideoUploadDialog({libraryType,assetKind='material',prod
 
       <footer className="flex shrink-0 flex-wrap items-center justify-between gap-3 border-t border-[var(--border)] bg-[var(--bg-elevated)] px-4 py-3 sm:px-6">
         <div className="text-xs text-[var(--muted)]">{uploading?`正在处理 ${overallPercent}%`:hasStarted?`成功 ${successCount} 条${failureCount?` · 失败 ${failureCount} 条`:''}`:`分类和标签将应用到本批全部视频`}</div>
-        <div className="flex items-center gap-2"><button type="button" className="btn-secondary" onClick={requestClose} disabled={busy}>{hasStarted?'关闭':'取消'}</button>{pendingAssignmentIds.length>0?<button type="button" className="btn-primary" disabled={busy} onClick={()=>void retryAssignment()}>{associating?<Loader2 className="animate-spin" size={15}/>:<RefreshCw size={15}/>}重试关联信息</button>:failureCount>0?<button type="button" className="btn-primary" disabled={busy} onClick={()=>void uploadTargets(failedItems)}>{uploading?<Loader2 className="animate-spin" size={15}/>:<RefreshCw size={15}/>}重试失败项</button>:uploadComplete?<button type="button" className="btn-primary" onClick={requestClose}><CheckCircle2 size={15}/>完成</button>:<button type="button" className="btn-primary" disabled={busy||!readyItems.length||!categoryId} onClick={()=>void uploadTargets(readyItems)}>{uploading?<Loader2 className="animate-spin" size={15}/>:<Upload size={15}/>}开始上传</button>}</div>
+        <div className="flex items-center gap-2"><button type="button" className="btn-secondary" onClick={requestClose} disabled={busy}>{hasStarted?'关闭':'取消'}</button>{pendingAssignmentIds.length>0?<button type="button" className="btn-primary" disabled={busy} onClick={()=>void retryAssignment()}>{associating?<Loader2 className="animate-spin" size={15}/>:<RefreshCw size={15}/>}重试关联信息</button>:failureCount>0?<button type="button" className="btn-primary" disabled={busy} onClick={()=>void uploadTargets(failedItems)}>{uploading?<Loader2 className="animate-spin" size={15}/>:<RefreshCw size={15}/>}重试失败项</button>:uploadComplete?<button type="button" className="btn-primary" onClick={requestClose}><CheckCircle2 size={15}/>完成</button>:<button type="button" className="btn-primary" disabled={busy||!readyItems.length||(categoryRequired&&!categoryId)} onClick={()=>void uploadTargets(readyItems)}>{uploading?<Loader2 className="animate-spin" size={15}/>:<Upload size={15}/>}开始上传</button>}</div>
       </footer>
     </div>
   </div>;

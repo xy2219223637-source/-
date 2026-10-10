@@ -11,7 +11,8 @@ from sqlalchemy.orm import Session
 
 from app.config import get_settings
 from app.models import (
-    VideoAsset, VideoRepairAttachment, VideoRepairJob, VideoRepairPreview, VideoRepairTask,
+    EcommerceProduct, EcommerceVideoAsset, VideoAsset, VideoRepairAttachment,
+    VideoRepairInput, VideoRepairJob, VideoRepairPreview, VideoRepairTask,
 )
 from app.services.video_analysis_queue import enqueue_video_analysis
 from app.services.video_repair.protocol_v4 import InvalidRepairPlan, build_plan, plan_hash
@@ -177,11 +178,20 @@ def accept_preview(db: Session, task: VideoRepairTask, preview_id: int,
     if plan_hash(task.repair_plan_json) != preview.plan_hash:
         raise _conflict("STALE_PREVIEW", "预览对应的方案已经变化")
     source = db.get(VideoAsset, task.source_asset_id)
+    repair_input = db.get(VideoRepairInput, task.input_id)
+    ecommerce_product_id = (repair_input.raw_payload_json or {}).get("ecommerce_product_id") if repair_input else None
+    ecommerce_product = None
+    if ecommerce_product_id is not None:
+        ecommerce_product = db.query(EcommerceProduct).filter_by(
+            id=ecommerce_product_id, tenant_id=task.tenant_id).first()
+        if not ecommerce_product:
+            raise _conflict("ECOMMERCE_PRODUCT_MISSING", "目标电商商品已不存在")
     output = VideoAsset(
         tenant_id=task.tenant_id, project_id=None, product_id=task.product_id,
         asset_id=f"asset-{uuid.uuid4().hex[:12]}",
         filename=f"{Path(source.filename).stem}-审核修复V2.mp4",
-        source="review_repair_v4_output", library_type="finished", asset_kind="final_output",
+        source="review_repair_v4_output", library_type="repair_only" if ecommerce_product else "finished",
+        asset_kind="final_output",
         generation_depth=source.generation_depth + 1,
         origin_asset_ids=list(dict.fromkeys((source.origin_asset_ids or []) + [source.asset_id])),
         reusable_status="review_required", burned_subtitles=source.burned_subtitles,
@@ -192,6 +202,18 @@ def accept_preview(db: Session, task: VideoRepairTask, preview_id: int,
     )
     db.add(output); db.flush()
     inherit_public_tags_to_final(db, output, [source], task.created_by)
+    if ecommerce_product:
+        from app.services.storage import get_storage
+        db.add(EcommerceVideoAsset(
+            tenant_id=task.tenant_id, product_id=ecommerce_product.id,
+            asset_id=f"asset-{uuid.uuid4().hex[:12]}", filename=output.filename,
+            source=f"video_repair_task:{task.id}", library_type="finished",
+            asset_kind="final_output", reusable_status="blocked",
+            object_url=preview.object_url, storage_provider=get_storage().name,
+            content_hash=preview.content_hash, duration_seconds=preview.duration_seconds,
+            width=preview.width, height=preview.height, fps=source.fps or 30,
+            has_audio=True, status="queued_for_analysis", excluded=False,
+        ))
     task.accepted_preview_id = preview.id
     task.output_asset_id = output.id
     task.completed_at = datetime.utcnow()

@@ -23,6 +23,7 @@ htmlcov/
 *.swp
 deploy/logs/
 backend/logs/
+backend/migration_backups/
 backups/
 output/
 backend/log/

@@ -75,6 +75,7 @@ class Settings(BaseSettings):
     director_asr_local_device: str = "auto"
     director_asr_local_compute_type: str = "int8"
     video_library_max_duration_seconds: float = 600.0
+    ecommerce_video_max_upload_mb: int = 300
     ark_api_key: str = ""
     ark_base_url: str = "https://ark.cn-beijing.volces.com/api/v3"
     ark_llm_model: str = ""
