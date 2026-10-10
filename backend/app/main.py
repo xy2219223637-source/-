@@ -83,7 +83,18 @@ app.include_router(video_lineage.router, prefix="/api")
 
 @app.on_event("startup")
 def on_startup() -> None:
-    init_db()
+    if settings.run_database_init:
+        init_db()
+    if settings.run_startup_recovery:
+        recover_startup_tasks()
+    if settings.run_background_workers:
+        start_worker()
+        start_video_analysis_worker()
+        start_refinement_worker()
+        start_qianchuan_worker()
+
+
+def recover_startup_tasks() -> None:
     db = SessionLocal()
     try:
         interrupted_batches = db.query(CreativeBatchJob).filter(CreativeBatchJob.status.in_(["pending", "running"])).all()
@@ -110,10 +121,6 @@ def on_startup() -> None:
         db.commit()
     finally:
         db.close()
-    start_worker()
-    start_video_analysis_worker()
-    start_refinement_worker()
-    start_qianchuan_worker()
 
 @app.on_event("shutdown")
 def on_shutdown() -> None:
