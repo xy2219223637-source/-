@@ -220,7 +220,29 @@ def _probe(path: Union[Path, str]) -> dict[str, Any]:
             "ffprobe", "-v", "error", "-show_streams", "-show_format", "-of", "json", str(path)
         ], capture_output=True, text=True, timeout=60, check=True)
         data = json.loads(result.stdout)
-    except (FileNotFoundError, subprocess.CalledProcessError, subprocess.TimeoutExpired, json.JSONDecodeError) as exc:
+    except FileNotFoundError:
+        try:
+            import imageio_ffmpeg
+
+            reader = imageio_ffmpeg.read_frames(str(path))
+            try:
+                metadata = next(reader)
+            finally:
+                reader.close()
+            ffmpeg = imageio_ffmpeg.get_ffmpeg_exe()
+            streams = subprocess.run(
+                [ffmpeg, "-hide_banner", "-i", str(path)],
+                capture_output=True, text=True, timeout=60,
+            ).stderr
+            size = metadata.get("size") or (0, 0)
+            return {"duration": float(metadata.get("duration") or 0),
+                    "width": int(size[0]), "height": int(size[1]),
+                    "fps": float(metadata.get("fps") or 0),
+                    "has_audio": any("Audio:" in line and "Stream #" in line for line in streams.splitlines())}
+        except (OSError, RuntimeError, ValueError, StopIteration, subprocess.TimeoutExpired) as exc:
+            label = path.name if isinstance(path, Path) else "OSS 视频"
+            raise HTTPException(422, f"无法读取视频：{label}，请确认文件有效") from exc
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired, json.JSONDecodeError) as exc:
         label = path.name if isinstance(path, Path) else "OSS 视频"
         raise HTTPException(422, f"无法读取视频：{label}，请确认 FFmpeg 已安装且文件有效") from exc
     video = next((s for s in data.get("streams", []) if s.get("codec_type") == "video"), None)

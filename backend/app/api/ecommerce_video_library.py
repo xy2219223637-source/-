@@ -426,27 +426,44 @@ async def upload_assets(product_id: int = Form(...), source: str = Form("manual_
     if asset_kind not in {"material", "final_output"} or library_type != "finished":
         raise HTTPException(422, "素材类型无效")
     if len(files) > 30: raise HTTPException(422, "单批最多上传 30 条视频")
+    max_bytes = get_settings().ecommerce_video_max_upload_mb * 1024 * 1024
+    if sum(file.size or 0 for file in files) > max_bytes:
+        raise HTTPException(413, f"单次上传不能超过 {get_settings().ecommerce_video_max_upload_mb} MB")
     result = []
+    received_bytes = 0
     for file in files:
-        raw = await file.read()
-        digest = hashlib.sha256(raw).hexdigest()
-        existing = db.query(EcommerceVideoAsset).filter(EcommerceVideoAsset.tenant_id == auth.tenant_id,
-            EcommerceVideoAsset.product_id == product.id, EcommerceVideoAsset.asset_kind == asset_kind,
-            EcommerceVideoAsset.content_hash == digest, EcommerceVideoAsset.library_type == library_type).first()
-        if existing:
-            result.append({**_serialize(db, existing, user_id=auth.user_id), "duplicate": True}); continue
-        suffix = Path(file.filename or "video.mp4").suffix or ".mp4"
-        with tempfile.NamedTemporaryFile(suffix=suffix) as temp:
-            temp.write(raw); temp.flush(); media = _probe(Path(temp.name))
-        max_duration = get_settings().video_library_max_duration_seconds
-        if media["duration"] > max_duration + .05: raise HTTPException(422, f"{file.filename} 超过 {max_duration / 60:g} 分钟限制")
-        storage = _tenant_video_storage(db, auth.tenant_id)
-        url = await storage.upload(raw, file.filename or "video.mp4", f"ecommerce-video-library/{product.id}/source")
+        filename = file.filename or "video.mp4"
+        suffix = Path(filename).suffix.lower()
+        if not (file.content_type or "").startswith("video/") and suffix not in {".mp4", ".mov", ".m4v", ".webm", ".mkv", ".avi"}:
+            raise HTTPException(415, "只支持视频文件")
+        digest = hashlib.sha256()
+        with tempfile.TemporaryDirectory(prefix="ecommerce-video-upload-") as directory:
+            path = Path(directory) / f"source{suffix or '.mp4'}"
+            with path.open("wb") as target:
+                while chunk := await file.read(1024 * 1024):
+                    received_bytes += len(chunk)
+                    if received_bytes > max_bytes:
+                        raise HTTPException(413, f"单次上传不能超过 {get_settings().ecommerce_video_max_upload_mb} MB")
+                    digest.update(chunk)
+                    target.write(chunk)
+            if path.stat().st_size == 0:
+                raise HTTPException(422, "视频文件不能为空")
+            content_hash = digest.hexdigest()
+            existing = db.query(EcommerceVideoAsset).filter(EcommerceVideoAsset.tenant_id == auth.tenant_id,
+                EcommerceVideoAsset.product_id == product.id, EcommerceVideoAsset.asset_kind == asset_kind,
+                EcommerceVideoAsset.content_hash == content_hash, EcommerceVideoAsset.library_type == library_type).first()
+            if existing:
+                result.append({**_serialize(db, existing, user_id=auth.user_id), "duplicate": True}); continue
+            media = _probe(path)
+            max_duration = get_settings().video_library_max_duration_seconds
+            if media["duration"] > max_duration + .05: raise HTTPException(422, f"{filename} 超过 {max_duration / 60:g} 分钟限制")
+            storage = _tenant_video_storage(db, auth.tenant_id)
+            url = await storage.upload_path(path, filename, f"ecommerce-video-library/{product.id}/source")
         asset = EcommerceVideoAsset(tenant_id=auth.tenant_id, product_id=product.id,
-            asset_id=f"asset-{uuid.uuid4().hex[:12]}", filename=file.filename or "video.mp4", source=source,
+            asset_id=f"asset-{uuid.uuid4().hex[:12]}", filename=filename, source=source,
             library_type=library_type, asset_kind=asset_kind,
             reusable_status="blocked" if asset_kind == "final_output" else "review_required",
-            object_url=url, storage_provider=storage.name, content_hash=digest,
+            object_url=url, storage_provider=storage.name, content_hash=content_hash,
             duration_seconds=media["duration"], width=media["width"], height=media["height"],
             fps=media["fps"], has_audio=media["has_audio"], status="queued_for_analysis", excluded=False)
         db.add(asset); db.commit(); db.refresh(asset); enqueue_video_analysis()
@@ -492,6 +509,7 @@ def update_reusable_status(asset_id: int, payload: ReusableStatusUpdate,
 def reanalyze(asset_id: int, db: Session = Depends(get_db), auth: AuthContext = Depends(current_auth)):
     asset = db.query(EcommerceVideoAsset).filter(EcommerceVideoAsset.id == asset_id, EcommerceVideoAsset.tenant_id == auth.tenant_id).first()
     if not asset: raise HTTPException(404, "素材不存在")
-    if asset.status == "analyzing": raise HTTPException(409, "素材正在分析")
+    if asset.status in {"queued_for_analysis", "analyzing"}:
+        return _serialize(db, asset, user_id=auth.user_id)
     asset.status = "queued_for_analysis"; db.commit(); enqueue_video_analysis()
     return _serialize(db, asset, user_id=auth.user_id)

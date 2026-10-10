@@ -11,6 +11,12 @@ class VideoRepairInputCreate(BaseModel):
     suggestions: list[str] = Field(default_factory=list, max_length=20)
 
 
+class VideoRepairTaskCreate(BaseModel):
+    source_asset_id: int = Field(gt=0)
+    ecommerce_product_id: int = Field(gt=0)
+    input: VideoRepairInputCreate
+
+
 class VideoRepairInputRead(BaseModel):
     id: int
     source_kind: str
@@ -41,6 +47,7 @@ class RepairTaskRead(BaseModel):
     repair_plan: dict[str, Any]
     selected_candidates: dict[str, str]
     output_asset_id: int | None
+    ecommerce_output_asset_id: int | None = None
     output_plan_version_id: int | None
     source_asset: dict[str, Any]
     output_asset: dict[str, Any] | None

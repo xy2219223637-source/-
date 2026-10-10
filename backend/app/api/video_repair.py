@@ -1,25 +1,30 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import tempfile
+import uuid
 from datetime import datetime
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
 from sqlalchemy.orm import Session
 
+from app.api.auto_edit import _probe
 from app.auth import AuthContext, current_auth
 from app.config import get_settings
 from app.database import get_db
-from app.models import VideoAsset, VideoAssetAnalysis, VideoRepairAttachment, VideoRepairJob, VideoRepairPreview, VideoRepairTask
+from app.models import EcommerceProduct, Product, Tenant, VideoAsset, VideoAssetAnalysis, VideoRepairAttachment, VideoRepairJob, VideoRepairPreview, VideoRepairTask
 from app.schemas.video_repair import (
     RepairTaskPage, RepairTaskRead,
-    PreviewAccept, TTSCreate, V4DraftUpdate,
+    PreviewAccept, TTSCreate, V4DraftUpdate, VideoRepairTaskCreate,
 )
-from app.services.storage import get_storage
+from app.services.storage import get_storage, get_video_storage
 from app.services.tts import synthesize_speech
+from app.services.video_analysis_queue import enqueue_video_analysis
+from app.services.video_repair.inputs import create_input
 from app.services.video_repair.service import (
-    owned_task, serialize_task,
+    create_v4_task, owned_task, serialize_task,
 )
 from app.services.video_repair.state_machine_v4 import transition
 from app.services.video_repair.v4_service import (
@@ -29,6 +34,111 @@ from app.services.video_repair.worker_v4 import wake_video_repair_worker
 
 
 router = APIRouter(tags=["视频修复"])
+
+
+def _repair_product(db: Session, tenant_id: str, ecommerce_product_id: int) -> Product:
+    ecommerce = db.query(EcommerceProduct).filter_by(
+        id=ecommerce_product_id, tenant_id=tenant_id).first()
+    if not ecommerce:
+        raise HTTPException(404, "电商商品不存在或无权访问")
+    marker = f"__ecommerce_repair_{ecommerce.id}__"
+    product = db.query(Product).filter_by(tenant_id=tenant_id, category=marker).first()
+    if not product:
+        product = Product(tenant_id=tenant_id, category=marker)
+        db.add(product)
+    for field in ("name", "description", "brand_name", "target_users", "ingredients",
+                  "usage_method", "specifications", "image_urls", "detail_image_urls"):
+        setattr(product, field, getattr(ecommerce, field))
+    product.price = ecommerce.price
+    db.flush()
+    return product
+
+
+async def _upload_repair_video(db: Session, auth: AuthContext, file: UploadFile,
+                               product_id: int, asset_kind: str) -> VideoAsset:
+    filename = Path(file.filename or "").name
+    suffix = Path(filename).suffix.lower()
+    if suffix not in {".mp4", ".mov", ".mkv", ".webm", ".m4v"}:
+        raise HTTPException(415, "请上传 MP4、MOV、MKV、WebM 或 M4V 视频")
+    limit = get_settings().director_video_max_upload_mb * 1024 * 1024
+    digest = hashlib.sha256()
+    with tempfile.TemporaryDirectory(prefix="repair-upload-") as directory:
+        path = Path(directory) / f"source{suffix}"
+        size = 0
+        with path.open("wb") as target:
+            while chunk := await file.read(1024 * 1024):
+                size += len(chunk)
+                if size > limit:
+                    raise HTTPException(413, f"视频不能超过 {get_settings().director_video_max_upload_mb} MB")
+                digest.update(chunk)
+                target.write(chunk)
+        if not size:
+            raise HTTPException(422, "视频文件不能为空")
+        media = _probe(path)
+        duration = float(media["duration"])
+        if duration <= 0 or duration > get_settings().video_library_max_duration_seconds + .05:
+            raise HTTPException(422, "视频时长无效或超出上传限制")
+        tenant = db.query(Tenant).filter_by(id=auth.tenant_id).first()
+        storage = get_video_storage(auth.tenant_id, tenant.code if tenant else "")
+        url = await storage.upload_path(path, filename, f"video-repair/{product_id}/{asset_kind}")
+    asset = VideoAsset(
+        tenant_id=auth.tenant_id, project_id=None, product_id=product_id,
+        asset_id=f"asset-{uuid.uuid4().hex[:12]}", filename=filename,
+        source="video_repair_upload", library_type="repair_only",
+        asset_kind=asset_kind, reusable_status="review_required", object_url=url,
+        storage_provider=storage.name, content_hash=digest.hexdigest(),
+        duration_seconds=duration, width=media["width"], height=media["height"],
+        fps=media["fps"], has_audio=media["has_audio"],
+        status="queued_for_analysis", excluded=False,
+    )
+    db.add(asset)
+    db.commit()
+    db.refresh(asset)
+    enqueue_video_analysis()
+    return asset
+
+
+@router.post("/video-repair-assets/upload", status_code=201)
+async def upload_repair_source(ecommerce_product_id: int = Form(...), file: UploadFile = File(...),
+                               db: Session = Depends(get_db), auth: AuthContext = Depends(current_auth)):
+    if not get_settings().video_repair_v4_enabled or not get_settings().video_repair_async_worker_enabled:
+        raise HTTPException(503, "返修分析工作台尚未启用")
+    product = _repair_product(db, auth.tenant_id, ecommerce_product_id)
+    asset = await _upload_repair_video(db, auth, file, product.id, "final_output")
+    return {"id": asset.id, "filename": asset.filename, "duration_seconds": asset.duration_seconds,
+            "product_id": product.id}
+
+
+@router.post("/video-repair-tasks", response_model=RepairTaskRead, status_code=201)
+def create_repair(payload: VideoRepairTaskCreate, db: Session = Depends(get_db),
+                  auth: AuthContext = Depends(current_auth)):
+    if not get_settings().video_repair_v4_enabled or not get_settings().video_repair_async_worker_enabled:
+        raise HTTPException(503, "返修分析工作台尚未启用")
+    product = _repair_product(db, auth.tenant_id, payload.ecommerce_product_id)
+    source = db.query(VideoAsset).filter_by(
+        id=payload.source_asset_id, tenant_id=auth.tenant_id, product_id=product.id,
+        asset_kind="final_output", source="video_repair_upload").first()
+    if not source:
+        raise HTTPException(422, "上传的视频与所选电商商品不匹配")
+    repair_input = create_input(
+        db, tenant_id=auth.tenant_id, user_id=auth.user_id,
+        source_asset_id=source.id, source_kind="MANUAL", audit_platform="INTERNAL",
+        raw_reason=payload.input.raw_reason, suggestions=payload.input.suggestions,
+        time_ranges=[], raw_payload={"ecommerce_product_id": payload.ecommerce_product_id},
+    )
+    task = create_v4_task(db, tenant_id=auth.tenant_id, user_id=auth.user_id,
+                          source_asset_id=source.id, input_id=repair_input.id)
+    return serialize_task(db, task)
+
+
+@router.post("/video-repair-tasks/{task_id}/materials/upload", status_code=201)
+async def upload_repair_material(task_id: int, file: UploadFile = File(...),
+                                 db: Session = Depends(get_db), auth: AuthContext = Depends(current_auth)):
+    task = _v4_task(db, auth, task_id)
+    if task.status in {"COMPLETED", "CANCELED"}:
+        raise HTTPException(409, "已结束任务不能上传素材")
+    asset = await _upload_repair_video(db, auth, file, task.product_id, "material")
+    return {"id": asset.id, "filename": asset.filename, "duration_seconds": asset.duration_seconds}
 
 
 @router.get("/video-repair-tasks", response_model=RepairTaskPage)

@@ -4,7 +4,7 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
-from app.models import Product, ProductAsset, ProductFact, VideoAsset, VideoAssetAnalysis
+from app.models import EcommerceProduct, EcommerceProductFact, Product, ProductAsset, ProductFact, VideoAsset, VideoAssetAnalysis
 from app.services.video_repair.analysis_normalization import normalize_analysis
 from app.services.video_repair.capabilities import REPAIR_CAPABILITIES
 from app.services.video_repair.time_extraction import prioritized_time_ranges
@@ -60,6 +60,13 @@ def build_ai_context(db: Session, *, repair_input: Any, source_asset: VideoAsset
         status="confirmed").all()
     product = db.query(Product).filter_by(
         tenant_id=source_asset.tenant_id, id=source_asset.product_id).first()
+    ecommerce_product_id = (repair_input.raw_payload_json or {}).get("ecommerce_product_id")
+    ecommerce_product = db.query(EcommerceProduct).filter_by(
+        tenant_id=source_asset.tenant_id, id=ecommerce_product_id).first() if ecommerce_product_id else None
+    if ecommerce_product:
+        facts = db.query(EcommerceProductFact).filter_by(
+            tenant_id=source_asset.tenant_id, product_id=ecommerce_product.id,
+            status="confirmed").all()
     reference_assets = []
     if product:
         reference_assets = db.query(ProductAsset).filter(
@@ -74,13 +81,14 @@ def build_ai_context(db: Session, *, repair_input: Any, source_asset: VideoAsset
         "description": row.description,
         "url": row.file_url,
     } for row in reference_assets]
-    if product and not reference_images:
+    display_product = ecommerce_product or product
+    if display_product and not reference_images:
         reference_images = [{
             "asset_id": None,
             "role": "product_image",
             "description": "商品管理主图",
             "url": url,
-        } for url in (product.image_urls or [])[:2]]
+        } for url in (display_product.image_urls or [])[:2]]
     return {
         "review": {
             "raw_reason": repair_input.raw_reason,
@@ -101,10 +109,10 @@ def build_ai_context(db: Session, *, repair_input: Any, source_asset: VideoAsset
         },
         "observations": _observations(analysis, max_keyframes),
         "product": {
-            "product_id": source_asset.product_id,
-            "name": product.name if product else "",
-            "brand_name": product.brand_name if product else "",
-            "category": product.category if product else "",
+            "product_id": display_product.id if display_product else source_asset.product_id,
+            "name": display_product.name if display_product else "",
+            "brand_name": display_product.brand_name if display_product else "",
+            "category": display_product.category if display_product else "",
             "known_facts": [{"key": row.fact_key, "label": row.label, "value": row.value}
                             for row in facts],
             "reference_images": reference_images,

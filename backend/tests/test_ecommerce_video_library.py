@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import asyncio
 import unittest
+from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from fastapi import FastAPI
@@ -41,9 +43,12 @@ class EcommerceVideoLibraryTests(unittest.TestCase):
 
         class Storage:
             name = "test"
+            uploaded_paths: list[Path] = []
 
-            async def upload(self, content, filename, subdir):
+            async def upload_path(self, path, filename, subdir):
                 assert subdir.startswith("ecommerce-video-library/")
+                assert path.read_bytes() == b"video-" + filename.encode()
+                self.uploaded_paths.append(path)
                 return f"/{subdir}/{filename}"
 
             async def begin_multipart(self, filename, subdir, content_type):
@@ -77,7 +82,23 @@ class EcommerceVideoLibraryTests(unittest.TestCase):
         material = upload("material.mp4", "material")
         final = upload("final.mp4", "final_output")
         assert material.status_code == final.status_code == 200, (material.text, final.text)
+        assert len(Storage.uploaded_paths) == 2
+        assert all(not path.exists() for path in Storage.uploaded_paths)
+        with patch.object(ecommerce_video_library, "get_settings", return_value=SimpleNamespace(ecommerce_video_max_upload_mb=1)):
+            oversized = client.post("/api/ecommerce-video-assets", data={"product_id": str(product_id), "asset_kind": "material"},
+                files={"files": ("large.mp4", b"x" * (1024 * 1024 + 1), "video/mp4")})
+        assert oversized.status_code == 413
+        assert len(Storage.uploaded_paths) == 2
         material_id, final_id = material.json()[0]["id"], final.json()[0]["id"]
+        assert client.post(f"/api/ecommerce-video-assets/{material_id}/reanalyze").json()["status"] == "queued_for_analysis"
+        with Session(engine) as db:
+            db.get(EcommerceVideoAsset, material_id).status = "analyzing"
+            db.commit()
+        running = client.post(f"/api/ecommerce-video-assets/{material_id}/reanalyze")
+        assert running.status_code == 200 and running.json()["status"] == "analyzing"
+        with Session(engine) as db:
+            db.get(EcommerceVideoAsset, material_id).status = "queued_for_analysis"
+            db.commit()
         assert [row["id"] for row in client.get("/api/ecommerce-video-assets", params={"product_id": product_id, "asset_kind": "material"}).json()] == [material_id]
         assert [row["id"] for row in client.get("/api/ecommerce-video-assets", params={"product_id": product_id, "asset_kind": "final_output"}).json()] == [final_id]
         assert client.get(f"/api/ecommerce-video-assets/{final_id}").json()["asset_kind"] == "final_output"

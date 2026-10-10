@@ -99,6 +99,15 @@ export default function VideoRepairWorkbenchV4({initialTask}: {initialTask: Vide
     catch (reason) { setError(message(reason)); }
     finally { setBusy(''); }
   }
+  async function uploadMaterial(file: File) {
+    setBusy('material'); setError('');
+    try {
+      const uploaded=await videoRepairApi.uploadMaterial(task.id,file);
+      setMaterials(await videoRepairApi.materials(task.id));
+      setMaterialId(String(uploaded.id));setTrimStart('0');
+    } catch (reason) { setError(message(reason)); }
+    finally { setBusy(''); }
+  }
   async function makeTts() {
     if (!tts.trim()) return;
     setBusy('tts'); setError('');
@@ -192,12 +201,13 @@ export default function VideoRepairWorkbenchV4({initialTask}: {initialTask: Vide
     <section className="rounded border bg-white p-4"><h3 className="text-sm font-semibold">1. 人工审核 AI 方案</h3><label className="field mt-3 max-w-xl"><span>审核决定</span><select aria-label="人工审核决定" className="input-select" value={decision} onChange={e => setDecision(e.target.value as Decision)}><option value="">请选择</option><option value="ACCEPT_AI">接受 AI 方案</option><option value="REANALYZE">要求 AI 重新分析</option></select></label>
       {decision === 'ACCEPT_AI' && <div className="mt-4 rounded bg-emerald-50 p-4"><p className="text-sm">将按上方 AI 提案保存方案并生成真实视频预览。</p>
         {needsVisualMaterial && <div className="mt-3 rounded border border-emerald-200 bg-white p-3 space-y-3">
-          <p className="text-sm font-semibold">从当前商品素材库选择画面</p>
+          <p className="text-sm font-semibold">选择或上传替换画面</p>
+          <label className="btn-secondary inline-flex cursor-pointer"><Upload size={14}/>{busy==='material'?'上传中':'手动上传替换视频'}<input className="hidden" type="file" accept=".mp4,.mov,.mkv,.webm,.m4v,video/*" disabled={!!busy} onChange={e=>e.target.files?.[0]&&uploadMaterial(e.target.files[0])}/></label>
           {!!diagnosis.material_candidates?.length&&<div className="space-y-2"><p className="text-xs font-medium">AI 候选片段（请预览确认）</p>{diagnosis.material_candidates.slice(0,3).map((candidate,index)=><button type="button" key={String(candidate.id||index)} className="block w-full rounded border border-[var(--border)] p-2 text-left text-xs hover:bg-emerald-50" onClick={()=>{setMaterialId(String(candidate.source_asset_id));setTrimStart(String(candidate.source_range?.start||0))}}><b>{candidate.description}</b><span className="ml-2 text-[var(--muted)]">{Number(candidate.source_range?.start||0).toFixed(1)}–{Number(candidate.source_range?.end||0).toFixed(1)} 秒</span><p className="mt-1">{candidate.reasons?.join('；')||'请核对是否匹配审核问题'}</p>{candidate.warnings?.map((warning:string)=><p key={warning} className="text-amber-700">{warning}</p>)}</button>)}</div>}
           <label className="field"><span>视频素材</span><select aria-label="选择返修素材" className="input-select" value={materialId} onChange={e=>{setMaterialId(e.target.value);setTrimStart('0')}}><option value="">请选择素材</option>{materials.filter(row=>row.asset_kind==='material'&&row.duration_seconds>0).map(row=><option key={row.id} value={row.id}>{row.filename} · {row.duration_seconds.toFixed(1)} 秒</option>)}</select></label>
           {selectedMaterial&&<><video ref={materialPreview} controls preload="metadata" src={mediaUrl(selectedMaterial.object_url)} className="w-full max-w-lg aspect-video bg-black"/><label className="field max-w-xs"><span>从素材第几秒开始截取</span><input aria-label="素材截取起点" className="input" type="number" min={0} max={Math.max(0,selectedMaterial.duration_seconds-requiredVisualSeconds)} step="0.1" value={trimStart} onChange={e=>setTrimStart(e.target.value)}/></label><p className="text-xs text-[var(--muted)]">将截取 {requiredVisualSeconds.toFixed(1)} 秒；请人工核对画面和声音。只有分析确认口播完整时才会提供沿用原声选项。</p></>}
           {materialsLoading&&<p className="text-sm text-sky-800">正在读取素材视频时长，首次使用可能需要从云端下载。</p>}
-          {!materialsLoading&&!materials.length&&<p className="text-sm text-amber-800">当前商品暂无可读取的视频素材。请先去商品素材库上传视频，再刷新本页。</p>}
+          {!materialsLoading&&!materials.some(row=>row.asset_kind==='material')&&<p className="text-sm text-amber-800">还没有可用的替换视频，请在这里手动上传。</p>}
           {selectedMaterial&&!validTrim&&<p className="text-sm text-rose-700">所选视频时长不足或截取起点超出范围。</p>}
         </div>}
         {proposed?.visual && <div className="mt-3 rounded border border-emerald-200 bg-white p-3"><p className="text-xs font-semibold text-emerald-800">AI 已从素材库找到画面</p><p className="mt-1 text-sm">{selectedMaterial?.description || selectedMaterial?.summary || selectedMaterial?.filename || '推荐画面正在载入'}</p><p className="mt-1 text-xs text-[var(--muted)]">画面由 AI 选择；{needsInsertPosition ? '审核意见没有时间点，请确认插入位置。' : canUseOriginalAudio ? '默认沿用素材原声，也可在下方替换。' : '如需口播，请在下方补充音频。'}</p></div>}
@@ -209,6 +219,6 @@ export default function VideoRepairWorkbenchV4({initialTask}: {initialTask: Vide
     </section>
     <section className="rounded border bg-white p-4"><h3 className="text-sm font-semibold">2. 视频预览与人工确认</h3><div className="mt-3 rounded bg-slate-50 p-3"><p className="text-sm font-medium">本次预览会发生什么</p><p className="mt-1 text-sm">{summary}</p>{displayType && <p className="mt-1 text-xs text-[var(--muted)]">动作：{actionLabels[displayType] || displayType}</p>}</div>{latest ? <div className="mt-4"><p className="text-xs">预览 #{latest.id} · {latest.status} · 草稿修订 {latest.draft_revision}</p>{latest.object_url && <div className="mt-3 grid gap-4 lg:grid-cols-2"><div><p className="mb-2 text-xs font-semibold">原始 V1</p><video className="aspect-video w-full bg-black object-contain" controls src={mediaUrl(task.source_asset.object_url)}/></div><div><p className="mb-2 text-xs font-semibold">修复预览</p><video aria-label="修复后预览" className="aspect-video w-full bg-black object-contain" controls src={mediaUrl(latest.object_url)}/></div></div>}{latest.error_message && <p className="mt-2 text-sm text-rose-700">{latest.error_message}</p>}<div className="mt-3 flex flex-wrap gap-2">{latest.status === 'FAILED' && <button className="btn-secondary" disabled={!!busy} onClick={retryPreview}>重试预览</button>}{latest.status === 'READY' && <button className="primary" disabled={!!busy} onClick={accept}>{busy === 'accept' ? <Loader2 size={14} className="animate-spin"/> : <CheckCircle2 size={14}/>}确认预览并生成 V2</button>}</div></div> : <p className="mt-3 text-xs text-[var(--muted)]">审核 AI 方案并生成后，这里会展示原片与真实渲染结果。</p>}</section>
     {active && <p className="rounded bg-sky-50 p-3 text-sm text-sky-800"><Loader2 className="mr-2 inline animate-spin" size={15}/>后台任务进行中，页面会自动刷新。</p>}{task.error_message && <p className="rounded bg-rose-50 p-3 text-sm text-rose-800">{task.error_message}</p>}{error && <p role="alert" className="rounded bg-rose-50 p-3 text-sm text-rose-800">{error}</p>}
-    {task.output_asset && <section className="rounded border border-emerald-300 bg-white p-4"><h3 className="text-sm font-semibold text-emerald-900">新成片 V2</h3><video className="mt-3 aspect-video w-full max-w-3xl bg-black object-contain" controls src={mediaUrl(task.output_asset.object_url)}/><Link className="primary mt-3" to={`/final-videos/${task.output_asset.id}`}>查看 V2 详情</Link></section>}
+    {task.output_asset && <section className="rounded border border-emerald-300 bg-white p-4"><h3 className="text-sm font-semibold text-emerald-900">新成片 V2</h3><video className="mt-3 aspect-video w-full max-w-3xl bg-black object-contain" controls src={mediaUrl(task.output_asset.object_url)}/>{task.ecommerce_output_asset_id?<Link className="primary mt-3" to={`/ecommerce-final-videos/${task.ecommerce_output_asset_id}`}>在电商成品库查看 V2</Link>:<Link className="primary mt-3" to={`/final-videos/${task.output_asset.id}`}>查看 V2 详情</Link>}</section>}
   </section>;
 }

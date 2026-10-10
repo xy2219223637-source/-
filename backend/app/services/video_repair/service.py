@@ -8,7 +8,7 @@ from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
 from app.models import (
-    EditingPlanVersion, VideoAsset, VideoLineageSegment, VideoRepairInput, VideoRepairJob,
+    EditingPlanVersion, EcommerceVideoAsset, VideoAsset, VideoLineageSegment, VideoRepairInput, VideoRepairJob,
     VideoRepairPreview, VideoRepairTask,
 )
 from app.services.video_repair.candidates import (
@@ -78,6 +78,8 @@ def serialize_task(db: Session, row: VideoRepairTask) -> dict[str, Any]:
             "code": "REPAIR_INPUT_MISSING", "message": "修复任务缺少输入快照",
             "field": None, "retryable": False,
         })
+    ecommerce_output = db.query(EcommerceVideoAsset).filter_by(
+        tenant_id=row.tenant_id, source=f"video_repair_task:{row.id}").first()
     asset_json = lambda asset: ({
         "id": asset.id, "asset_id": asset.asset_id, "filename": asset.filename,
         "object_url": asset.object_url, "duration_seconds": asset.duration_seconds,
@@ -113,6 +115,7 @@ def serialize_task(db: Session, row: VideoRepairTask) -> dict[str, Any]:
         "diagnosis": row.diagnosis_json or {}, "repair_plan": row.repair_plan_json or {},
         "selected_candidates": row.selected_candidates_json or {},
         "output_asset_id": row.output_asset_id,
+        "ecommerce_output_asset_id": ecommerce_output.id if ecommerce_output else None,
         "output_plan_version_id": row.output_plan_version_id,
         "source_asset": asset_json(source), "output_asset": asset_json(output),
         "error_code": row.error_code, "error_message": row.error_message,
