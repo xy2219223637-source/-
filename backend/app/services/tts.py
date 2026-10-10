@@ -15,18 +15,19 @@ TTS_ENDPOINT = "https://openspeech.bytedance.com/api/v3/tts/unidirectional"
 
 def synthesize_speech(text: str, output: Path, speaker: Optional[str] = None, *, timing_output: Optional[dict] = None, parameters: Optional[dict] = None) -> Path:
     settings = get_settings()
-    if not settings.doubao_tts_api_key and not (settings.doubao_tts_app_id and settings.doubao_tts_access_token):
-        raise ValueError("请在 backend/.env 配置 DOUBAO_TTS_API_KEY, 或 DOUBAO_TTS_APP_ID 与 DOUBAO_TTS_ACCESS_TOKEN")
+
+    if not settings.doubao_tts_api_key:
+        raise RuntimeError("豆包 TTS API Key 未配置")
+
     request_id = str(uuid.uuid4())
     headers = {
         "Content-Type": "application/json",
-        "X-Api-Resource-Id": (parameters or {}).get("resource_id", settings.doubao_tts_resource_id),
+        "X-Api-Key": settings.doubao_tts_api_key,
+        "X-Api-Resource-Id": (parameters or {}).get(
+            "resource_id", settings.doubao_tts_resource_id
+        ),
         "X-Api-Request-Id": request_id,
     }
-    if settings.doubao_tts_api_key:
-        headers["X-Api-Key"] = settings.doubao_tts_api_key
-    else:
-        headers.update({"X-Api-App-Id":settings.doubao_tts_app_id,"X-Api-Access-Key":settings.doubao_tts_access_token})
     payload = {"user": {"uid": "enrui-auto-edit"}, "req_params": {
         "text": text, "speaker": speaker or settings.doubao_tts_speaker,
         "audio_params": {"format": "mp3", "sample_rate": 24000, "speech_rate": (parameters or {}).get("speech_rate", 0),

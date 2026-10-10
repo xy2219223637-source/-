@@ -9,6 +9,7 @@ from sqlalchemy import func, or_, union_all
 from sqlalchemy.orm import Session
 
 from app.models import VideoAsset, VideoLineageSegment
+from app.services.video_editing.plan_normalization import tracks_are_source_synced
 
 
 def reference_counts(db: Session, tenant_id: str, asset_ids: list[int]) -> dict[int, int]:
@@ -39,7 +40,9 @@ def record_render_lineage(db: Session, target: VideoAsset, variant: dict[str, An
     if db.query(VideoLineageSegment.id).filter_by(target_asset_id=target.id).first():
         raise ValueError("成片来源记录已存在, 不允许覆盖")
     mode = variant.get("edit_mode")
-    clips = variant.get("narrative_segments" if mode in {"finished_remix", "manual_compose"} else "video_track") or []
+    source_synced = tracks_are_source_synced(variant)
+    coupled_render = mode in {"finished_remix", "manual_compose"} and source_synced
+    clips = variant.get("narrative_segments" if coupled_render else "video_track") or []
     if not clips:
         raise ValueError("缺少画面来源记录")
     asset_map = {asset.asset_id: asset for asset in assets}
@@ -55,7 +58,7 @@ def record_render_lineage(db: Session, target: VideoAsset, variant: dict[str, An
             raise ValueError("来源片段时间无效")
         duration = end - start
         # Manual composition renders whole files from zero; the other modes trim sources.
-        if mode == "manual_compose":
+        if mode == "manual_compose" and coupled_render:
             start, end = 0.0, duration
         if end > source.duration_seconds + .05:
             raise ValueError("来源片段超出素材时长")

@@ -29,6 +29,11 @@ from app.services.tts import synthesize_speech
 from app.services.llm import LLMClient
 from app.services.video_analysis_queue import enqueue_video_analysis
 from app.services.video_taxonomy import inherit_public_tags_to_final
+from app.services.video_editing.renderer import (
+    finished_clip_ffmpeg_command as shared_finished_clip_ffmpeg_command,
+    manual_clip_ffmpeg_command as shared_manual_clip_ffmpeg_command,
+    render_variant as render_editing_variant,
+)
 
 router = APIRouter(prefix="/auto-edit-projects", tags=["auto-edit"])
 logger = logging.getLogger(__name__)
@@ -81,11 +86,15 @@ def asset_eligible_for_project(asset: Any, tenant_id: str, product_id: int, edit
         return False
     if getattr(asset, "product_id", None) != product_id:
         return False
-    if getattr(asset, "status", None) != "analyzed" or getattr(asset, "excluded", False):
+    if getattr(asset, "excluded", False):
         return False
     if getattr(asset, "library_type", None) != library_type_for_edit_mode(edit_mode):
         return False
     if getattr(asset, "asset_kind", "material") != "material":
+        return False
+    if edit_mode == "manual_compose":
+        return True
+    if getattr(asset, "status", None) != "analyzed":
         return False
     if edit_mode == "smart_compose":
         return True
@@ -118,11 +127,12 @@ def _eligible_assets_query(db: Session, tenant_id: str, edit_mode: str, product_
                            project_id: Optional[int] = None):
     query = db.query(VideoAsset).filter(
         VideoAsset.tenant_id == tenant_id,
-        VideoAsset.status == "analyzed",
         VideoAsset.excluded.is_(False),
         VideoAsset.library_type == library_type_for_edit_mode(edit_mode),
         VideoAsset.asset_kind == "material",
     )
+    if edit_mode != "manual_compose":
+        query = query.filter(VideoAsset.status == "analyzed")
     if product_id is not None:
         query = query.filter(VideoAsset.product_id == product_id)
     if project_id is not None:
@@ -131,9 +141,24 @@ def _eligible_assets_query(db: Session, tenant_id: str, edit_mode: str, product_
             VideoEditProjectAsset.included.is_(True),
             VideoEditProjectAsset.tenant_id == tenant_id,
         )
-    if edit_mode in {"finished_remix", "manual_compose"}:
+    if edit_mode == "finished_remix":
         query = query.filter(VideoAsset.reusable_status == "reusable", VideoAsset.generation_depth <= 1)
     return query
+
+
+def _ensure_manual_asset_metadata(asset: VideoAsset) -> None:
+    """Load only technical media metadata; manual compose does not require AI analysis."""
+    if float(asset.duration_seconds or 0) > 0 and int(asset.width or 0) > 0 and int(asset.height or 0) > 0:
+        return
+    source = get_storage_for_url(asset.object_url).local_path(asset.object_url)
+    if not source:
+        raise HTTPException(422, f"无法读取素材 {asset.filename}")
+    media = _probe(source)
+    asset.duration_seconds = media["duration"]
+    asset.width = media["width"]
+    asset.height = media["height"]
+    asset.fps = media["fps"]
+    asset.has_audio = media["has_audio"]
 
 
 def _starts_with_dangling_anaphor(text: str) -> bool:
@@ -195,7 +220,29 @@ def _probe(path: Union[Path, str]) -> dict[str, Any]:
             "ffprobe", "-v", "error", "-show_streams", "-show_format", "-of", "json", str(path)
         ], capture_output=True, text=True, timeout=60, check=True)
         data = json.loads(result.stdout)
-    except (FileNotFoundError, subprocess.CalledProcessError, subprocess.TimeoutExpired, json.JSONDecodeError) as exc:
+    except FileNotFoundError:
+        try:
+            import imageio_ffmpeg
+
+            reader = imageio_ffmpeg.read_frames(str(path))
+            try:
+                metadata = next(reader)
+            finally:
+                reader.close()
+            ffmpeg = imageio_ffmpeg.get_ffmpeg_exe()
+            streams = subprocess.run(
+                [ffmpeg, "-hide_banner", "-i", str(path)],
+                capture_output=True, text=True, timeout=60,
+            ).stderr
+            size = metadata.get("size") or (0, 0)
+            return {"duration": float(metadata.get("duration") or 0),
+                    "width": int(size[0]), "height": int(size[1]),
+                    "fps": float(metadata.get("fps") or 0),
+                    "has_audio": any("Audio:" in line and "Stream #" in line for line in streams.splitlines())}
+        except (OSError, RuntimeError, ValueError, StopIteration, subprocess.TimeoutExpired) as exc:
+            label = path.name if isinstance(path, Path) else "OSS 视频"
+            raise HTTPException(422, f"无法读取视频：{label}，请确认文件有效") from exc
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired, json.JSONDecodeError) as exc:
         label = path.name if isinstance(path, Path) else "OSS 视频"
         raise HTTPException(422, f"无法读取视频：{label}，请确认 FFmpeg 已安装且文件有效") from exc
     video = next((s for s in data.get("streams", []) if s.get("codec_type") == "video"), None)
@@ -316,7 +363,9 @@ def save_manual_plan(project_id: int, payload: ManualPlanUpdate,
     asset_map = {asset.asset_id: asset for asset in assets}
     missing = [asset_id for asset_id in public_ids if asset_id not in asset_map]
     if missing:
-        raise HTTPException(422, "部分素材不存在、尚未分析完成或不可使用")
+        raise HTTPException(422, "部分素材不存在或不可使用")
+    for asset_id in public_ids:
+        _ensure_manual_asset_metadata(asset_map[asset_id])
     project.structure = [section.model_dump() for section in payload.sections]
     project.target_duration_seconds = max(1, round(sum(asset_map[asset_id].duration_seconds for asset_id in public_ids)))
     project.status = "ready_to_render" if public_ids else "draft"
@@ -357,9 +406,10 @@ def _manual_plan(project: VideoEditProject, assets: list[VideoAsset]) -> dict[st
             cursor += duration
     if not clips:
         raise HTTPException(409, "请先为至少一个段落选择素材")
+    from app.services.video_editing.plan_normalization import video_track_from_narrative
     return {"variant_id": "V1", "name": "人工编排成片", "edit_mode": "manual_compose",
             "target_duration_seconds": cursor, "actual_duration_seconds": cursor,
-            "narrative_segments": clips, "video_track": [],
+            "narrative_segments": clips, "video_track": video_track_from_narrative(clips),
             "structure_snapshot": project.structure}
 
 
@@ -1155,27 +1205,12 @@ async def generate_plan(project_id: int, db: Session = Depends(get_db), auth: Au
 
 def finished_clip_ffmpeg_command(source: Union[Path, str], start: float, duration: float,
                                  output: Union[Path, str], width: int, height: int) -> list[str]:
-    return [
-        "ffmpeg", "-y", "-ss", str(start), "-t", str(duration), "-i", str(source),
-        "-vf", f"scale={width}:{height}:force_original_aspect_ratio=increase,crop={width}:{height},fps=30,format=yuv420p",
-        "-c:v", "libx264", "-preset", "veryfast", "-crf", "22",
-        "-c:a", "aac", "-ar", "48000", "-ac", "2",
-        "-af", "loudnorm=I=-16:LRA=7:TP=-1.5,aresample=async=1:first_pts=0",
-        "-movflags", "+faststart", str(output),
-    ]
+    return shared_finished_clip_ffmpeg_command(source, start, duration, output, width, height)
 
 
 def manual_clip_ffmpeg_command(source: Union[Path, str], duration: float, output: Union[Path, str],
                                width: int, height: int, has_audio: bool) -> list[str]:
-    command = ["ffmpeg", "-y", "-i", str(source)]
-    if not has_audio:
-        command += ["-f", "lavfi", "-t", str(duration), "-i", "anullsrc=r=48000:cl=stereo"]
-    command += ["-map", "0:v:0", "-map", "0:a:0" if has_audio else "1:a:0",
-        "-vf", f"scale={width}:{height}:force_original_aspect_ratio=increase,crop={width}:{height},fps=30,format=yuv420p",
-        "-c:v", "libx264", "-preset", "veryfast", "-crf", "22", "-c:a", "aac", "-ar", "48000", "-ac", "2",
-        "-af", "loudnorm=I=-16:LRA=7:TP=-1.5,aresample=async=1:first_pts=0",
-        "-t", str(duration), "-movflags", "+faststart", str(output)]
-    return command
+    return shared_manual_clip_ffmpeg_command(source, duration, output, width, height, has_audio)
 
 
 def remix_render_uses_system_captions(edit_mode: str) -> bool:
@@ -1187,97 +1222,8 @@ def remix_render_adds_public_bgm(edit_mode: str) -> bool:
 
 
 def _render_variant(plan: dict[str, Any], assets: list[VideoAsset], output: Path, aspect_ratio: str) -> float:
-    asset_map = {a.asset_id: a for a in assets}
-    storage = get_storage()
-    width, height = {"9:16": (1080, 1920), "16:9": (1920, 1080), "1:1": (1080, 1080)}[aspect_ratio]
-    edit_mode = str(plan.get("edit_mode") or "")
-    if edit_mode in {"finished_remix", "manual_compose"}:
-        av_segments: list[Path] = []
-        for index, clip in enumerate(plan["narrative_segments"]):
-            asset = asset_map[clip["asset_id"]]
-            source = get_storage_for_url(asset.object_url).local_path(asset.object_url)
-            if not source:
-                raise RuntimeError(f"无法下载素材 {asset.filename}")
-            if edit_mode == "finished_remix" and not asset.has_audio:
-                raise RuntimeError(f"成品片段缺少完整音轨：{asset.filename}")
-            start, end = clip["source_range"]["start"], clip["source_range"]["end"]
-            segment = output.parent / f"av-{index:03d}.mp4"
-            av_segments.append(segment)
-            command = (finished_clip_ffmpeg_command(source, start, end - start, segment, width, height)
-                       if edit_mode == "finished_remix"
-                       else manual_clip_ffmpeg_command(source, end - start, segment, width, height, asset.has_audio))
-            subprocess.run(
-                command,
-                capture_output=True, text=True, timeout=300, check=True,
-            )
-        concat_list = output.parent / "av-concat.txt"
-        concat_list.write_text("\n".join(f"file '{path.as_posix()}'" for path in av_segments), encoding="utf-8")
-        subprocess.run(
-            ["ffmpeg", "-y", "-f", "concat", "-safe", "0", "-i", str(concat_list),
-             "-c", "copy", "-movflags", "+faststart", str(output)],
-            capture_output=True, text=True, timeout=600, check=True,
-        )
-        return float(plan["actual_duration_seconds"])
-    video_segments: list[Path] = []; audio_segments: list[Path] = []
-    for index, clip in enumerate(plan["video_track"]):
-        asset = asset_map[clip["asset_id"]]
-        source = get_storage_for_url(asset.object_url).local_path(asset.object_url)
-        if not source: raise RuntimeError(f"无法下载素材 {asset.filename}")
-        start, end = clip["source_range"]["start"], clip["source_range"]["end"]
-        duration = end - start
-        segment = output.parent / f"video-{index:03d}.mp4"; video_segments.append(segment)
-        command = ["ffmpeg", "-y", "-ss", str(start), "-t", str(duration), "-i", str(source), "-an",
-            "-vf", f"scale={width}:{height}:force_original_aspect_ratio=increase,crop={width}:{height},fps=30,format=yuv420p",
-            "-c:v", "libx264", "-preset", "veryfast", "-crf", "22", "-movflags", "+faststart", str(segment)]
-        subprocess.run(command, capture_output=True, text=True, timeout=300, check=True)
-    for index, clip in enumerate(plan["narrative_segments"]):
-        if clip.get("audio_strategy") == "ai_voiceover":
-            source = storage.local_path(clip["audio_url"])
-            if not source: raise RuntimeError("无法下载 AI 配音")
-            start, end = 0.0, float(clip["duration_seconds"])
-        else:
-            asset = asset_map[clip["asset_id"]]
-            if not asset.has_audio: raise RuntimeError(f"原声片段缺少音轨：{asset.filename}")
-            source = get_storage_for_url(asset.object_url).local_path(asset.object_url)
-            start, end = clip["source_range"]["start"], clip["source_range"]["end"]
-        segment = output.parent / f"audio-{index:03d}.wav"; audio_segments.append(segment)
-        subprocess.run(["ffmpeg", "-y", "-ss", str(start), "-t", str(end-start), "-i", str(source), "-vn",
-            "-af", "loudnorm=I=-16:LRA=7:TP=-1.5,aresample=async=1:first_pts=0", "-c:a", "pcm_s16le", "-ar", "48000", "-ac", "2", str(segment)],
-            capture_output=True, text=True, timeout=300, check=True)
-    video_list = output.parent / "video-concat.txt"; audio_list = output.parent / "audio-concat.txt"
-    video_list.write_text("\n".join(f"file '{p.as_posix()}'" for p in video_segments), encoding="utf-8")
-    audio_list.write_text("\n".join(f"file '{p.as_posix()}'" for p in audio_segments), encoding="utf-8")
-    video_joined = output.parent / "video-track.mp4"; audio_joined = output.parent / "narrative.wav"
-    subprocess.run(["ffmpeg", "-y", "-f", "concat", "-safe", "0", "-i", str(video_list), "-c", "copy", str(video_joined)], capture_output=True, text=True, timeout=600, check=True)
-    subprocess.run(["ffmpeg", "-y", "-f", "concat", "-safe", "0", "-i", str(audio_list), "-c", "copy", str(audio_joined)], capture_output=True, text=True, timeout=600, check=True)
-    # A restrained, license-free ambient bed. It is ducked under speech in the final mix.
-    bgm = output.parent / "background-music.wav"
-    duration = float(plan["actual_duration_seconds"])
-    bgm_source = (
-        f"aevalsrc=0.08*sin(2*PI*220*t)+0.055*sin(2*PI*277.18*t)+"
-        f"0.04*sin(2*PI*329.63*t):s=48000:d={duration:.3f}"
-    )
-    subprocess.run(["ffmpeg", "-y", "-f", "lavfi", "-i", bgm_source,
-                    "-af", "lowpass=f=900,afade=t=in:st=0:d=1.5,afade=t=out:st=" + str(max(0.0, duration-2)) + ":d=2",
-                    "-c:a", "pcm_s16le", "-ar", "48000", "-ac", "2", str(bgm)],
-                   capture_output=True, text=True, timeout=120, check=True)
-    command = ["ffmpeg", "-y", "-i", str(video_joined), "-i", str(audio_joined), "-i", str(bgm)]
-    captions = _write_caption_images(plan["narrative_segments"], output.parent, width, height)
-    filters = ["[2:a][1:a]sidechaincompress=threshold=0.025:ratio=10:attack=15:release=450[ducked]",
-               "[ducked]volume=0.16[bed]", "[1:a][bed]amix=inputs=2:duration=first:dropout_transition=2[aout]"]
-    if captions:
-        for path, _, _ in captions: command += ["-i", str(path)]
-        current = "[0:v]"
-        for index, (_, start, end) in enumerate(captions):
-            target = f"[caption{index}]"
-            filters.append(f"{current}[{index+3}:v]overlay=0:0:enable='between(t,{start:.3f},{end:.3f})'{target}")
-            current = target
-        command += ["-filter_complex", ";".join(filters), "-map", current, "-map", "[aout]", "-c:v", "libx264", "-preset", "veryfast", "-crf", "22", "-c:a", "aac", "-b:a", "192k"]
-    else:
-        command += ["-filter_complex", ";".join(filters), "-map", "0:v:0", "-map", "[aout]", "-c:v", "copy", "-c:a", "aac", "-b:a", "192k"]
-    command += ["-shortest", "-movflags", "+faststart", str(output)]
-    subprocess.run(command, capture_output=True, text=True, timeout=600, check=True)
-    return float(plan["actual_duration_seconds"])
+    """Compatibility facade; rendering now lives in the shared editing service."""
+    return render_editing_variant(plan, assets, output, aspect_ratio)
 
 
 @router.post("/{project_id}/render")

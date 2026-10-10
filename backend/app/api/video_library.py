@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
-import json
 import subprocess
 import tempfile
 import uuid
@@ -184,6 +183,11 @@ def _extract_frames(source: Path, duration: float, target: Path) -> list[Path]:
     return sorted(target.glob("frame-*.jpg"))
 
 
+def _is_finished_for_analysis(asset: VideoAsset) -> bool:
+    return asset.library_type == "finished" or (
+        asset.source == "video_repair_upload" and asset.asset_kind == "final_output")
+
+
 def _normalize_analysis(asset: VideoAsset, result: dict[str, Any], transcript: Optional[dict[str, Any]] = None) -> dict[str, Any]:
     highlights = []
     words = (transcript or {}).get("words", [])
@@ -196,7 +200,7 @@ def _normalize_analysis(asset: VideoAsset, result: dict[str, Any], transcript: O
         start, end = max(0.0, start), min(asset.duration_seconds, end)
         if end - start < .4:
             continue
-        spans = _split_finished_span(start, end, words) if asset.library_type == "finished" else [(start, end)]
+        spans = _split_finished_span(start, end, words) if _is_finished_for_analysis(asset) else [(start, end)]
         roles = item.get("recommended_positions") or item.get("recommended_roles") or ["core_content"]
         for span_start, span_end in spans:
             matching_words = [word for word in words
@@ -204,19 +208,20 @@ def _normalize_analysis(asset: VideoAsset, result: dict[str, Any], transcript: O
             exact_speech = "".join(str(word.get("text") or "") for word in matching_words).strip()
             speech_present = bool(exact_speech or item.get("speech_present"))
             lip_visible = bool(item.get("lip_visible"))
-            track_role = str(item.get("track_role") or ("a_roll" if speech_present and (lip_visible or asset.library_type == "finished") else "b_roll"))
-            if track_role == "a_roll" and (not speech_present or (asset.library_type != "finished" and not lip_visible) or not (exact_speech or str(item.get("speech_text") or "").strip())):
+            track_role = str(item.get("track_role") or ("a_roll" if speech_present and (lip_visible or _is_finished_for_analysis(asset)) else "b_roll"))
+            if track_role == "a_roll" and (not speech_present or (not _is_finished_for_analysis(asset) and not lip_visible) or not (exact_speech or str(item.get("speech_text") or "").strip())):
                 track_role = "reject"
             content_role = str(item.get("content_role") or roles[0])
             highlight_index += 1
-            highlights.append({"highlight_id": f"{asset.asset_id}-h{highlight_index:02d}", "start": round(span_start, 3), "end": round(span_end, 3),
+            highlight = {"highlight_id": f"{asset.asset_id}-h{highlight_index:02d}", "start": round(span_start, 3), "end": round(span_end, 3),
                 "description": str(item.get("description") or "有价值候选片段"), "reason": str(item.get("reason") or "模型判断具有剪辑价值"),
                 "recommended_roles": [str(role) for role in roles], "content_role": content_role, "track_role": track_role,
                 "speech_present": speech_present, "lip_visible": lip_visible, "speech_text": exact_speech or str(item.get("speech_text") or ""),
                 "speaker_id": str(item.get("speaker_id") or (f"{asset.asset_id}-speaker-1" if track_role == "a_roll" else "")),
                 "audio_strategy": "keep_original" if track_role == "a_roll" else "mute",
                 "shot_type": str(item.get("shot_type") or "unknown"), "selling_points": [str(x) for x in item.get("selling_points", [])],
-                "score": min(1.0, max(0.0, float(item.get("score", .7))))})
+                "score": min(1.0, max(0.0, float(item.get("score", .7))))}
+            highlights.append(highlight)
     if not highlights:
         raise ValueError("模型没有返回合法 highlights")
     automatic_tags = [str(tag).strip() for tag in (result.get("video_tags") or result.get("material_types") or []) if str(tag).strip()]
@@ -226,7 +231,7 @@ def _normalize_analysis(asset: VideoAsset, result: dict[str, Any], transcript: O
     result["video_tags"] = list(dict.fromkeys(automatic_tags))[:20]
     result["schema_version"] = "1.0"; result["asset_id"] = asset.asset_id; result["highlights"] = highlights
     result["library_type"] = asset.library_type
-    asset.burned_subtitles = bool(result.get("burned_subtitles", asset.library_type == "finished"))
+    asset.burned_subtitles = bool(result.get("burned_subtitles", _is_finished_for_analysis(asset)))
     asset.has_background_music = bool(result.get("has_background_music", False))
     if asset.generation_depth > 1:
         asset.reusable_status = "blocked"
@@ -244,14 +249,15 @@ async def analyze_video_asset(asset_db_id: int, force: bool = False) -> None:
         asset = db.query(VideoAsset).filter(VideoAsset.id == asset_db_id).first()
         if not asset or asset.excluded:
             return
+        prompt_version = PROMPT_VERSION
         cached = db.query(VideoAssetAnalysis).filter(VideoAssetAnalysis.asset_id == asset.id,
             VideoAssetAnalysis.model == get_settings().llm_vision_model,
-            VideoAssetAnalysis.prompt_version == PROMPT_VERSION,
+            VideoAssetAnalysis.prompt_version == prompt_version,
             VideoAssetAnalysis.status == "completed").order_by(VideoAssetAnalysis.id.desc()).first()
         if cached and not force and (cached.analysis_json or {}).get("source_hash") == asset.content_hash:
             asset.status = "analyzed"; db.commit(); return
         analysis = VideoAssetAnalysis(tenant_id=asset.tenant_id, asset_id=asset.id, schema_version="1.0",
-            model=get_settings().llm_vision_model, prompt_version=PROMPT_VERSION, status="analyzing",
+            model=get_settings().llm_vision_model, prompt_version=prompt_version, status="analyzing",
             summary="", analysis_json={}, input_video_seconds=asset.duration_seconds, request_count=0, retry_count=0)
         db.add(analysis); asset.status = "analyzing"; db.commit(); db.refresh(analysis)
         transcript: dict[str, Any] = {}
@@ -271,7 +277,7 @@ async def analyze_video_asset(asset_db_id: int, force: bool = False) -> None:
                 analysis.request_count += 1; analysis.retry_count = attempt; db.commit()
                 material_instruction = ("这是已剪辑成品。按完整语义句、原始镜头边界和自然停顿切成 4～15 秒的可复用段落；"
                     "每段原声必须与原画面绑定，即使说话者没有出镜也标为 a_roll；识别是否存在烧录字幕和原 BGM。"
-                    if asset.library_type == "finished" else
+                    if _is_finished_for_analysis(asset) else
                     "这是半成品素材。区分可保留原声的人物口播 a_roll 与可静音重配的商品/使用/效果 b_roll。")
                 prompt = f"""分析一条时长 {asset.duration_seconds:.3f} 秒的美妆短视频。{material_instruction}
 只返回 JSON，包含 summary, video_tags, people{{count,description}}, product{{visible,name,exposure}}, actions, scenes,
@@ -294,7 +300,7 @@ content_role 使用 hook、pain_point、selling_point、brand_trust、usage、pr
                     if not source: raise RuntimeError("无法从 OSS 获取视频")
                     with tempfile.TemporaryDirectory(prefix=f"analyze-{asset.id}-") as directory:
                         frames = _extract_frames(source, asset.duration_seconds, Path(directory))
-                        result = await LLMClient().chat_vision(prompt + "当前输入为按时间顺序均匀抽取的关键帧，无法确认的口播内容请留空。",
+                        result = await LLMClient().chat_vision(prompt + "当前输入仅为均匀抽取的关键帧；无法确认动作边界时使用镜头区间，无法确认的口播和商品可见程度请标为不确定。",
                             [str(frame) for frame in frames], temperature=.2, max_tokens=4096, as_json=True)
                 normalized = _normalize_analysis(asset, result, transcript)
                 normalized["source_hash"] = asset.content_hash
@@ -333,7 +339,7 @@ def validate_video_asset(asset_db_id: int) -> None:
             if media["duration"] > max_duration + .05:
                 raise ValueError(f"视频超过 {max_duration / 60:g} 分钟限制")
             if asset.library_type == "finished":
-                local = get_storage().local_path(asset.object_url)
+                local = _asset_storage(asset).local_path(asset.object_url)
                 if not local:
                     raise ValueError("无法读取成品素材")
                 digest = hashlib.sha256()

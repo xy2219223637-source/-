@@ -75,14 +75,13 @@ class Settings(BaseSettings):
     director_asr_local_device: str = "auto"
     director_asr_local_compute_type: str = "int8"
     video_library_max_duration_seconds: float = 600.0
+    ecommerce_video_max_upload_mb: int = 300
     ark_api_key: str = ""
     ark_base_url: str = "https://ark.cn-beijing.volces.com/api/v3"
     ark_llm_model: str = ""
     ark_video_model: str = "doubao-seedance-1-0-pro-250528"
     ark_video_resolution: str = "720p"
     video_model_provider: str = "volcengine-ark"
-    doubao_tts_app_id: str = ""
-    doubao_tts_access_token: str = ""
     doubao_tts_api_key: str = ""
     doubao_tts_resource_id: str = "seed-tts-2.0"
     doubao_tts_speaker: str = "zh_female_shuangkuaisisi_uranus_bigtts"
@@ -114,6 +113,28 @@ class Settings(BaseSettings):
     qianchuan_log_material_response: bool = True
     # Account/material totals may include campaigns run by other operators.
     qianchuan_allow_account_material_aggregate: bool = False
+    # Full-domain delivery is a sidecar flow. Read, write and worker gates are
+    # deliberately independent and default off.
+    qianchuan_plan_enabled: bool = False
+    qianchuan_plan_write_enabled: bool = False
+    qianchuan_plan_worker_enabled: bool = False
+    video_repair_ai_enabled: bool = False
+    video_repair_ai_provider: str = "openai_compatible"
+    video_repair_ai_model: str = ""
+    video_repair_ai_timeout_seconds: float = 45.0
+    video_repair_ai_max_keyframes: int = 12
+    video_repair_ai_prompt_version: str = "video-repair-diagnosis-v2"
+    video_repair_context_pre_ms: int = 4000
+    video_repair_context_post_ms: int = 4000
+    video_repair_context_max_ms: int = 8000
+    video_repair_recommend_score: float = 0.75
+    video_repair_selectable_score: float = 0.60
+    video_repair_v4_enabled: bool = False
+    video_repair_async_worker_enabled: bool = False
+    video_repair_multimodal_enabled: bool = False
+    video_repair_audio_replace_enabled: bool = False
+    video_repair_content_insert_enabled: bool = False
+    video_repair_image_motion_enabled: bool = False
 
     host: str = "0.0.0.0"
     port: int = 8000

@@ -94,12 +94,25 @@ class VideoLineageTest(unittest.TestCase):
         for mode in ("finished_remix", "manual_compose"):
             target = self.asset(mode, "final_output")
             variant = {"variant_id": "V1", "edit_mode": mode,
-                       "video_track": [self.clip(decoy)], "narrative_segments": [self.clip(source)]}
+                       "video_track": [self.clip(source)], "narrative_segments": [self.clip(source)]}
             record_render_lineage(self.db, target, variant, [source, decoy], 1)
             self.db.commit()
             item = self.query(target, "sources")["items"][0]
             self.assertEqual(item["source"]["id"], source.id)
             self.assertEqual(item["segments"][0]["source_start"], 0 if mode == "manual_compose" else 1.125)
+
+    def test_manual_visual_repair_records_the_independent_picture_track(self):
+        source, replacement = self.asset("source"), self.asset("replacement")
+        target = self.asset("manual-repair", "final_output")
+        narrative = self.clip(source, 0, 2.5)
+        visual = self.clip(replacement, 5, 7.5)
+        variant = {"variant_id": "V1", "edit_mode": "manual_compose",
+                   "video_track": [visual], "narrative_segments": [narrative]}
+        record_render_lineage(self.db, target, variant, [source, replacement], 1)
+        self.db.commit()
+        item = self.query(target, "sources")["items"][0]
+        self.assertEqual(item["source"]["id"], replacement.id)
+        self.assertEqual(item["segments"][0]["source_start"], 5.0)
 
     def test_immutable_records_and_invalid_cross_tenant_source(self):
         source, target = self.asset("source"), self.asset("target", "final_output")
@@ -232,7 +245,7 @@ class VideoLineageTest(unittest.TestCase):
         path.write_bytes(b"identical-video-file")
         storage = Mock()
         storage.local_path.return_value = path
-        with patch("app.api.video_library.SessionLocal", self.session), patch("app.api.video_library.get_storage", return_value=storage), patch("app.api.video_library._probe", return_value={"duration": 20, "width": 320, "height": 240, "fps": 30, "has_audio": True}):
+        with patch("app.api.video_library.SessionLocal", self.session), patch("app.api.video_library._asset_storage", return_value=storage), patch("app.api.video_library._probe", return_value={"duration": 20, "width": 320, "height": 240, "fps": 30, "has_audio": True}):
             validate_video_asset(asset.id)
         self.db.refresh(asset)
         self.assertEqual(asset.content_hash, hashlib.sha256(path.read_bytes()).hexdigest())

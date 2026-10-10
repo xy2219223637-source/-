@@ -1,5 +1,15 @@
 # Enrui AI Commerce Agent
 
+## 视频 QA 即时抽帧
+
+视频画面比对使用临时截图，不向项目目录或 OSS 保存 QA 帧。从 `backend` 目录运行：
+
+```powershell
+.venv\Scripts\python.exe -m scripts.qa_compare_frames 原视频.mp4 修复视频.mp4 --same 2:2 --different 8:8
+```
+
+`--same` 检查两处画面应保持一致，`--different` 检查应有明显变化；冒号两侧分别是两个视频的秒数，均可重复指定。命令只输出平均像素差和通过结果，抽出的 PNG 在系统临时目录中比对后立即删除，失败时也会清理。像素比对只能检查画面是否变化，不能判断商品描述是否准确。
+
 ## 项目文档
 
 - [技术架构说明](docs/01-TECHNICAL-ARCHITECTURE.md)：技术栈、系统分层、数据域、部署与安全边界。

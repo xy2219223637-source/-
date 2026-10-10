@@ -72,13 +72,20 @@ def current_auth(request: Request, credentials: Optional[HTTPAuthorizationCreden
         permissions = ("*",)
     else:
         assigned_role = db.query(TenantRole).filter_by(id=member.role_id, tenant_id=tenant.id, status="active").first() if member.role_id else None
-        permissions = tuple(assigned_role.permissions or []) if assigned_role else ()
+        if assigned_role:
+            permissions = tuple(assigned_role.permissions or [])
+        else:
+            from app.permissions import permission_codes
+            permissions = tuple(permission_codes(db, member))
     auth = AuthContext(user.id, tenant.id, member.role, user.email, tenant.name, user.phone or "", user.is_platform_admin, permissions)
     if member.role != "owner":
         path = request.url.path
         route_permissions = (
             ("/api/director-projects/shooting-tasks", "shooting_tasks.access"),
-            ("/api/dashboard", "dashboard.view"), ("/api/products", "products.access"),
+            ("/api/video-repair", "video_repair.access"),
+            ("/api/dashboard", "dashboard.view"), ("/api/ecommerce-products", "ecommerce_products.access"),
+            ("/api/ecommerce-video-assets", "ecommerce_assets.access"), ("/api/ecommerce-video-taxonomy", "ecommerce_assets.access"),
+            ("/api/products", "products.access"),
             ("/api/knowledge", "knowledge.access"), ("/api/brand-visuals", "brand_visuals.access"),
             ("/api/design-skills", "design_skills.access"), ("/api/creative-projects", "creative_projects.access"),
             ("/api/detail-page-templates", "creative_projects.access"), ("/api/video-assets", "finished_assets.access"),

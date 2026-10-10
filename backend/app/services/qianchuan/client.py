@@ -20,6 +20,12 @@ API_NAMES = {
     "/open_api/v1.0/qianchuan/video/get/": "查询视频素材",
     "/open_api/v1.0/qianchuan/report/uni_promotion/config/get/": "查询报表配置",
     "/open_api/v1.0/qianchuan/report/uni_promotion/data/get/": "查询报表数据",
+    "/open_api/v1.0/qianchuan/aweme/authorized/get/": "查询授权抖音号",
+    "/open_api/v1.0/qianchuan/product/available/get/": "查询可投商品",
+    "/open_api/v1.0/qianchuan/uni_promotion/list/": "查询全域计划",
+    "/open_api/v1.0/qianchuan/uni_promotion/ad/detail/": "查询全域计划详情",
+    "/open_api/v1.0/qianchuan/uni_promotion/ad/material/get/": "查询全域计划素材",
+    "/open_api/v1.0/qianchuan/material/ad/get/": "查询素材关联计划",
     "/open_api/oauth2/access_token/": "获取授权凭证",
     "/open_api/oauth2/refresh_token/": "刷新授权凭证",
 }
