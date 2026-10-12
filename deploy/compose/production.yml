@@ -1,0 +1,14 @@
+services:
+  backend:
+    command: ["python", "/run/enrui-shared-database-runtime.py", "serve"]
+    environment:
+      DEPLOYMENT_SERVICE_ID: production
+      VIDEO_ANALYSIS_WORKER_ENABLED: "true"
+      RUN_BACKGROUND_WORKERS: "true"
+      RUN_STARTUP_RECOVERY: "true"
+      RUN_DATABASE_INIT: "false"
+    volumes:
+      - /opt/enrui-ai-commerce-agent/shared/shared-database-runtime.py:/run/enrui-shared-database-runtime.py:ro
+  frontend:
+    ports: !override
+      - "${FRONTEND_BIND:-127.0.0.1}:${FRONTEND_PORT:-8080}:80"

@@ -1,0 +1,22 @@
+services:
+  backend:
+    image: enrui-artinjecter-backend:${DEPLOY_IMAGE_TAG:-latest}
+    command: ["python", "/run/enrui-shared-database-runtime.py", "serve"]
+    environment:
+      DEPLOYMENT_SERVICE_ID: artinjecter
+      VIDEO_ANALYSIS_WORKER_ENABLED: "true"
+      RUN_BACKGROUND_WORKERS: "true"
+      RUN_STARTUP_RECOVERY: "true"
+      RUN_DATABASE_INIT: "false"
+    ports: !override
+      - "127.0.0.1:8200:8000"
+    volumes:
+      - /opt/enrui-ai-commerce-agent-artinjecter/shared/shared-database-runtime.py:/run/enrui-shared-database-runtime.py:ro
+  frontend:
+    image: enrui-artinjecter-frontend:${DEPLOY_IMAGE_TAG:-latest}
+    ports: !override
+      - "127.0.0.1:8280:80"
+volumes:
+  whisper_models:
+    external: true
+    name: repository_whisper_models
