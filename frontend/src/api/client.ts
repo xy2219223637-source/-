@@ -491,6 +491,25 @@ export const videoLibraryApi = {
   reanalyze: (id:number) => api.post<import('../types').VideoLibraryAsset>(`/video-assets/${id}/reanalyze`).then(r=>r.data),
 };
 
+export const videoRefinementApi = {
+  list: () => api.get<import('../types/videoRefinement').VideoRefinementTask[]>('/video-refinements').then(r => r.data),
+  sources: () => api.get<import('../types/videoRefinement').RefinementSource[]>('/video-refinements/sources').then(r => r.data),
+  get: (id: number) => api.get<import('../types/videoRefinement').VideoRefinementTask>(`/video-refinements/${id}`).then(r => r.data),
+  create: (data: { source_asset_id: number; user_brief: string; expected_result?: string; focus?: import('../types/videoRefinement').RefinementFocus[]; duration_preference?: import('../types/videoRefinement').DurationPreference; target_duration_ms?: number }) => api.post<import('../types/videoRefinement').VideoRefinementTask>('/video-refinements', data).then(r => r.data),
+  analyze: (id: number, revision: number) => api.post<import('../types/videoRefinement').VideoRefinementTask>(`/video-refinements/${id}/analyze`, { revision }).then(r => r.data),
+  autoPreview: (id: number, revision: number) => api.post<import('../types/videoRefinement').VideoRefinementTask>(`/video-refinements/${id}/auto-preview`, { revision }).then(r => r.data),
+  updateDraft: (id: number, data: { revision: number; items: import('../types/videoRefinement').VideoRefinementPlanItem[] }) => api.patch<import('../types/videoRefinement').VideoRefinementTask>(`/video-refinements/${id}/draft`, data).then(r => r.data),
+  confirm: (id: number, data: { revision: number; plan_hash: string; acknowledge_risks: boolean }) => api.post<import('../types/videoRefinement').VideoRefinementTask>(`/video-refinements/${id}/plans/confirm`, data).then(r => r.data),
+  cancel: (id: number, revision: number) => api.post<import('../types/videoRefinement').VideoRefinementTask>(`/video-refinements/${id}/cancel`, { revision }).then(r => r.data),
+  preview: (id: number, data: {revision: number; plan_hash: string}) => api.post<import('../types/videoRefinement').VideoRefinementTask>(`/video-refinements/${id}/previews`, data).then(r => r.data),
+
+  materials: (id: number, search = '', cursor?: string) => api.get<import('../types/videoRefinement').RefinementMaterialPage>('/video-refinements/'+id+'/materials', {params:{search,cursor,limit:30}}).then(r=>r.data),
+  refreshMaterials: (id: number, revision: number) => api.post<import('../types/videoRefinement').VideoRefinementTask>('/video-refinements/'+id+'/materials/refresh',{revision}).then(r=>r.data),
+  requirements: (id: number, data: {revision: number; user_brief?: string; accept_partial_evaluation?: boolean; duration_preference?: import('../types/videoRefinement').DurationPreference; target_duration_ms?: number; decisions?: Array<{requirement_id: string; decision: 'waived' | 'answered'; answer: string}>}) => api.patch<import('../types/videoRefinement').VideoRefinementTask>('/video-refinements/'+id+'/requirements',data).then(r=>r.data),
+  generateVoiceover: (id: number, revision: number, plan_hash: string, item_id: string) => api.post<import('../types/videoRefinement').VideoRefinementTask>('/video-refinements/'+id+'/voiceovers',{revision,plan_hash,item_id}).then(r=>r.data),
+  accept: (id: number, previewId: number, data: {revision: number; plan_hash: string}) => api.post<import('../types/videoRefinement').VideoRefinementTask>(`/video-refinements/${id}/previews/${previewId}/accept`, data).then(r => r.data),
+};
+
 export const videoTaxonomyApi = {
   catalog: (objectType:import('../types').VideoObjectType,includeInactive=false) => api.get<import('../types').VideoTaxonomyCatalog>('/video-taxonomy/catalog',{params:{object_type:objectType,include_inactive:includeInactive}}).then(r=>r.data),
   createCategory: (data:{object_type:import('../types').VideoObjectType;name:string;code?:string;parent_id:number|null;sort_order?:number}) => api.post<import('../types').VideoCategoryDefinition>('/video-taxonomy/categories',data).then(r=>r.data),

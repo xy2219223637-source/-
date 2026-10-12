@@ -147,6 +147,10 @@ class Settings(BaseSettings):
     database_max_overflow: int = 20
     database_pool_recycle_seconds: int = 1800
 
+    run_database_init: bool = True
+    run_startup_recovery: bool = True
+    run_background_workers: bool = True
+
     redis_url: str = ""
     redis_key_prefix: str = "enrui-ai-commerce-agent:"
 

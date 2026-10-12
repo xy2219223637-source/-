@@ -6,12 +6,13 @@ from datetime import datetime, timedelta
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api import admin, auth, auto_edit, brands, creative, dashboard, director, ecommerce_products, ecommerce_video_library, ecommerce_video_taxonomy, knowledge, products, quality, skills, templates, operations, production, storage, video_library, video_taxonomy, videos
+from app.api import admin, auth, auto_edit, brands, creative, dashboard, director, ecommerce_products, ecommerce_video_library, ecommerce_video_taxonomy, knowledge, products, quality, skills, templates, operations, production, storage, video_library, video_taxonomy, video_refinement, videos
 from app.config import get_settings
 from app.database import SessionLocal, engine, init_db
 from app.models import AuditLog, CreativeBatchJob, CreativeGeneration
 from app.services.production_queue import start_worker, stop_worker
 from app.services.video_analysis_queue import start_video_analysis_worker, stop_video_analysis_worker
+from app.services.refinement_queue import start_refinement_worker, stop_refinement_worker
 from app.services.redis_client import get_redis
 from app.services.feishu_logging import RequestTraceMiddleware, trace_fields
 from app.api import qianchuan, qianchuan_plans, video_repair
@@ -81,13 +82,26 @@ app.include_router(auto_edit.router, prefix="/api")
 app.include_router(qianchuan.router, prefix="/api")
 app.include_router(qianchuan_plans.router, prefix="/api")
 app.include_router(video_library.router, prefix="/api")
+app.include_router(video_refinement.router, prefix="/api")
 app.include_router(video_taxonomy.router, prefix="/api")
 app.include_router(video_lineage.router, prefix="/api")
 app.include_router(video_repair.router, prefix="/api")
 
 @app.on_event("startup")
 def on_startup() -> None:
-    init_db()
+    if settings.run_database_init:
+        init_db()
+    if settings.run_startup_recovery:
+        recover_startup_tasks()
+    if settings.run_background_workers:
+        start_worker()
+        start_video_analysis_worker()
+        start_refinement_worker()
+        start_qianchuan_worker()
+        start_video_repair_worker()
+
+
+def recover_startup_tasks() -> None:
     db = SessionLocal()
     try:
         interrupted_batches = db.query(CreativeBatchJob).filter(CreativeBatchJob.status.in_(["pending", "running"])).all()
@@ -114,15 +128,12 @@ def on_startup() -> None:
         db.commit()
     finally:
         db.close()
-    start_worker()
-    start_video_analysis_worker()
-    start_qianchuan_worker()
-    start_video_repair_worker()
 
 @app.on_event("shutdown")
 def on_shutdown() -> None:
     stop_worker()
     stop_video_analysis_worker()
+    stop_refinement_worker()
     stop_qianchuan_worker()
     stop_video_repair_worker()
 

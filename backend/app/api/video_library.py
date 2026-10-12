@@ -254,7 +254,7 @@ async def analyze_video_asset(asset_db_id: int, force: bool = False) -> None:
             VideoAssetAnalysis.model == get_settings().llm_vision_model,
             VideoAssetAnalysis.prompt_version == prompt_version,
             VideoAssetAnalysis.status == "completed").order_by(VideoAssetAnalysis.id.desc()).first()
-        if cached and not force:
+        if cached and not force and (cached.analysis_json or {}).get("source_hash") == asset.content_hash:
             asset.status = "analyzed"; db.commit(); return
         analysis = VideoAssetAnalysis(tenant_id=asset.tenant_id, asset_id=asset.id, schema_version="1.0",
             model=get_settings().llm_vision_model, prompt_version=prompt_version, status="analyzing",
@@ -303,6 +303,7 @@ content_role 使用 hook、pain_point、selling_point、brand_trust、usage、pr
                         result = await LLMClient().chat_vision(prompt + "当前输入仅为均匀抽取的关键帧；无法确认动作边界时使用镜头区间，无法确认的口播和商品可见程度请标为不确定。",
                             [str(frame) for frame in frames], temperature=.2, max_tokens=4096, as_json=True)
                 normalized = _normalize_analysis(asset, result, transcript)
+                normalized["source_hash"] = asset.content_hash
                 if transcript_error:
                     normalized["transcript_error"] = transcript_error
                 db.query(VideoHighlight).filter(VideoHighlight.asset_id == asset.id).delete(synchronize_session=False)

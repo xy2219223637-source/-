@@ -128,13 +128,46 @@ def _json_column_sql(connection) -> str:
     return "JSON NOT NULL DEFAULT '[]'"
 
 
+def migrate_refinement_workspace_schema(bind: Engine) -> None:
+    """Move compatible phase-1 tables; leave review-driven repair data untouched."""
+    from app.models import VideoRefinementPlan, VideoRefinementSnapshot, VideoRefinementTask
+
+    tables = (
+        ("video_refinement_tasks", VideoRefinementTask.__table__),
+        ("video_refinement_snapshots", VideoRefinementSnapshot.__table__),
+        ("video_refinement_plans", VideoRefinementPlan.__table__),
+    )
+    with bind.begin() as connection:
+        inspector = inspect(connection)
+        names = set(inspector.get_table_names())
+        if "video_refinement_tasks" not in names:
+            return
+        # Old review tasks have required columns such as review_id and no brief
+        # or revision. They cannot be converted into workspace tasks implicitly.
+        if not set(VideoRefinementTask.__table__.columns.keys()).issubset(
+            _table_columns(connection, "video_refinement_tasks")
+        ):
+            return
+        if any(table.name in names for _, table in tables):
+            raise RuntimeError("精修工作台新旧表同时存在, 保留原表并停止迁移")
+        for old_name, table in tables:
+            if old_name in names and not set(table.columns.keys()).issubset(_table_columns(connection, old_name)):
+                raise RuntimeError(f"精修表 {old_name} 结构不兼容, 保留原表并停止迁移")
+        for old_name, table in tables:
+            if old_name in names:
+                connection.execute(text(f"ALTER TABLE {old_name} RENAME TO {table.name}"))
+
+
 def init_db() -> None:
     from app import models  # noqa: F401
 
-    # Delivery-plan tables require the audited, explicit migration command.
-    # Startup must not silently create production sidecar tables.
-    startup_tables = [table for table in Base.metadata.sorted_tables
-                      if not table.info.get("explicit_migration_required")]
+    migrate_refinement_workspace_schema(engine)
+
+    startup_tables = [
+        table
+        for table in Base.metadata.sorted_tables
+        if not table.info.get("explicit_migration_required")
+    ]
     Base.metadata.create_all(bind=engine, tables=startup_tables)
     # Lightweight compatibility migration for this PoC. Existing installations
     # predate the product-level video library, so create_all alone cannot relax
@@ -173,10 +206,20 @@ def init_db() -> None:
         json_default = _json_column_sql(connection)
         columns = _table_columns(connection, "video_assets")
         if columns:
-            if (connection.dialect.name == "postgresql" and "project_id" in columns
-                    and not _column_is_nullable(connection, "video_assets", "project_id")):
+            if (
+                    connection.dialect.name == "postgresql"
+                    and "project_id" in columns
+                    and not _column_is_nullable(
+                connection, "video_assets", "project_id"
+            )
+            ):
                 try:
-                    connection.execute(text("ALTER TABLE video_assets ALTER COLUMN project_id DROP NOT NULL"))
+                    connection.execute(
+                        text(
+                            "ALTER TABLE video_assets "
+                            "ALTER COLUMN project_id DROP NOT NULL"
+                        )
+                    )
                 except Exception:
                     pass
             additions = {

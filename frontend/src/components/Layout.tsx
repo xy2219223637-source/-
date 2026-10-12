@@ -15,6 +15,7 @@ import {
   Clapperboard,
   Film,
   Library,
+  WandSparkles,
   Layers,
   Layers3,
   ChevronDown,
@@ -47,6 +48,7 @@ const routePreloaders: Record<string, () => Promise<unknown>> = {
   '/finished-video-remix': () => import('../pages/AutoEditWorkspace'),
   '/video-projects': () => import('../pages/VideoProjects'),
   '/final-videos': () => import('../pages/FinalVideoLibrary'),
+  '/video-refinements': () => import('../pages/VideoRefinementWorkbench'),
   '/video-repair': () => import('../pages/VideoRepairProjects'),
   '/manual-video-compose': () => import('../pages/ManualComposeProjects'),
   '/task-center': () => import('../pages/TaskCenter'),
@@ -87,6 +89,7 @@ const navGroups = [
       { to: '/manual-video-compose', label: '视频编排', icon: Layers3 },
       { to: '/finished-video-remix', label: '成品混剪', icon: Video },
       { to: '/final-videos', label: '成片库', icon: Library },
+      { to: '/video-refinements', label: '视频精修', icon: WandSparkles },
       { to: '/video-repair', label: '审核失败修改', icon: Wrench },
       { to: '/director-inspiration', label: '编导灵感', icon: Clapperboard },
       { to: '/shooting-tasks', label: '拍摄任务', icon: ClipboardList },
@@ -106,8 +109,10 @@ const routePermissions: Record<string, string> = {
   '/brand-visuals': 'brand_visuals.access', '/design-skills': 'design_skills.access',
   '/creative-projects': 'creative_projects.access', '/finished-video-assets': 'finished_assets.access',
   '/manual-video-compose': 'manual_compose.access', '/finished-video-remix': 'finished_remix.access',
-  '/final-videos': 'final_videos.access', '/director-inspiration': 'director.access',
+  '/final-videos': 'final_videos.access',
+  '/video-refinements': 'final_videos.access',
   '/video-repair': 'video_repair.access',
+  '/director-inspiration': 'director.access',
   '/shooting-tasks': 'shooting_tasks.access', '/task-center': 'task_center.access',
 };
 
@@ -151,6 +156,7 @@ export default function Layout() {
   const [isPlatformAdmin, setIsPlatformAdmin] = useState(false);
   const [permissions, setPermissions] = useState<string[]>([]);
   const isDirectorWorkspace = /^\/director-inspiration\/\d+\/workspace/.test(location.pathname);
+  const isRefinementWorkbench = location.pathname.startsWith('/video-refinements');
 
   useEffect(() => {
     authApi.me().then((result) => { setRole(result.role); setIsPlatformAdmin(result.is_platform_admin); setPermissions(result.permissions || []); }).catch(() => setRole(''));
@@ -293,7 +299,7 @@ export default function Layout() {
           </button>
           <div className="font-display text-xl">Dirovo</div>
         </div>
-        <div className={isDirectorWorkspace ? 'max-w-[1800px] mx-auto px-5 py-5' : 'max-w-6xl mx-auto px-8 py-8'}>
+        <div className={isDirectorWorkspace || isRefinementWorkbench ? 'max-w-[1800px] mx-auto px-5 py-5' : 'max-w-6xl mx-auto px-8 py-8'}>
           <Outlet />
         </div>
       </main>
