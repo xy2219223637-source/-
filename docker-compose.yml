@@ -9,6 +9,7 @@ services:
       FEISHU_LOG_DIR: /app/logs
     volumes:
       - feishu_logs:/app/logs
+      - whisper_models:/app/whisper-models:ro
       - "${PRIVATE_VIDEO_S3_HOST_FILE:-./deploy/empty-private-video.env}:/run/secrets/dlr-hz.env:ro"
     restart: unless-stopped
     ports:
@@ -36,3 +37,4 @@ services:
 
 volumes:
   feishu_logs:
+  whisper_models:

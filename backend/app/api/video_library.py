@@ -71,6 +71,10 @@ def _asset_storage(asset: VideoAsset):
     return get_storage_by_name(provider) if provider else get_storage_for_url(asset.object_url)
 
 
+def _needs_video_validation(asset: VideoAsset) -> bool:
+    return asset.duration_seconds <= 0 or asset.width <= 0 or asset.height <= 0
+
+
 def _serialize(db: Session, asset: VideoAsset, analysis: Any = _NOT_LOADED,
                highlights: Any = _NOT_LOADED, taxonomy_category: Any = _NOT_LOADED,
                taxonomy_tags: Any = _NOT_LOADED, user_id: str = "",
@@ -244,6 +248,11 @@ async def analyze_video_asset(asset_db_id: int, force: bool = False) -> None:
         asset = db.query(VideoAsset).filter(VideoAsset.id == asset_db_id).first()
         if not asset or asset.excluded:
             return
+        if _needs_video_validation(asset):
+            asset.status = "validating"
+            db.commit()
+            validate_video_asset(asset.id)
+            return
         cached = db.query(VideoAssetAnalysis).filter(VideoAssetAnalysis.asset_id == asset.id,
             VideoAssetAnalysis.model == get_settings().llm_vision_model,
             VideoAssetAnalysis.prompt_version == PROMPT_VERSION,
@@ -287,7 +296,7 @@ content_role 使用 hook、pain_point、selling_point、brand_trust、usage、pr
                     signed = _asset_storage(asset).signed_url(asset.object_url)
                     result = await LLMClient().chat_json([{"role": "user", "content": [
                         {"type": "text", "text": prompt}, {"type": "video_url", "video_url": {"url": signed}}
-                    ]}], temperature=.2, max_tokens=4096)
+                    ]}], model=get_settings().llm_vision_model, temperature=.2, max_tokens=4096)
                 else:
                     # Compatibility fallback for endpoints without video_url support.
                     source = _asset_storage(asset).local_path(asset.object_url)
@@ -328,11 +337,13 @@ def validate_video_asset(asset_db_id: int) -> None:
             return
         try:
             media = _probe(_asset_storage(asset).signed_url(asset.object_url))
+            if media["duration"] <= 0 or media["width"] <= 0 or media["height"] <= 0:
+                raise ValueError("视频时长或分辨率无效")
             max_duration = get_settings().video_library_max_duration_seconds
             if media["duration"] > max_duration + .05:
                 raise ValueError(f"视频超过 {max_duration / 60:g} 分钟限制")
             if asset.library_type == "finished":
-                local = get_storage().local_path(asset.object_url)
+                local = _asset_storage(asset).local_path(asset.object_url)
                 if not local:
                     raise ValueError("无法读取成品素材")
                 digest = hashlib.sha256()
@@ -522,6 +533,8 @@ def update_reusable_status(asset_id: int, payload: ReusableStatusUpdate,
 def reanalyze(asset_id: int, db: Session = Depends(get_db), auth: AuthContext = Depends(current_auth)):
     asset = db.query(VideoAsset).filter(VideoAsset.id == asset_id, VideoAsset.tenant_id == auth.tenant_id).first()
     if not asset: raise HTTPException(404, "素材不存在")
-    if asset.status == "analyzing": raise HTTPException(409, "素材正在分析")
-    asset.status = "queued_for_analysis"; db.commit(); enqueue_video_analysis()
+    if asset.status in {"validating", "queued_for_analysis", "analyzing"}:
+        raise HTTPException(409, "素材正在校验或分析")
+    asset.status = "validating" if _needs_video_validation(asset) else "queued_for_analysis"
+    db.commit(); enqueue_video_analysis()
     return _serialize(db, asset, user_id=auth.user_id)
