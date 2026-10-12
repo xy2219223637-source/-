@@ -1,0 +1,8 @@
+# Only used by the explicit one-shot migration command.
+services:
+  backend:
+    env_file: ${TEST_SHARED_DIR:?Set the test shared directory}/migration.env
+    environment:
+      RUN_DATABASE_INIT: "false"
+      RUN_STARTUP_RECOVERY: "false"
+      RUN_BACKGROUND_WORKERS: "false"
