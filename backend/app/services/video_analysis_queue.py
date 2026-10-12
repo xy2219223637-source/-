@@ -56,6 +56,7 @@ def _next_ecommerce_asset_id() -> Optional[int]:
     try:
         asset = db.query(EcommerceVideoAsset).filter(
             EcommerceVideoAsset.status == "queued_for_analysis",
+            EcommerceVideoAsset.asset_kind == "material",
             EcommerceVideoAsset.excluded.is_(False),
         ).order_by(EcommerceVideoAsset.created_at, EcommerceVideoAsset.id).first()
         return asset.id if asset else None

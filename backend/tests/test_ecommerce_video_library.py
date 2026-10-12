@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
@@ -90,6 +91,9 @@ class EcommerceVideoLibraryTests(unittest.TestCase):
         assert oversized.status_code == 413
         assert len(Storage.uploaded_paths) == 2
         material_id, final_id = material.json()[0]["id"], final.json()[0]["id"]
+        assert material.json()[0]["status"] == "queued_for_analysis"
+        assert final.json()[0]["status"] == "uploaded"
+        assert client.post(f"/api/ecommerce-video-assets/{final_id}/reanalyze").status_code == 422
         assert client.post(f"/api/ecommerce-video-assets/{material_id}/reanalyze").json()["status"] == "queued_for_analysis"
         with Session(engine) as db:
             db.get(EcommerceVideoAsset, material_id).status = "analyzing"
@@ -148,7 +152,33 @@ class EcommerceVideoLibraryTests(unittest.TestCase):
         completed = client.post("/api/ecommerce-video-assets/multipart/complete", json={"session_id": started.json()["session_id"]})
         assert completed.status_code == 200, completed.text
         assert completed.json()["asset_kind"] == "final_output"
+        assert completed.json()["status"] == "validating"
         assert len(client.get("/api/ecommerce-video-assets", params={"product_id": product_id, "asset_kind": "final_output"}).json()) == 2
+
+        # A completed final video needs technical metadata, but never enters AI analysis.
+        with Session(engine) as db:
+            final_multipart_id = completed.json()["id"]
+            db.get(EcommerceVideoAsset, final_multipart_id).status = "queued_for_analysis"
+            db.commit()
+        with patch.object(video_analysis_queue, "SessionLocal", side_effect=lambda: Session(engine)):
+            assert video_analysis_queue._next_ecommerce_asset_id() == material_id
+        with Session(engine) as db:
+            db.get(EcommerceVideoAsset, final_multipart_id).status = "validating"
+            db.commit()
+        with tempfile.TemporaryDirectory() as directory:
+            local_video = Path(directory) / "final.mp4"
+            local_video.write_bytes(b"video")
+            class ValidationStorage:
+                def signed_url(self, url):
+                    return "https://video.example/final.mp4"
+                def local_path(self, url):
+                    return local_video
+            with patch.object(ecommerce_video_library, "SessionLocal", side_effect=lambda: Session(engine)), \
+                 patch.object(ecommerce_video_library, "_asset_storage", return_value=ValidationStorage()):
+                ecommerce_video_library.validate_video_asset(final_multipart_id)
+        with Session(engine) as db:
+            assert db.get(EcommerceVideoAsset, final_multipart_id).status == "uploaded"
+            assert db.query(EcommerceVideoAssetAnalysis).filter_by(asset_id=final_multipart_id).count() == 0
 
         class AnalysisStorage:
             def signed_url(self, url):

@@ -536,19 +536,14 @@ export const ecommerceVideoLibraryApi = {
   upload: async (productId:number,files:File[],source='manual_upload',onProgress?:(loaded:number,total:number,percent:number)=>void,libraryType:'finished'='finished',assetKind:'material'|'final_output'='material') => {
     const total=files.reduce((sum,file)=>sum+file.size,0);let completedBytes=0;const results:import('../types').VideoLibraryAsset[]=[];
     for(const file of files){
-      const form=new FormData();
-      form.append('product_id',String(productId));form.append('source',source);
-      form.append('library_type',libraryType);form.append('asset_kind',assetKind);
-      form.append('files',file);
-      const uploaded=await api.post<import('../types').VideoLibraryAsset[]>('/ecommerce-video-assets',form,{
-        timeout:600000,
-        onUploadProgress:event=>{
-          const loaded=completedBytes+Math.min(event.loaded,file.size);
-          onProgress?.(loaded,total,total?Math.min(99,Math.round(loaded/total*100)):0);
-        },
-      }).then(r=>r.data);
+      const start=await api.post<{session_id:string;part_size:number;part_count:number;part_urls:string[]}>('/ecommerce-video-assets/multipart/start',{product_id:productId,filename:file.name,content_type:file.type||'application/octet-stream',size_bytes:file.size,source,library_type:libraryType,asset_kind:assetKind}).then(r=>r.data);
+      const progress=new Map<number,number>();
+      const uploadPart=async(index:number)=>{const begin=index*start.part_size;const blob=file.slice(begin,Math.min(file.size,begin+start.part_size));let lastError:unknown;
+        for(let attempt=0;attempt<3;attempt++)try{await axios.put(start.part_urls[index],blob,{timeout:180000,headers:{'Content-Type':'application/octet-stream'},onUploadProgress:event=>{progress.set(index,Math.min(event.loaded,blob.size));const loaded=completedBytes+Array.from(progress.values()).reduce((sum,value)=>sum+value,0);onProgress?.(loaded,total,total?Math.round(loaded/total*100):0)}});progress.set(index,blob.size);return}catch(error){lastError=error;progress.set(index,0)}
+        throw lastError};
+      for(let offset=0;offset<start.part_count;offset+=4)await Promise.all(Array.from({length:Math.min(4,start.part_count-offset)},(_,index)=>uploadPart(offset+index)));
       completedBytes+=file.size;onProgress?.(completedBytes,total,total?Math.round(completedBytes/total*100):0);
-      results.push(...uploaded);
+      results.push(await api.post<import('../types').VideoLibraryAsset>('/ecommerce-video-assets/multipart/complete',{session_id:start.session_id},{timeout:180000}).then(r=>r.data));
     }
     return results;
   },

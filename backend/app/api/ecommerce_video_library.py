@@ -210,7 +210,7 @@ async def analyze_video_asset(asset_db_id: int, force: bool = False) -> None:
     db = SessionLocal()
     try:
         asset = db.query(EcommerceVideoAsset).filter(EcommerceVideoAsset.id == asset_db_id).first()
-        if not asset or asset.excluded:
+        if not asset or asset.excluded or asset.asset_kind != "material":
             return
         prompt_version = PROMPT_VERSION
         cached = db.query(EcommerceVideoAssetAnalysis).filter(EcommerceVideoAssetAnalysis.asset_id == asset.id,
@@ -311,7 +311,8 @@ def validate_video_asset(asset_db_id: int) -> None:
                         digest.update(chunk)
                 asset.content_hash = digest.hexdigest()
             asset.duration_seconds = media["duration"]; asset.width = media["width"]; asset.height = media["height"]
-            asset.fps = media["fps"]; asset.has_audio = media["has_audio"]; asset.status = "queued_for_analysis"
+            asset.fps = media["fps"]; asset.has_audio = media["has_audio"]
+            asset.status = "uploaded" if asset.asset_kind == "final_output" else "queued_for_analysis"
         except Exception as exc:
             db.add(EcommerceVideoAssetAnalysis(
                 tenant_id=asset.tenant_id,
@@ -465,8 +466,11 @@ async def upload_assets(product_id: int = Form(...), source: str = Form("manual_
             reusable_status="blocked" if asset_kind == "final_output" else "review_required",
             object_url=url, storage_provider=storage.name, content_hash=content_hash,
             duration_seconds=media["duration"], width=media["width"], height=media["height"],
-            fps=media["fps"], has_audio=media["has_audio"], status="queued_for_analysis", excluded=False)
-        db.add(asset); db.commit(); db.refresh(asset); enqueue_video_analysis()
+            fps=media["fps"], has_audio=media["has_audio"],
+            status="uploaded" if asset_kind == "final_output" else "queued_for_analysis", excluded=False)
+        db.add(asset); db.commit(); db.refresh(asset)
+        if asset_kind == "material":
+            enqueue_video_analysis()
 
         db.commit()
         result.append(_serialize(db, asset, user_id=auth.user_id))
@@ -509,6 +513,7 @@ def update_reusable_status(asset_id: int, payload: ReusableStatusUpdate,
 def reanalyze(asset_id: int, db: Session = Depends(get_db), auth: AuthContext = Depends(current_auth)):
     asset = db.query(EcommerceVideoAsset).filter(EcommerceVideoAsset.id == asset_id, EcommerceVideoAsset.tenant_id == auth.tenant_id).first()
     if not asset: raise HTTPException(404, "素材不存在")
+    if asset.asset_kind != "material": raise HTTPException(422, "商品成品视频无需分析")
     if asset.status in {"queued_for_analysis", "analyzing"}:
         return _serialize(db, asset, user_id=auth.user_id)
     asset.status = "queued_for_analysis"; db.commit(); enqueue_video_analysis()
