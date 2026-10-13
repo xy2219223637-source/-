@@ -48,11 +48,12 @@ def _observations(analysis: VideoAssetAnalysis | None, max_keyframes: int) -> di
 
 def build_ai_context(db: Session, *, repair_input: Any, source_asset: VideoAsset,
                      base_plan: dict[str, Any], max_keyframes: int = 12,
-                     capabilities: list[str] | None = None) -> dict[str, Any]:
+                     capabilities: list[str] | None = None,
+                     source_analysis: VideoAssetAnalysis | None = None) -> dict[str, Any]:
     duration_ms = round(float(source_asset.duration_seconds or 0) * 1000)
     explicit_ranges = prioritized_time_ranges(
         repair_input.time_ranges_json or [], repair_input.raw_reason, duration_ms or None)
-    analysis = db.query(VideoAssetAnalysis).filter_by(
+    analysis = source_analysis or db.query(VideoAssetAnalysis).filter_by(
         tenant_id=source_asset.tenant_id, asset_id=source_asset.id,
         status="completed").order_by(VideoAssetAnalysis.id.desc()).first()
     facts = db.query(ProductFact).filter_by(

@@ -74,6 +74,7 @@ class DiagnosedIssue(BaseModel):
 class DiagnosisMeta(BaseModel):
     mode: Literal["MULTIMODAL", "RULE_FALLBACK", "MANUAL"]
     model: str | None = None
+    input_mode: str | None = None
     prompt_version: str = "video-repair-diagnosis-v2"
     latency_ms: int | None = Field(default=None, ge=0)
     token_usage: dict[str, int] = Field(default_factory=dict)

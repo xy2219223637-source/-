@@ -208,6 +208,8 @@ def _validate_ai_draft(diagnosis: dict, action: dict, override_reason: str) -> N
         raise HTTPException(422, detail={
             "code": "AI_PROPOSAL_REQUIRED", "message": "当前仅支持接受 AI 方案或要求重新分析"})
     allowed = set()
+    if "target_range" in required and template["type"] in {"VISUAL_REPLACE", "AUDIO_REPLACE"}:
+        allowed.add("target_range")
     if "insert_position" in required and template["type"] == "CONTENT_INSERT":
         allowed.add("insert_at_ms")
     if "audio" in required and template["type"] in {"AUDIO_REPLACE", "CONTENT_INSERT"}:
@@ -400,17 +402,32 @@ def retry_v4_preview(task_id: int, preview_id: int, db: Session = Depends(get_db
 def retry_v4_analysis(task_id: int, db: Session = Depends(get_db),
                       auth: AuthContext = Depends(current_auth)):
     task = _v4_task(db, auth, task_id)
-    if task.status not in {"FAILED", "AWAITING_MANUAL_DECISION", "CONFIGURING"}:
+    if task.status not in {"FAILED", "AWAITING_MANUAL_DECISION", "CONFIGURING", "PREVIEW_READY"}:
         raise HTTPException(409, "当前任务不能重试分析")
-    if task.status == "FAILED":
-        transition(task, "ANALYZING")
-    else:
-        task.status = "ANALYZING"
+    retry_source = task.error_code in {
+        "SOURCE_ANALYSIS_FAILED", "SOURCE_ANALYSIS_INVALID", "SOURCE_ANALYSIS_TIMEOUT"}
+    if retry_source:
+        source = db.query(VideoAsset).filter_by(
+            id=task.source_asset_id, tenant_id=task.tenant_id).first()
+        if not source:
+            raise HTTPException(409, "源视频已不存在，无法重新分析")
+        if source.status != "analyzing":
+            source.status = "queued_for_analysis"
+    if task.status == "PREVIEW_READY":
+        db.query(VideoRepairPreview).filter_by(task_id=task.id, tenant_id=task.tenant_id,
+                                               status="READY").update(
+            {VideoRepairPreview.status: "SUPERSEDED"}, synchronize_session=False)
+        task.repair_plan_json = {}
+        task.draft_revision += 1
+    transition(task, "ANALYZING")
     task.error_code = task.error_message = ""
     db.add(VideoRepairJob(
         tenant_id=task.tenant_id, task_id=task.id, job_type="ANALYZE", status="QUEUED",
         idempotency_key=f"analyze-retry:{task.id}:{datetime.utcnow().timestamp()}",
         payload_json={"input_id": task.input_id, "source_asset_id": task.source_asset_id},
         max_attempts=2))
-    db.commit(); db.refresh(task); wake_video_repair_worker()
+    db.commit(); db.refresh(task)
+    if retry_source:
+        enqueue_video_analysis()
+    wake_video_repair_worker()
     return serialize_task(db, task)

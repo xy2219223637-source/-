@@ -4,7 +4,6 @@ import {Link} from 'react-router-dom';
 import {mediaUrl, videoRepairApi} from '../api/client';
 import type {VideoRepairAttachment, VideoRepairMaterial, VideoRepairTask} from '../api/client';
 
-type Decision = '' | 'ACCEPT_AI' | 'REANALYZE';
 type Action = Record<string, any>;
 
 const actionLabels: Record<string, string> = {
@@ -26,7 +25,6 @@ export default function VideoRepairWorkbenchV4({initialTask}: {initialTask: Vide
   const [task, setTask] = useState(initialTask);
   const [materials, setMaterials] = useState<VideoRepairMaterial[]>([]);
   const [materialsLoading, setMaterialsLoading] = useState(true);
-  const [decision, setDecision] = useState<Decision>('');
   const [busy, setBusy] = useState('');
   const [error, setError] = useState('');
   const [attachment, setAttachment] = useState<VideoRepairAttachment | null>(null);
@@ -34,10 +32,15 @@ export default function VideoRepairWorkbenchV4({initialTask}: {initialTask: Vide
   const [insertAt, setInsertAt] = useState('');
   const [materialId, setMaterialId] = useState('');
   const [trimStart, setTrimStart] = useState('0');
+  const [rangeStart, setRangeStart] = useState('');
+  const [rangeEnd, setRangeEnd] = useState('');
   const materialPreview=useRef<HTMLVideoElement|null>(null);
+  const insertMaterialPreview=useRef<HTMLVideoElement|null>(null);
 
   const diagnosis = task.diagnosis;
-  const proposal = diagnosis.ai_proposal;
+  const rawProposal = diagnosis.ai_proposal;
+  // The placement note is rendered beside the actual source and material previews.
+  const proposal = rawProposal ? {...rawProposal, placement: undefined} : undefined;
   const proposalAction = proposal?.action as Action | undefined;
   const proposalTemplate = proposal?.action_template as Action | undefined;
   const fallbackRange = diagnosis.suggested_ranges?.[0];
@@ -50,21 +53,34 @@ export default function VideoRepairWorkbenchV4({initialTask}: {initialTask: Vide
   const displayAction = planAction || proposed;
   const displayType = String(displayAction?.type || diagnosis.recommended_action || '');
   const facts = diagnosis.issues?.find(row => row.issue_id === diagnosis.primary_issue_id) || diagnosis.issues?.[0];
-  const unsupportedAction = !diagnosis.recommended_action && ['AV_SEGMENT_REPLACE','UNSUPPORTED'].includes(facts?.suggested_action || '');
+  const aiUnavailable = diagnosis.ai_status === 'UNAVAILABLE' || diagnosis.ai_status === 'FAILED';
+  const unsupportedAction = !aiUnavailable && !diagnosis.recommended_action &&
+    ['AV_SEGMENT_REPLACE','UNSUPPORTED'].includes(facts?.suggested_action || '');
   const unsupportedAv = unsupportedAction && !!facts?.affected_modalities.includes('visual') &&
     facts.affected_modalities.some(value=>value==='audio'||value==='caption');
-  const summary = unsupportedAv
+  const summary = aiUnavailable ? proposal?.summary || 'AI 诊断暂不可用，请重新分析。' : unsupportedAv
     ? 'AI 判断该问题同时涉及画面与声音或字幕；当前三种返修动作无法完整修复，并非素材不足。'
     : proposal?.summary || `${actionLabels[displayType] || '修复'}，生成预览后由人工确认。`;
   const active = ['ANALYZING', 'PREVIEW_QUEUED', 'PREVIEW_RENDERING'].includes(task.status);
-  const latest = task.previews?.[0];
+  const waitingForSource = task.status === 'ANALYZING' &&
+    ['queued_for_analysis', 'analyzing'].includes(task.source_asset.status);
+  const sourceAnalysisFailed = task.status === 'FAILED' && task.error_code.startsWith('SOURCE_ANALYSIS_');
+  const latest = task.previews?.find(row=>row.status!=='SUPERSEDED');
+  const needsTargetRange = !!proposal?.requires_input?.includes('target_range');
+  const startSeconds = Number(rangeStart);
+  const endSeconds = Number(rangeEnd);
+  const validTargetRange = !needsTargetRange || (rangeStart.trim() !== '' && rangeEnd.trim() !== '' &&
+    Number.isFinite(startSeconds) && Number.isFinite(endSeconds) && startSeconds >= 0 &&
+    endSeconds > startSeconds && endSeconds <= task.source_asset.duration_seconds);
   const needsVisualMaterial = !!proposal?.requires_input?.includes('visual_material');
   const productMaterials = materials.filter(row => row.asset_kind === 'material' && row.duration_seconds > 0);
   const ecommerceAnalyzedMaterials = productMaterials.filter(row => row.ecommerce_has_analyzed_segments);
   const suggestedMaterial=proposal?.recommended_material;
-  const selectedMaterial = materials.find(row => row.id === Number(materialId || suggestedMaterial?.source_asset_id || proposed?.visual?.ref_id || proposed?.material?.ref_id));
+  const selectedMaterial = materials.find(row => row.id === Number(materialId || suggestedMaterial?.source_asset_id ||
+    proposed?.visual?.ref_id || proposed?.material?.ref_id || planAction?.visual?.ref_id));
   const requiredVisualSeconds = proposed?.type === 'VISUAL_REPLACE'
-    ? (Number(proposed?.target_range?.end_ms) - Number(proposed?.target_range?.start_ms)) / 1000
+    ? needsTargetRange ? endSeconds - startSeconds
+      : (Number(proposed?.target_range?.end_ms) - Number(proposed?.target_range?.start_ms)) / 1000
     : Number(proposed?.duration_ms || 0) / 1000;
   const trimSeconds = Number(trimStart);
   const validTrim = !needsVisualMaterial || (!!selectedMaterial && Number.isFinite(trimSeconds) && trimSeconds >= 0 &&
@@ -77,7 +93,15 @@ export default function VideoRepairWorkbenchV4({initialTask}: {initialTask: Vide
   const needsUploadedAudio = needsAudio && !canUseOriginalAudio;
   const insertSeconds = Number(insertAt);
   const hasInsertPosition = !needsInsertPosition || (insertAt.trim() !== '' && Number.isFinite(insertSeconds) && insertSeconds >= 0 && insertSeconds <= task.source_asset.duration_seconds);
-  const canPreview = !!proposed?.type && (proposed.type !== 'CONTENT_INSERT' || !!proposed.visual || needsVisualMaterial) && validTrim &&
+  const plannedInsertMs = Number(proposed?.type === 'CONTENT_INSERT' && !needsInsertPosition ? proposed.insert_at_ms
+    : planAction?.type === 'CONTENT_INSERT' ? planAction.insert_at_ms : rawProposal?.placement?.recommended_ms);
+  const actualInsertMs = needsInsertPosition && hasInsertPosition ? Math.round(insertSeconds * 1000) : plannedInsertMs;
+  const materialStartMs = selectedMaterial && proposed?.visual?.ref_id === selectedMaterial.id
+    ? Number(proposed.visual.source_range?.start_ms || 0)
+    : selectedMaterial && !materialId && planAction?.visual?.ref_id === selectedMaterial.id
+      ? Number(planAction.visual.source_range?.start_ms || 0) : Math.round(trimSeconds * 1000);
+  const materialSeekSeconds = Math.max(0, materialStartMs / 1000);
+  const canPreview = !!proposed?.type && (proposed.type !== 'CONTENT_INSERT' || !!proposed.visual || needsVisualMaterial) && validTargetRange && validTrim &&
     (!needsUploadedAudio || !!attachment) && hasInsertPosition && !active &&
     task.status !== 'COMPLETED' && task.status !== 'CANCELED';
 
@@ -94,6 +118,9 @@ export default function VideoRepairWorkbenchV4({initialTask}: {initialTask: Vide
   useEffect(()=>{
     if(materialPreview.current&&selectedMaterial&&Number.isFinite(trimSeconds))materialPreview.current.currentTime=trimSeconds;
   },[selectedMaterial?.id,trimSeconds]);
+  useEffect(()=>{
+    if(insertMaterialPreview.current && selectedMaterial)insertMaterialPreview.current.currentTime=materialSeekSeconds;
+  },[selectedMaterial?.id,materialSeekSeconds]);
   useEffect(() => {
     if (!active) return;
     const timer = window.setInterval(() => videoRepairApi.get(task.id).then(setTask).catch(() => {}), 2000);
@@ -125,6 +152,9 @@ export default function VideoRepairWorkbenchV4({initialTask}: {initialTask: Vide
   function acceptedAction(): Action | null {
     if (!proposed?.type || !canPreview) return null;
     const action: Action = {...proposed};
+    if (needsTargetRange) action.target_range = {
+      start_ms: Math.round(startSeconds * 1000), end_ms: Math.round(endSeconds * 1000),
+    };
     if (needsVisualMaterial && selectedMaterial) {
       const visual = {
         ref_type:'VIDEO_ASSET', ref_id:selectedMaterial.id,
@@ -163,13 +193,12 @@ export default function VideoRepairWorkbenchV4({initialTask}: {initialTask: Vide
       await videoRepairApi.updateV4Draft(task.id, task.draft_revision || 1, action);
       await videoRepairApi.createPreview(task.id);
       setTask(await videoRepairApi.get(task.id));
-      setDecision('');
     } catch (reason) { setError(message(reason)); }
     finally { setBusy(''); }
   }
   async function reanalyze() {
     setBusy('reanalyze'); setError('');
-    try { setTask(await videoRepairApi.retryAnalysis(task.id)); setDecision(''); setAttachment(null); setInsertAt(''); }
+    try { setTask(await videoRepairApi.retryAnalysis(task.id)); setAttachment(null); setInsertAt(''); setRangeStart(''); setRangeEnd(''); }
     catch (reason) { setError(message(reason)); }
     finally { setBusy(''); }
   }
@@ -201,13 +230,49 @@ export default function VideoRepairWorkbenchV4({initialTask}: {initialTask: Vide
 
   return <section className="space-y-4" aria-label="AI 辅助视频返修工作台">
     <header className="flex flex-wrap items-start justify-between gap-3"><div><h2 className="font-display text-2xl">AI 辅助视频返修</h2><p className="mt-1 text-xs text-[var(--muted)]">AI 提出方案，人工确认后生成预览；原始 V1 永不覆盖。</p></div><span className="rounded-full bg-violet-100 px-3 py-1 text-xs text-violet-900">{statusLabels[task.status] || task.status}</span></header>
+    {waitingForSource && <p role="status" className="rounded bg-sky-50 p-3 text-sm text-sky-800">正在分析原视频，完成后才会开始审核问题诊断。</p>}
+    {sourceAnalysisFailed && <button className="btn-secondary" disabled={!!busy} onClick={reanalyze}>重新分析原视频并诊断</button>}
     <div className="grid gap-4 lg:grid-cols-2">
       <section className="rounded border bg-white p-4"><h3 className="text-sm font-semibold">原始 V1</h3><video aria-label="原始 V1 视频" className="mt-3 aspect-video w-full bg-black object-contain" controls src={mediaUrl(task.source_asset.object_url)}/><p className="mt-2 text-xs text-[var(--muted)]">{task.source_asset.filename} · {task.source_asset.duration_seconds.toFixed(1)} 秒</p></section>
-      <section className="rounded border border-violet-200 bg-violet-50 p-4"><h3 className="text-sm font-semibold text-violet-950">审核事实与 AI 提案</h3><p className="mt-2 text-sm">{task.input.raw_reason}</p><dl className="mt-4 grid grid-cols-[6rem_1fr] gap-2 text-xs"><dt>建议动作</dt><dd>{unsupportedAv ? '音画整段替换（暂不支持）' : unsupportedAction ? '当前动作暂不支持' : actionLabels[diagnosis.recommended_action || ''] || '需要人工判断'}</dd><dt>置信度</dt><dd>{diagnosis.confidence_level || Math.round((diagnosis.overall_confidence || 0) * 100) + '%'}</dd><dt>证据充分性</dt><dd>{diagnosis.evidence_sufficiency || '—'}</dd><dt>理由</dt><dd>{facts?.description || diagnosis.summary || '—'}</dd></dl><div className="mt-4 rounded border border-violet-200 bg-white p-3"><p className="text-xs font-semibold">AI 方案摘要</p><p className="mt-1 text-sm">{summary}</p>{proposal?.placement && <div className="mt-2 rounded bg-slate-50 p-2 text-xs"><p><strong>插入点判断：</strong>{(proposal.placement.recommended_ms / 1000).toFixed(1)} 秒 · {proposal.placement.confidence_level} {Math.round(proposal.placement.confidence * 100)}%</p><p className="mt-1 text-[var(--muted)]">{proposal.placement.basis}</p>{proposal.placement.alternatives.length > 0 && <p className="mt-1">备选：{proposal.placement.alternatives.map(value => (value / 1000).toFixed(1) + ' 秒').join(' / ')}</p>}</div>}{displayAction?.target_range && <p className="mt-1 text-xs text-[var(--muted)]">目标区间：{(displayAction.target_range.start_ms / 1000).toFixed(1)}–{(displayAction.target_range.end_ms / 1000).toFixed(1)} 秒</p>}{proposal?.risks?.map(row => <p key={row} className="mt-1 text-xs text-amber-700">注意：{row}</p>)}</div></section>
+      <section className="rounded border border-violet-200 bg-violet-50 p-4"><h3 className="text-sm font-semibold text-violet-950">审核事实与 AI 提案</h3><p className="mt-2 text-sm">{task.input.raw_reason}</p><dl className="mt-4 grid grid-cols-[6rem_1fr] gap-2 text-xs"><dt>建议动作</dt><dd>{unsupportedAv ? '音画整段替换（暂不支持）' : unsupportedAction ? '当前动作暂不支持' : actionLabels[diagnosis.recommended_action || ''] || '需要人工判断'}</dd><dt>置信度</dt><dd>{diagnosis.confidence_level || Math.round((diagnosis.overall_confidence || 0) * 100) + '%'}</dd><dt>证据充分性</dt><dd>{diagnosis.evidence_sufficiency || '—'}</dd><dt>理由</dt><dd>{facts?.description || diagnosis.summary || '—'}</dd></dl>{diagnosis.evidence_warnings?.map(warning=><p key={warning} className="mt-2 text-xs text-amber-800">{warning}</p>)}<div className="mt-4 rounded border border-violet-200 bg-white p-3"><p className="text-xs font-semibold">AI 方案摘要</p><p className="mt-1 text-sm">{summary}</p>{proposal?.placement && <div className="mt-2 rounded bg-slate-50 p-2 text-xs"><p><strong>插入点判断：</strong>{(proposal.placement.recommended_ms / 1000).toFixed(1)} 秒 · {proposal.placement.confidence_level} {Math.round(proposal.placement.confidence * 100)}%</p><p className="mt-1 text-[var(--muted)]">{proposal.placement.basis}</p>{proposal.placement.alternatives.length > 0 && <p className="mt-1">备选：{proposal.placement.alternatives.map(value => (value / 1000).toFixed(1) + ' 秒').join(' / ')}</p>}</div>}{displayAction?.target_range && <p className="mt-1 text-xs text-[var(--muted)]">目标区间：{(displayAction.target_range.start_ms / 1000).toFixed(1)}–{(displayAction.target_range.end_ms / 1000).toFixed(1)} 秒</p>}{proposal?.risks?.map(row => <p key={row} className="mt-1 text-xs text-amber-700">注意：{row}</p>)}</div></section>
     </div>
+    {proposed?.type === 'CONTENT_INSERT' && Number.isFinite(actualInsertMs) &&
+      <section className="rounded border border-violet-200 bg-white p-4">
+        <h3 className="text-sm font-semibold">待插入素材预览</h3>
+        <p className="mt-2 text-sm">{latest && planAction?.type === 'CONTENT_INSERT' ? '当前预览已将素材插入原片' : '方案将把素材插入原片'} <strong>{(actualInsertMs / 1000).toFixed(1)} 秒</strong>处。下方视频只展示待插入素材，已定位到素材自身的截取起点。</p>
+        {rawProposal?.placement && <div className="mt-2 rounded bg-slate-50 p-2 text-xs">
+          {rawProposal.placement.recommended_ms !== actualInsertMs &&
+            <p className="text-amber-800">旧方案实际插入原片 {(actualInsertMs / 1000).toFixed(1)} 秒；位置规划原建议插入原片 {(rawProposal.placement.recommended_ms / 1000).toFixed(1)} 秒，当前预览没有采用该建议。</p>}
+          {rawProposal.placement.recommended_ms === actualInsertMs &&
+            <p>位置规划建议插入原片 {(rawProposal.placement.recommended_ms / 1000).toFixed(1)} 秒，当前方案已采用。</p>}
+          {rawProposal.placement.alternatives.length > 0 && <p className="mt-1">原片上的备选插入位置：{rawProposal.placement.alternatives.map(value => (value / 1000).toFixed(1) + ' 秒').join(' / ')}。这些数字均不是素材截取时间。</p>}
+          <p className="mt-1">位置规划依据：{rawProposal.placement.basis}（{Math.round(rawProposal.placement.confidence * 100)}% 置信度）</p>
+        </div>}
+        <div className="mt-3 max-w-3xl">
+          <p className="mb-2 text-xs font-medium">{selectedMaterial ? `素材自身截取起点：${materialSeekSeconds.toFixed(1)} 秒` : '待插入素材'}</p>
+          {selectedMaterial ? <video ref={insertMaterialPreview} controls preload="metadata" src={mediaUrl(selectedMaterial.object_url)}
+            onLoadedMetadata={event=>{event.currentTarget.currentTime=materialSeekSeconds}}
+            className="aspect-video w-full bg-black object-contain"/>
+            : <p className="rounded bg-slate-50 p-4 text-sm text-[var(--muted)]">尚未选定可预览的素材，请在下方选择或上传。</p>}
+        </div>
+      </section>}
+    {aiUnavailable && <div className="rounded border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
+      <p>{summary} 当前规则结果不作为可执行 AI 方案。</p>
+    </div>}
+    {!aiUnavailable && diagnosis.meta?.input_mode === 'STRUCTURED_CONTEXT' &&
+      <p role="status" className="rounded border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
+        本次 AI 没有根据原视频画面判断。方案依据审核意见、商品资料和已有分析生成，请核对原片后再确认。
+      </p>}
     {needsVisualMaterial && !materialsLoading && productMaterials.length > 0 && <p className="rounded border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">已找到 {productMaterials.length} 条有时长的可选视频；电商商品素材库中 {ecommerceAnalyzedMaterials.length} 条具有已分析片段。当前没有符合本次替换条件的 AI 候选，可在下方人工预览并选择。</p>}
-    <section className="rounded border bg-white p-4"><h3 className="text-sm font-semibold">1. 人工审核 AI 方案</h3><label className="field mt-3 max-w-xl"><span>审核决定</span><select aria-label="人工审核决定" className="input-select" value={decision} onChange={e => setDecision(e.target.value as Decision)}><option value="">请选择</option><option value="ACCEPT_AI">接受 AI 方案</option><option value="REANALYZE">要求 AI 重新分析</option></select></label>
-      {decision === 'ACCEPT_AI' && <div className="mt-4 rounded bg-emerald-50 p-4"><p className="text-sm">将按上方 AI 提案保存方案并生成真实视频预览。</p>
+    <section className="rounded border bg-white p-4"><h3 className="text-sm font-semibold">1. 人工审核 AI 方案</h3>
+      {task.status === 'ANALYZING' ? <p className="mt-3 text-sm text-sky-800">AI 正在分析，完成后可直接审核方案。</p> :
+      <div className="mt-4 rounded bg-emerald-50 p-4"><p className="text-sm">请核对上方 AI 方案与素材，确认后生成真实视频预览。</p>
+        {needsTargetRange && <div className="mt-3 flex flex-wrap gap-3 rounded border border-amber-200 bg-amber-50 p-3">
+          <p className="w-full text-sm text-amber-900">AI 没有足够证据确定准确区间。请在上方原片中核对后填写。</p>
+          <label className="field max-w-40"><span>开始时间（秒）</span><input aria-label="修复开始时间" className="input" type="number" min={0} max={task.source_asset.duration_seconds} step="0.1" value={rangeStart} onChange={e=>setRangeStart(e.target.value)}/></label>
+          <label className="field max-w-40"><span>结束时间（秒）</span><input aria-label="修复结束时间" className="input" type="number" min={0} max={task.source_asset.duration_seconds} step="0.1" value={rangeEnd} onChange={e=>setRangeEnd(e.target.value)}/></label>
+          {!validTargetRange && (rangeStart || rangeEnd) && <p className="w-full text-xs text-rose-700">结束时间须晚于开始时间，且不能超过原片时长。</p>}
+        </div>}
         {needsVisualMaterial && <div className="mt-3 rounded border border-emerald-200 bg-white p-3 space-y-3">
           <p className="text-sm font-semibold">选择或上传替换画面</p>
           {!materialsLoading && productMaterials.length > 0 && <p className="text-xs text-amber-800">电商商品素材库中 {ecommerceAnalyzedMaterials.length} 条具有已分析片段；这里仍可人工预览并选择有时长的视频。</p>}
@@ -222,9 +287,12 @@ export default function VideoRepairWorkbenchV4({initialTask}: {initialTask: Vide
         {proposed?.visual && <div className="mt-3 rounded border border-emerald-200 bg-white p-3"><p className="text-xs font-semibold text-emerald-800">AI 已从素材库找到画面</p><p className="mt-1 text-sm">{selectedMaterial?.description || selectedMaterial?.summary || selectedMaterial?.filename || '推荐画面正在载入'}</p><p className="mt-1 text-xs text-[var(--muted)]">画面由 AI 选择；{needsInsertPosition ? '审核意见没有时间点，请确认插入位置。' : canUseOriginalAudio ? '默认沿用素材原声，也可在下方替换。' : '如需口播，请在下方补充音频。'}</p></div>}
         {needsInsertPosition && <label className="field mt-3 max-w-xs"><span>插入位置（秒）</span><input aria-label="插入位置" className="input" type="number" min={0} max={task.source_asset.duration_seconds} step="0.1" value={insertAt} onChange={e => setInsertAt(e.target.value)}/></label>}
         {needsAudio && audioInput()}
-        {!proposed?.type || (proposed.type === 'CONTENT_INSERT' && !proposed.visual && !needsVisualMaterial) ? <p className="mt-3 text-sm text-amber-800">{unsupportedAction ? '当前工作台无法执行该修改，重新分析通常不会解决能力限制。' : 'AI 尚未确定可执行动作，请要求重新分析。'}</p> : <button className="primary mt-3" disabled={!canPreview || !!busy} onClick={saveAndPreview}>{busy === 'preview' && <Loader2 size={14} className="animate-spin"/>}{needsVisualMaterial ? '确认素材并生成预览' : needsAudio ? (canUseOriginalAudio && !attachment ? '沿用素材原声并生成预览' : '补充音频并生成预览') : '接受 AI 方案并生成预览'}</button>}
+        {!proposed?.type || (proposed.type === 'CONTENT_INSERT' && !proposed.visual && !needsVisualMaterial) ? <p className="mt-3 text-sm text-amber-800">{unsupportedAction ? '当前工作台无法执行该修改，重新分析通常不会解决能力限制。' : 'AI 尚未确定可执行动作，请要求重新分析。'}</p> : null}
+        <div className="mt-5 flex flex-wrap justify-end gap-3">
+          <button className="btn-secondary" disabled={!!busy || !['FAILED', 'AWAITING_MANUAL_DECISION', 'CONFIGURING', 'PREVIEW_READY'].includes(task.status)} onClick={reanalyze}>{busy === 'reanalyze' && <Loader2 size={14} className="animate-spin"/>}要求 AI 重新分析</button>
+          <button className="primary" disabled={!canPreview || !!busy} onClick={saveAndPreview}>{busy === 'preview' && <Loader2 size={14} className="animate-spin"/>}接受 AI 方案并生成预览</button>
+        </div>
       </div>}
-      {decision === 'REANALYZE' && <div className="mt-4 rounded bg-sky-50 p-4"><p className="text-sm">AI 会重新读取审核事实和现有素材，并刷新建议。</p><button className="btn-secondary mt-3" disabled={!!busy || !['FAILED', 'AWAITING_MANUAL_DECISION', 'CONFIGURING'].includes(task.status)} onClick={reanalyze}>{busy === 'reanalyze' && <Loader2 size={14} className="animate-spin"/>}重新分析</button></div>}
     </section>
     <section className="rounded border bg-white p-4"><h3 className="text-sm font-semibold">2. 视频预览与人工确认</h3><div className="mt-3 rounded bg-slate-50 p-3"><p className="text-sm font-medium">本次预览会发生什么</p><p className="mt-1 text-sm">{summary}</p>{displayType && <p className="mt-1 text-xs text-[var(--muted)]">动作：{actionLabels[displayType] || displayType}</p>}</div>{latest ? <div className="mt-4"><p className="text-xs">预览 #{latest.id} · {latest.status} · 草稿修订 {latest.draft_revision}</p>{latest.object_url && <div className="mt-3 grid gap-4 lg:grid-cols-2"><div><p className="mb-2 text-xs font-semibold">原始 V1</p><video className="aspect-video w-full bg-black object-contain" controls src={mediaUrl(task.source_asset.object_url)}/></div><div><p className="mb-2 text-xs font-semibold">修复预览</p><video aria-label="修复后预览" className="aspect-video w-full bg-black object-contain" controls src={mediaUrl(latest.object_url)}/></div></div>}{latest.error_message && <p className="mt-2 text-sm text-rose-700">{latest.error_message}</p>}<div className="mt-3 flex flex-wrap gap-2">{latest.status === 'FAILED' && <button className="btn-secondary" disabled={!!busy} onClick={retryPreview}>重试预览</button>}{latest.status === 'READY' && <button className="primary" disabled={!!busy} onClick={accept}>{busy === 'accept' ? <Loader2 size={14} className="animate-spin"/> : <CheckCircle2 size={14}/>}确认预览并生成 V2</button>}</div></div> : <p className="mt-3 text-xs text-[var(--muted)]">审核 AI 方案并生成后，这里会展示原片与真实渲染结果。</p>}</section>
     {active && <p className="rounded bg-sky-50 p-3 text-sm text-sky-800"><Loader2 className="mr-2 inline animate-spin" size={15}/>后台任务进行中，页面会自动刷新。</p>}{task.error_message && <p className="rounded bg-rose-50 p-3 text-sm text-rose-800">{task.error_message}</p>}{error && <p role="alert" className="rounded bg-rose-50 p-3 text-sm text-rose-800">{error}</p>}

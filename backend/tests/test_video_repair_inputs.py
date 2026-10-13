@@ -7,7 +7,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
 from app.database import Base
-from app.models import Product, Tenant, User, VideoAsset
+from app.models import Product, Tenant, User, VideoAsset, VideoAssetAnalysis
 from app.schemas.video_repair import VideoRepairInputCreate
 from app.services.video_repair.ai_context import build_ai_context
 from app.services.video_repair.inputs import create_input
@@ -90,6 +90,27 @@ class VideoRepairInputTests(unittest.TestCase):
             self.assertEqual(context["review"]["explicit_time_ranges"][0]["start_ms"], 6000)
             self.assertNotIn("expected_result", context["review"])
             self.assertEqual(context["review"]["category_hint"], "UNKNOWN")
+
+    def test_context_uses_the_validated_analysis_snapshot(self):
+        with self.sessions() as db:
+            repair_input = create_input(
+                db, tenant_id="tenant", user_id="owner", source_asset_id=1,
+                source_kind="MANUAL", audit_platform="INTERNAL", raw_reason="口播错误",
+                suggestions=[], time_ranges=[], raw_payload={})
+            validated = VideoAssetAnalysis(
+                tenant_id="tenant", asset_id=1, status="completed",
+                analysis_json={"source_hash": "a" * 64,
+                               "transcript": {"segments": [{"text": "正确视频"}]}})
+            newer = VideoAssetAnalysis(
+                tenant_id="tenant", asset_id=1, status="completed",
+                analysis_json={"source_hash": "stale",
+                               "transcript": {"segments": [{"text": "过期结果"}]}})
+            db.add_all([validated, newer])
+            db.flush()
+            context = build_ai_context(
+                db, repair_input=repair_input, source_asset=db.get(VideoAsset, 1),
+                base_plan={}, source_analysis=validated)
+            self.assertEqual(context["observations"]["asr_segments"][0]["text"], "正确视频")
 
 
 

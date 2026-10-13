@@ -1,6 +1,7 @@
 """Expose a product's ecommerce videos to the existing repair renderer."""
 from __future__ import annotations
 
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.models import (
@@ -9,15 +10,48 @@ from app.models import (
 )
 
 
+def _create_or_reuse_mirror(db: Session, task: VideoRepairTask,
+                            row: EcommerceVideoAsset) -> VideoAsset:
+    marker = f"ecommerce_video_asset:{row.id}"
+    mirror = VideoAsset(
+        tenant_id=task.tenant_id, product_id=task.product_id, project_id=None,
+        asset_id=f"repair-ecommerce-{row.id}", filename=row.filename, source=marker,
+        library_type="repair_only", asset_kind="material",
+        object_url=row.object_url, content_hash=row.content_hash,
+        storage_provider=row.storage_provider, duration_seconds=row.duration_seconds,
+        width=row.width, height=row.height, fps=row.fps, has_audio=row.has_audio,
+        burned_subtitles=row.burned_subtitles, has_background_music=row.has_background_music,
+        reusable_status=row.reusable_status, status="uploaded", excluded=False,
+    )
+    try:
+        # A savepoint keeps the caller's transaction usable after a unique-key race.
+        with db.begin_nested():
+            db.add(mirror)
+            db.flush()
+        return mirror
+    except IntegrityError:
+        existing = db.query(VideoAsset).filter_by(
+            tenant_id=task.tenant_id, asset_id=mirror.asset_id,
+            product_id=task.product_id, source=marker).first()
+        if existing is None:
+            raise
+        return existing
+
+
 def sync_ecommerce_materials(db: Session, task: VideoRepairTask) -> list[VideoAsset]:
     """Mirror media metadata and completed analysis without copying video bytes."""
     repair_input = db.get(VideoRepairInput, task.input_id)
     ecommerce_product_id = (repair_input.raw_payload_json or {}).get("ecommerce_product_id") if repair_input else None
     if not ecommerce_product_id:
         return []
-    rows = db.query(EcommerceVideoAsset).filter_by(
+    query = db.query(EcommerceVideoAsset).filter_by(
         tenant_id=task.tenant_id, product_id=ecommerce_product_id,
-        asset_kind="material").order_by(EcommerceVideoAsset.id).all()
+        asset_kind="material").order_by(EcommerceVideoAsset.id)
+    # The API and repair worker may synchronize the same product concurrently.
+    # Serialize the whole mirror + analysis copy, not just the first INSERT.
+    if db.get_bind().dialect.name == "postgresql":
+        query = query.with_for_update()
+    rows = query.all()
     mirrors: list[VideoAsset] = []
     for row in rows:
         marker = f"ecommerce_video_asset:{row.id}"
@@ -35,18 +69,7 @@ def sync_ecommerce_materials(db: Session, task: VideoRepairTask) -> list[VideoAs
         if not mirror:
             if not usable or not row.object_url or row.duration_seconds <= 0:
                 continue
-            mirror = VideoAsset(
-                tenant_id=task.tenant_id, product_id=task.product_id, project_id=None,
-                asset_id=f"repair-ecommerce-{row.id}", filename=row.filename, source=marker,
-                library_type="repair_only", asset_kind="material",
-                object_url=row.object_url, content_hash=row.content_hash,
-                storage_provider=row.storage_provider, duration_seconds=row.duration_seconds,
-                width=row.width, height=row.height, fps=row.fps, has_audio=row.has_audio,
-                burned_subtitles=row.burned_subtitles, has_background_music=row.has_background_music,
-                reusable_status=row.reusable_status, status="uploaded", excluded=False,
-            )
-            db.add(mirror)
-            db.flush()
+            mirror = _create_or_reuse_mirror(db, task, row)
         mirror.excluded = not usable
         mirror.reusable_status = row.reusable_status
         if not usable:
