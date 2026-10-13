@@ -207,7 +207,9 @@ export interface VideoRepairTask {
   source_asset_id:number;base_plan_version_id:number|null;
   diagnosis:{normalized_category?:string;content_fixable?:boolean;affected_modalities?:string[];
     issue_ranges?:Array<{start:number;end:number;precision:string;source:string;confidence:number;evidence:string}>;
-    recommended_action?:string;confidence_level?:string;evidence_sufficiency?:string;
+    recommended_action?:string;confidence_level?:string;evidence_sufficiency?:string;ai_status?:'READY'|'UNAVAILABLE'|'FAILED';
+    source_analysis?:{id:number;source_hash:string;transcript_available:boolean;transcript_error?:string};
+    evidence_warnings?:string[];
     reported_ranges?:Array<{start_ms:number;end_ms:number}>;suggested_ranges?:Array<{start_ms:number;end_ms:number}>;
     explanation?:string;evidence?:string[];schema_version?:string;summary?:string;
     primary_issue_id?:string|null;requires_human_range_confirmation?:boolean;overall_confidence?:number;
@@ -217,7 +219,7 @@ export interface VideoRepairTask {
     issues?:Array<{issue_id:string;category:string;description:string;affected_modalities:string[];
       ranges:Array<{start_ms:number;end_ms:number;precision:string;source:string;confidence:number}>;
       evidence:Array<{source:string;start_ms?:number|null;end_ms?:number|null;description:string}>;
-      confidence:number;suggested_action:string}>;meta?:{mode?:string;model?:string|null;prompt_version?:string}};
+      confidence:number;suggested_action:string}>;meta?:{mode?:string;model?:string|null;input_mode?:string|null;prompt_version?:string}};
   repair_plan:{schema_version?:string;render_mode?:'PLAN'|'FLAT_VISUAL';primary_action?:string;actions?:Array<{action_id:string;type:string;
     target_range:{start?:number;end?:number;start_ms?:number;end_ms?:number};affected_track?:string;
     affected_tracks?:string[];duration_policy?:string;selected_candidate_id?:string|null;

@@ -3,12 +3,14 @@ from __future__ import annotations
 import unittest
 import asyncio
 import io
+from datetime import datetime, timedelta
 from types import SimpleNamespace
 from unittest.mock import patch
 
 from fastapi import HTTPException
 from fastapi import UploadFile
 from sqlalchemy import create_engine
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.database import Base
@@ -17,17 +19,19 @@ from app.auth import AuthContext
 from app.models import (
     EcommerceProduct, EcommerceVideoAsset, EcommerceVideoAssetAnalysis, EcommerceVideoHighlight,
     Product, Tenant, User, VideoAsset, VideoAssetAnalysis, VideoHighlight,
-    VideoRepairInput, VideoRepairPreview, VideoRepairTask,
+    VideoRepairInput, VideoRepairJob, VideoRepairPreview, VideoRepairTask,
 )
 from app.services.video_repair.migration import migrate_video_repair
 from app.services.video_repair.migration_v2 import migrate_video_repair_v2
 from app.services.video_repair.migration_v3 import migrate_video_repair_v3
 from app.services.video_repair.protocol_v4 import plan_hash
 from app.services.video_repair.service import serialize_task
-from app.services.video_repair.ecommerce_materials import sync_ecommerce_materials
+from app.services.video_repair.ecommerce_materials import _create_or_reuse_mirror, sync_ecommerce_materials
 from app.services.video_repair.legacy_analysis_import import import_finished_video_analysis
 from app.services.video_repair.candidates import find_candidates
+from app.services.video_repair.diagnosis_v4 import VideoRepairDiagnosisV4
 from app.services.video_repair.v4_service import accept_preview, update_v4_draft
+from app.services.video_repair import worker_v4
 from app.schemas.video_repair import VideoRepairInputCreate, VideoRepairTaskCreate
 
 
@@ -93,6 +97,213 @@ class VideoRepairV4ServiceTests(unittest.TestCase):
                 "source_range": {"start_ms": 1000, "end_ms": 4000},
             },
         }
+
+    def _queued_analysis_job(self, db):
+        task = db.get(VideoRepairTask, 1)
+        task.status = "ANALYZING"
+        source = db.get(VideoAsset, 1)
+        source.status = "queued_for_analysis"
+        job = VideoRepairJob(
+            tenant_id="tenant", task_id=task.id, job_type="ANALYZE", status="QUEUED",
+            idempotency_key="test-source-analysis-dependency", payload_json={}, max_attempts=2)
+        db.add(job)
+        db.commit()
+        return job.id
+
+    def test_repair_waits_for_matching_source_analysis_without_using_attempts(self):
+        with self.sessions() as db:
+            job_id = self._queued_analysis_job(db)
+        used_analysis_ids = []
+        with patch.object(worker_v4, "SessionLocal", self.sessions), \
+             patch.object(worker_v4, "_analyze",
+                          side_effect=lambda db, task, analysis: used_analysis_ids.append(analysis.id)) as diagnose:
+            worker_v4._execute(job_id)
+            with self.sessions() as db:
+                job = db.get(VideoRepairJob, job_id)
+                self.assertEqual((job.status, job.attempts), ("QUEUED", 0))
+                self.assertIn("dependency_next_check_at", job.payload_json)
+                self.assertEqual(db.get(VideoRepairTask, 1).status, "ANALYZING")
+                db.add(VideoAssetAnalysis(
+                    tenant_id="tenant", asset_id=1, status="completed",
+                    analysis_json={"source_hash": "stale", "highlights": [{"start": 0, "end": 2}]}))
+                db.commit()
+            with self.sessions() as db:
+                self.assertEqual(worker_v4._source_analysis_dependency(
+                    db, db.get(VideoRepairTask, 1))[0], "WAITING")
+                db.add(VideoAssetAnalysis(
+                    tenant_id="tenant", asset_id=1, status="completed",
+                    analysis_json={"source_hash": "a" * 64,
+                                   "highlights": [{"start": 0, "end": 2}]}))
+                db.get(VideoAsset, 1).status = "analyzed"
+                db.commit()
+            worker_v4._execute(job_id)
+            with self.sessions() as db:
+                job = db.get(VideoRepairJob, job_id)
+                self.assertEqual((job.status, job.attempts), ("SUCCEEDED", 1))
+                expected_id = db.query(VideoAssetAnalysis).filter_by(
+                    asset_id=1, status="completed").order_by(
+                    VideoAssetAnalysis.id.desc()).first().id
+            self.assertEqual(used_analysis_ids, [expected_id])
+
+    def test_ai_action_without_range_requests_human_range_and_remains_configurable(self):
+        for action, modalities, category, required in [
+            ("VISUAL_REPLACE", ["visual"], "VISUAL_MISMATCH", "visual_material"),
+            ("AUDIO_REPLACE", ["audio"], "COPY_AUDIO_CAPTION_RISK", "audio"),
+        ]:
+            with self.subTest(action=action), self.sessions() as db:
+                task = db.get(VideoRepairTask, 1)
+                task.status = "ANALYZING"
+                analysis = VideoAssetAnalysis(
+                    tenant_id="tenant", asset_id=1, status="completed",
+                    analysis_json={"source_hash": "a" * 64,
+                                   "highlights": [{"start": 0, "end": 2}]})
+                db.add(analysis)
+                db.commit()
+                model = VideoRepairDiagnosisV4.model_validate({
+                    "summary": "动作可执行，但区间待确认",
+                    "issues": [{"issue_id": "issue-1", "category": category,
+                                "description": "问题", "affected_modalities": modalities,
+                                "ranges": [], "evidence": [{"source": "REVIEW_TEXT", "description": "审核意见"}],
+                                "confidence": .8, "suggested_action": action}],
+                    "primary_issue_id": "issue-1", "requires_human_range_confirmation": True,
+                    "overall_confidence": .8, "meta": {"mode": "MULTIMODAL", "input_mode": (
+                        "STRUCTURED_CONTEXT" if action == "VISUAL_REPLACE" else "VIDEO")},
+                })
+                context = {"review": {"explicit_time_ranges": []},
+                           "observations": {"asr_segments": [{"text": "hello"}]}}
+                settings = SimpleNamespace(
+                    video_repair_ai_max_keyframes=12,
+                    video_repair_audio_replace_enabled=True,
+                    video_repair_content_insert_enabled=True)
+                with patch.object(worker_v4, "sync_ecommerce_materials"), \
+                     patch.object(worker_v4, "build_ai_context", return_value=context), \
+                     patch.object(worker_v4, "diagnose_video_v4", return_value=model), \
+                     patch.object(worker_v4, "get_settings", return_value=settings), \
+                     patch.object(worker_v4, "_provider", return_value=None):
+                    settings.video_repair_multimodal_enabled = True
+                    worker_v4._analyze(db, task, analysis)
+                self.assertEqual(task.status, "CONFIGURING")
+                proposal = task.diagnosis_json["ai_proposal"]
+                self.assertEqual(proposal["action_template"]["type"], action)
+                self.assertEqual(set(proposal["requires_input"]), {"target_range", required})
+                if action == "VISUAL_REPLACE":
+                    self.assertIn("没有根据原视频画面判断", task.diagnosis_json["evidence_warnings"][0])
+                    self.assertEqual(task.diagnosis_json["evidence_sufficiency"], "INSUFFICIENT")
+
+    def test_content_insert_uses_one_placement_for_summary_and_render_action(self):
+        with self.sessions() as db:
+            task = db.get(VideoRepairTask, 1)
+            task.status = "ANALYZING"
+            analysis = VideoAssetAnalysis(
+                tenant_id="tenant", asset_id=1, status="completed",
+                analysis_json={"source_hash": "a" * 64,
+                               "highlights": [{"start": 0, "end": 2}]})
+            db.add(analysis)
+            db.commit()
+            model = VideoRepairDiagnosisV4.model_validate({
+                "summary": "缺少功能介绍",
+                "issues": [{"issue_id": "issue-1", "category": "MISSING_PROCESS_EVIDENCE",
+                            "description": "缺少功能介绍", "affected_modalities": ["visual", "audio"],
+                            "ranges": [{"start_ms": 0, "end_ms": 3000,
+                                        "precision": "APPROXIMATE", "source": "MULTIMODAL", "confidence": .6}],
+                            "evidence": [{"source": "REVIEW_TEXT", "description": "审核意见"}],
+                            "confidence": .8, "suggested_action": "CONTENT_INSERT"}],
+                "primary_issue_id": "issue-1", "requires_human_range_confirmation": False,
+                "overall_confidence": .8, "meta": {"mode": "MULTIMODAL", "input_mode": "VIDEO"},
+            })
+            context = {"review": {"explicit_time_ranges": []},
+                       "timeline": {}, "observations": {"asr_segments": []}}
+            candidate = {"id": "candidate-1", "source_asset_id": 2,
+                         "source_range": {"start": 1.0, "end": 5.0},
+                         "duration_seconds": 8.0, "content_hash": "b" * 64,
+                         "recommendation_level": "RECOMMENDED", "has_audio": True,
+                         "description": "功能演示"}
+            settings = SimpleNamespace(
+                video_repair_ai_max_keyframes=12,
+                video_repair_audio_replace_enabled=True,
+                video_repair_content_insert_enabled=True,
+                video_repair_multimodal_enabled=True,
+                video_repair_recommend_score=.8, video_repair_selectable_score=.5)
+            with patch.object(worker_v4, "sync_ecommerce_materials"), \
+                 patch.object(worker_v4, "build_ai_context", return_value=context), \
+                 patch.object(worker_v4, "diagnose_video_v4", return_value=model), \
+                 patch.object(worker_v4, "find_candidates", return_value=[candidate]), \
+                 patch.object(worker_v4, "get_settings", return_value=settings), \
+                 patch.object(worker_v4, "_provider", return_value=None):
+                worker_v4._analyze(db, task, analysis)
+            proposal = task.diagnosis_json["ai_proposal"]
+            actual = proposal["action"]["insert_at_ms"]
+            self.assertEqual(actual, proposal["placement"]["recommended_ms"])
+            self.assertGreater(actual, 0)
+            self.assertIn(f"{actual / 1000:g} 秒插入", proposal["summary"])
+
+    def test_source_analysis_failure_is_distinct_from_ai_failure_and_can_retry(self):
+        with self.sessions() as db:
+            job_id = self._queued_analysis_job(db)
+            db.get(VideoAsset, 1).status = "analysis_failed"
+            db.commit()
+        with patch.object(worker_v4, "SessionLocal", self.sessions), \
+             patch.object(worker_v4, "_analyze") as diagnose:
+            worker_v4._execute(job_id)
+        diagnose.assert_not_called()
+        with self.sessions() as db:
+            task = db.get(VideoRepairTask, 1)
+            self.assertEqual((task.status, task.error_code),
+                             ("FAILED", "SOURCE_ANALYSIS_FAILED"))
+            self.assertEqual(db.get(VideoRepairJob, job_id).attempts, 0)
+            auth = SimpleNamespace(user_id="owner", tenant_id="tenant")
+            with patch.object(video_repair, "enqueue_video_analysis") as enqueue, \
+                 patch.object(video_repair, "wake_video_repair_worker"):
+                video_repair.retry_v4_analysis(1, db, auth)
+                enqueue.assert_called_once()
+            self.assertEqual(db.get(VideoAsset, 1).status, "queued_for_analysis")
+            self.assertEqual(db.get(VideoRepairTask, 1).status, "ANALYZING")
+
+    def test_reanalyze_ready_preview_supersedes_it_and_invalidates_draft(self):
+        with self.sessions() as db:
+            task = update_v4_draft(db, db.get(VideoRepairTask, 1), revision=1, action=self.action())
+            task.status = "PREVIEW_READY"
+            preview = VideoRepairPreview(
+                tenant_id="tenant", task_id=task.id, draft_revision=task.draft_revision,
+                plan_hash=plan_hash(task.repair_plan_json), status="READY",
+                object_url="/preview-v2.mp4", content_hash="d" * 64,
+                duration_seconds=12, width=1080, height=1920, created_by="owner",
+                source_snapshot_json={}, plan_snapshot_json=task.repair_plan_json)
+            db.add(preview); db.commit(); db.refresh(preview)
+            prior_revision = task.draft_revision
+            auth = SimpleNamespace(user_id="owner", tenant_id="tenant")
+            with patch.object(video_repair, "wake_video_repair_worker"):
+                video_repair.retry_v4_analysis(task.id, db, auth)
+            self.assertEqual(task.status, "ANALYZING")
+            self.assertEqual(task.draft_revision, prior_revision + 1)
+            self.assertEqual(task.repair_plan_json, {})
+            self.assertEqual(preview.status, "SUPERSEDED")
+
+    def test_waiting_dependency_does_not_block_other_queued_jobs(self):
+        with self.sessions() as db:
+            waiting_id = self._queued_analysis_job(db)
+            other = VideoRepairJob(
+                tenant_id="tenant", task_id=1, job_type="RENDER_PREVIEW", status="QUEUED",
+                idempotency_key="other-ready-job", payload_json={}, max_attempts=1)
+            db.add(other)
+            db.commit()
+            other_id = other.id
+        with patch.object(worker_v4, "SessionLocal", self.sessions):
+            worker_v4._execute(waiting_id)
+            self.assertEqual(worker_v4._next_job_id(), other_id)
+
+    def test_source_analysis_timeout_never_invokes_ai(self):
+        with self.sessions() as db:
+            job_id = self._queued_analysis_job(db)
+            db.get(VideoRepairJob, job_id).created_at = datetime.utcnow() - timedelta(minutes=21)
+            db.commit()
+        with patch.object(worker_v4, "SessionLocal", self.sessions), \
+             patch.object(worker_v4, "_analyze") as diagnose:
+            worker_v4._execute(job_id)
+        diagnose.assert_not_called()
+        with self.sessions() as db:
+            self.assertEqual(db.get(VideoRepairTask, 1).error_code, "SOURCE_ANALYSIS_TIMEOUT")
+            self.assertEqual(db.get(VideoRepairJob, job_id).attempts, 0)
 
     def test_draft_revision_is_optimistic_and_rejects_other_product(self):
         with self.sessions() as db:
@@ -216,7 +427,14 @@ class VideoRepairV4ServiceTests(unittest.TestCase):
             task = db.get(VideoRepairTask, 1)
             first = sync_ecommerce_materials(db, task)
             second = sync_ecommerce_materials(db, task)
+            raced = _create_or_reuse_mirror(db, task, asset)
             self.assertEqual(first[0].id, second[0].id)
+            self.assertEqual(raced.id, first[0].id)
+            self.assertEqual(db.get(VideoRepairTask, 1).id, 1)  # Savepoint failure did not poison the session.
+            with self.assertRaises(IntegrityError):
+                _create_or_reuse_mirror(
+                    db, SimpleNamespace(tenant_id="tenant", product_id=2), asset)
+            self.assertEqual(db.query(VideoAsset).filter_by(source=f"ecommerce_video_asset:{asset.id}").count(), 1)
             self.assertEqual(db.query(VideoAsset).filter_by(source=f"ecommerce_video_asset:{asset.id}").count(), 1)
             self.assertEqual(db.query(VideoAssetAnalysis).filter_by(asset_id=first[0].id).count(), 1)
             self.assertEqual(db.query(VideoHighlight).filter_by(asset_id=first[0].id).count(), 1)

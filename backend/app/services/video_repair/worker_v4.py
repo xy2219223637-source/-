@@ -2,12 +2,12 @@ from __future__ import annotations
 
 import logging
 import threading
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Optional
 
 from app.config import get_settings
 from app.database import SessionLocal
-from app.models import VideoAsset, VideoRepairInput, VideoRepairJob, VideoRepairPreview, VideoRepairTask
+from app.models import VideoAsset, VideoAssetAnalysis, VideoRepairInput, VideoRepairJob, VideoRepairPreview, VideoRepairTask
 from app.services.video_repair.ai_context import build_ai_context
 from app.services.video_repair.candidates import find_candidates
 from app.services.video_repair.diagnosis_v4 import V4_ACTION_GUIDANCE, diagnose_video_v4
@@ -20,6 +20,8 @@ from app.services.video_repair.v4_renderer import render_preview
 
 
 logger = logging.getLogger(__name__)
+SOURCE_ANALYSIS_CHECK_INTERVAL = timedelta(seconds=3)
+SOURCE_ANALYSIS_WAIT_LIMIT = timedelta(minutes=20)
 _thread: Optional[threading.Thread] = None
 _stop = threading.Event()
 _wake = threading.Event()
@@ -45,12 +47,35 @@ def _v4_action(issue) -> str | None:
     return action
 
 
-def _analyze(db, task: VideoRepairTask) -> None:
+def _source_analysis_dependency(db, task: VideoRepairTask) -> tuple[str, VideoAssetAnalysis | None, str]:
+    source = db.query(VideoAsset).filter_by(
+        id=task.source_asset_id, tenant_id=task.tenant_id).first()
+    if not source or not source.content_hash:
+        return "SOURCE_ANALYSIS_INVALID", None, "源视频不存在或缺少内容哈希"
+    rows = db.query(VideoAssetAnalysis).filter_by(
+        tenant_id=task.tenant_id, asset_id=source.id, status="completed").order_by(
+        VideoAssetAnalysis.id.desc()).all()
+    for row in rows:
+        data = row.analysis_json or {}
+        if data.get("source_hash") != source.content_hash:
+            continue
+        if not isinstance(data.get("highlights"), list) or not data["highlights"]:
+            return "SOURCE_ANALYSIS_INVALID", None, "源视频分析缺少有效片段，请重新分析"
+        return "READY", row, ""
+    if source.status == "analysis_failed":
+        return "SOURCE_ANALYSIS_FAILED", None, "原视频分析失败，请重试分析"
+    if source.status == "analyzed":
+        return "SOURCE_ANALYSIS_INVALID", None, "原视频分析与当前文件不匹配，请重新分析"
+    return "WAITING", None, ""
+
+
+def _analyze(db, task: VideoRepairTask, source_analysis: VideoAssetAnalysis) -> None:
     repair_input = db.get(VideoRepairInput, task.input_id)
     source = db.get(VideoAsset, task.source_asset_id)
     if not repair_input or not source:
         raise RuntimeError("SOURCE_MISSING: 修复输入或源成片不存在")
     sync_ecommerce_materials(db, task)
+    db.commit()  # Release material row locks before the potentially slow AI call.
     settings = get_settings()
     capabilities = ["VISUAL_REPLACE"]
     if settings.video_repair_audio_replace_enabled:
@@ -60,7 +85,7 @@ def _analyze(db, task: VideoRepairTask) -> None:
     context = build_ai_context(
         db, repair_input=repair_input, source_asset=source, base_plan={},
         max_keyframes=settings.video_repair_ai_max_keyframes,
-        capabilities=capabilities)
+        capabilities=capabilities, source_analysis=source_analysis)
     context["action_guidance"] = {
         action: guidance for action, guidance in V4_ACTION_GUIDANCE.items()
         if action in capabilities or action == "UNSUPPORTED"
@@ -80,7 +105,26 @@ def _analyze(db, task: VideoRepairTask) -> None:
         "evidence_sufficiency": "SUFFICIENT" if primary and ranges else "INSUFFICIENT",
         "reported_ranges": context["review"].get("explicit_time_ranges") or [],
         "suggested_ranges": ranges,
+        "source_analysis": {
+            "id": source_analysis.id,
+            "source_hash": source.content_hash,
+            "transcript_available": bool(context["observations"]["asr_segments"]),
+            "transcript_error": (source_analysis.analysis_json or {}).get("transcript_error", ""),
+        },
     })
+    diagnosis["ai_status"] = ("READY" if diagnosis_model.meta.mode == "MULTIMODAL"
+                              else "UNAVAILABLE" if diagnosis_model.meta.error == "AI provider disabled or unavailable"
+                              else "FAILED")
+    if diagnosis_model.meta.input_mode == "STRUCTURED_CONTEXT":
+        diagnosis.setdefault("evidence_warnings", []).append(
+            "本次 AI 没有根据原视频画面判断；方案依据审核意见、商品资料和已有分析生成，请核对原片")
+        if primary and "visual" in set(primary.affected_modalities or []):
+            diagnosis["evidence_sufficiency"] = "INSUFFICIENT"
+    if source.has_audio and not context["observations"]["asr_segments"]:
+        diagnosis.setdefault("evidence_warnings", []).append(
+            "源视频没有可用的语音转写；口播和字幕相关判断需人工核对")
+        if primary and set(primary.affected_modalities or []) & {"audio", "caption"}:
+            diagnosis["evidence_sufficiency"] = "INSUFFICIENT"
     modalities = set(primary.affected_modalities or []) if primary else set()
     unsupported_av = bool(primary and not recommended and "visual" in modalities
                           and ({"audio", "caption"} & modalities))
@@ -100,8 +144,19 @@ def _analyze(db, task: VideoRepairTask) -> None:
             "material": "HUMAN_REQUIRED",
         },
     }
+    if diagnosis["ai_status"] != "READY":
+        proposal["summary"] = ("AI 诊断未启用，请检查服务配置后重新分析。"
+                               if diagnosis["ai_status"] == "UNAVAILABLE" else
+                               "AI 诊断请求失败，当前仅显示规则定位结果；请重新分析。")
     candidates: list[dict] = []
-    if recommended == "VISUAL_REPLACE" and ranges:
+    if recommended == "VISUAL_REPLACE" and not ranges:
+        proposal.update({
+            "summary": "AI 判断可只替换画面，但没有可靠时间段；请在原片中确认起止时间并选择素材。",
+            "requires_input": ["target_range", "visual_material"],
+            "action_template": {"type": "VISUAL_REPLACE", "fit_mode": "COVER",
+                                "transition": {"type": "CUT", "duration_ms": 0}},
+        })
+    elif recommended == "VISUAL_REPLACE" and ranges:
         first_range = ranges[0]
         start_ms = int(first_range.get("start_ms", 0))
         end_ms = int(first_range.get("end_ms", start_ms))
@@ -149,6 +204,12 @@ def _analyze(db, task: VideoRepairTask) -> None:
                 "fit_mode": "COVER",
                 "transition": {"type": "CUT", "duration_ms": 0},
             }
+    elif recommended == "AUDIO_REPLACE" and not ranges:
+        proposal.update({
+            "summary": "AI 判断可只替换声音，但没有可靠时间段；请确认起止时间并补充音频。",
+            "requires_input": ["target_range", "audio"],
+            "action_template": {"type": "AUDIO_REPLACE"},
+        })
     elif recommended == "AUDIO_REPLACE" and ranges:
         first_range = ranges[0]
         proposal.update({
@@ -163,9 +224,12 @@ def _analyze(db, task: VideoRepairTask) -> None:
         first_range = ranges[0] if ranges else None
         placement = recommend_insertion_positions(
             context, duration_ms=round(float(source.duration_seconds or 0) * 1000))
-        start_ms = int(first_range.get("start_ms", 0)) if first_range else int(placement["recommended_ms"])
-        end_ms = int(first_range.get("end_ms", start_ms + 3000)) if first_range else None
-        target_duration = max(.5, (end_ms - start_ms) / 1000) if first_range else 3.0
+        # An issue range describes where the missing evidence was noticed. It is
+        # not necessarily a safe cut boundary for inserting a new segment.
+        start_ms = int(placement["recommended_ms"])
+        target_duration = (max(.5, (int(first_range["end_ms"]) -
+                                     int(first_range["start_ms"])) / 1000)
+                           if first_range else 3.0)
         candidates = find_candidates(
             db, tenant_id=task.tenant_id, source_asset=source,
             action="PROCESS_INSERT", target_duration=target_duration,
@@ -225,6 +289,7 @@ def _analyze(db, task: VideoRepairTask) -> None:
             proposal.update({
                 "summary": "AI 已确定需要补充实际使用过程，但同商品素材库中没有找到达到可用门槛的画面。",
                 "requires_input": ["visual_material", "audio"],
+                "placement": placement,
                 "action_template": ({
                     "type": "CONTENT_INSERT", "duration_ms": round(target_duration * 1000),
                 } | ({"insert_at_ms": start_ms} if start_ms is not None else {})),
@@ -233,7 +298,7 @@ def _analyze(db, task: VideoRepairTask) -> None:
     diagnosis["material_candidates"] = candidates
     task.diagnosis_json = diagnosis
     task.error_code = task.error_message = ""
-    transition(task, "CONFIGURING" if recommended and ranges else "AWAITING_MANUAL_DECISION")
+    transition(task, "CONFIGURING" if recommended else "AWAITING_MANUAL_DECISION")
 
 
 def _execute(job_id: int) -> None:
@@ -242,6 +307,18 @@ def _execute(job_id: int) -> None:
         job = db.get(VideoRepairJob, job_id)
         if not job:
             return
+        if job.job_type == "ANALYZE":
+            task = db.get(VideoRepairTask, job.task_id)
+            if not task or task.status in {"COMPLETED", "CANCELED"}:
+                job.status = "CANCELED"
+                job.finished_at = datetime.utcnow()
+                db.commit()
+                return
+            dependency, source_analysis, detail = _source_analysis_dependency(db, task)
+            if dependency == "WAITING" and datetime.utcnow() - job.created_at >= SOURCE_ANALYSIS_WAIT_LIMIT:
+                dependency, detail = "SOURCE_ANALYSIS_TIMEOUT", "等待原视频分析超时，请重试分析"
+        else:
+            source_analysis = None
         claimed = db.query(VideoRepairJob).filter_by(id=job_id, status="QUEUED").update({
             VideoRepairJob.status: "RUNNING",
             VideoRepairJob.attempts: VideoRepairJob.attempts + 1,
@@ -253,6 +330,24 @@ def _execute(job_id: int) -> None:
         db.commit()
         db.refresh(job)
         task = db.get(VideoRepairTask, job.task_id)
+        if job.job_type == "ANALYZE" and dependency != "READY":
+            job.attempts -= 1  # Waiting for another worker is not an AI attempt.
+            job.started_at = None
+            if dependency == "WAITING":
+                job.status = "QUEUED"
+                job.payload_json = {**(job.payload_json or {}),
+                                    "dependency_next_check_at": (datetime.utcnow() + SOURCE_ANALYSIS_CHECK_INTERVAL).isoformat()}
+            else:
+                job.status = "FAILED"
+                job.error_code = dependency
+                job.error_message = detail
+                job.finished_at = datetime.utcnow()
+                if task:
+                    task.status = "FAILED"
+                    task.error_code = dependency
+                    task.error_message = detail
+            db.commit()
+            return
         if not task or task.status in {"COMPLETED", "CANCELED"}:
             job.status = "CANCELED"
             job.finished_at = datetime.utcnow()
@@ -260,7 +355,7 @@ def _execute(job_id: int) -> None:
             return
         try:
             if job.job_type == "ANALYZE":
-                _analyze(db, task)
+                _analyze(db, task, source_analysis)
             elif job.job_type == "RENDER_PREVIEW":
                 preview = db.get(VideoRepairPreview, int(job.payload_json["preview_id"]))
                 if not preview or preview.status == "SUPERSEDED":
@@ -316,9 +411,14 @@ def _execute(job_id: int) -> None:
 def _next_job_id() -> int | None:
     db = SessionLocal()
     try:
-        row = db.query(VideoRepairJob).filter_by(status="QUEUED").order_by(
-            VideoRepairJob.created_at, VideoRepairJob.id).first()
-        return row.id if row else None
+        now = datetime.utcnow()
+        rows = db.query(VideoRepairJob).filter_by(status="QUEUED").order_by(
+            VideoRepairJob.created_at, VideoRepairJob.id).all()
+        for row in rows:
+            due = (row.payload_json or {}).get("dependency_next_check_at")
+            if not due or datetime.fromisoformat(due) <= now:
+                return row.id
+        return None
     finally:
         db.close()
 

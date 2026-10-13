@@ -32,6 +32,16 @@ class AiDraftDecisionTests(unittest.TestCase):
         with self.assertRaises(HTTPException):
             _validate_ai_draft({}, {"type": "VISUAL_REPLACE"}, "")
 
+    def test_accepts_confirmed_range_only_when_ai_requests_it(self):
+        template = {"type": "AUDIO_REPLACE"}
+        action = {**template, "target_range": {"start_ms": 1000, "end_ms": 3000},
+                  "audio": {"attachment_id": 4}}
+        _validate_ai_draft({"ai_proposal": {"action_template": template,
+                            "requires_input": ["target_range", "audio"]}}, action, "")
+        with self.assertRaises(HTTPException):
+            _validate_ai_draft({"ai_proposal": {"action_template": template,
+                                "requires_input": ["audio"]}}, action, "")
+
 
 if __name__ == "__main__":
     unittest.main()
