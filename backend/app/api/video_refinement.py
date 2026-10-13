@@ -58,9 +58,13 @@ def _serialize(db: Session, task: VideoRefinementTask) -> dict:
     previews = db.query(VideoRefinementPreview).filter_by(task_id=task.id, tenant_id=task.tenant_id).order_by(VideoRefinementPreview.id.desc()).all()
     version = db.query(VideoRefinementVersion).filter_by(task_id=task.id, tenant_id=task.tenant_id).first()
     from app.services.refinement_voiceover import serialize_voiceover
+    from app.services.refinement_queue import refinement_worker_state
     job = db.query(VideoRefinementAnalysisJob).filter_by(task_id=task.id,tenant_id=task.tenant_id).order_by(VideoRefinementAnalysisJob.id.desc()).first()
-    analysis = {"id":job.id,"revision":job.revision,"status":job.status,"progress":job.progress_json,"error_message":job.error_message} if job else None
-    return {"analysis_state":analysis, "options":_options(db,task),
+    analysis = {"id":job.id,"revision":job.revision,"status":job.status.removesuffix("_v3"),"progress":job.progress_json,"error_message":job.error_message,
+                "created_at":job.created_at.replace(tzinfo=timezone.utc).isoformat(),
+                "started_at":job.started_at.replace(tzinfo=timezone.utc).isoformat() if job.started_at else None,
+                "queue_wait_seconds":max(0,int(((job.started_at or datetime.utcnow())-job.created_at).total_seconds()))} if job else None
+    return {"analysis_state":analysis, "worker_state":refinement_worker_state(), "options":_options(db,task),
             "voiceovers":[serialize_voiceover(v) for v in db.query(VideoRefinementVoiceover).filter_by(task_id=task.id,tenant_id=task.tenant_id).order_by(VideoRefinementVoiceover.id.desc()).all()],
             "id": task.id, "source_asset_id": task.source_asset_id, "product_id": task.product_id,
             "source_hash": task.source_hash, "source_snapshot": snapshot.snapshot_json, "snapshot_hash": snapshot.content_hash,
@@ -68,7 +72,7 @@ def _serialize(db: Session, task: VideoRefinementTask) -> dict:
             "status": task.status, "current_revision": task.current_revision, "confirmed_revision": task.confirmed_revision,
             "plan": plan.plan_json if plan else None, "plan_hash": plan.plan_hash if plan else None,
             "preview_supported": not snapshot.is_mock,
-            "previews": [{"id": row.id, "revision": row.revision, "plan_hash": row.plan_hash, "status": row.status,
+            "previews": [{"id": row.id, "revision": row.revision, "plan_hash": row.plan_hash, "status": row.status.removesuffix("_v3"),
                 "output_url": row.output_url, "validation": row.validation_json, "error_message": row.error_message} for row in previews],
             "output_asset_id": version.output_asset_id if version else None,
             "output_version": version.version if version else None,
@@ -114,7 +118,7 @@ def _cas(db: Session, task: VideoRefinementTask, revision: int, values: dict) ->
 
 def _save_plan(db: Session, task: VideoRefinementTask, revision: int, plan: dict, status: str, origin: str) -> dict:
     snapshot = _snapshot(db, task)
-    if plan.get("schema_version") == "video_refinement_plan.v2":
+    if plan.get("schema_version") in {"video_refinement_plan.v2", "video_refinement_plan.v3"}:
         plan["request_snapshot_id"] = getattr(snapshot,"request_id",None)
     previous = _current_plan(db, task)
     automatic = origin == "ai" and plan.get("automatic_preview") and not plan["execution_blockers"] and any(row["enabled"] for row in plan["items"])
@@ -137,28 +141,40 @@ def _save_plan(db: Session, task: VideoRefinementTask, revision: int, plan: dict
     db.add(saved)
     if automatic:
         db.flush()
-        db.add(VideoRefinementPreview(tenant_id=task.tenant_id,task_id=task.id,plan_id=saved.id,revision=revision+1,plan_hash=saved.plan_hash))
+        db.add(VideoRefinementPreview(tenant_id=task.tenant_id,task_id=task.id,plan_id=saved.id,revision=revision+1,plan_hash=saved.plan_hash,
+                                     status="queued_v3"))
     db.commit()
     db.refresh(task)
     return _serialize(db, task)
 
 
 def _queue_analysis(db, task, revision, snapshot, options):
+    from app.services.refinement_queue import require_refinement_worker
+    require_refinement_worker()
+    from app.services.refinement_policy import generation_policy
+    options = {**options, **generation_policy(task.tenant_id)}
+    existing_plan = _current_plan(db, task)
+    if existing_plan and existing_plan.plan_json.get("schema_version") == "video_refinement_plan.v3":
+        options.update(existing_plan.plan_json.get("generation_policy", {}))
+        options["timing_protocol"] = "v3"
     from sqlalchemy.exc import IntegrityError
     from app.services.refinement_queue import enqueue_preview
     job = db.query(VideoRefinementAnalysisJob).filter_by(task_id=task.id,revision=revision).first()
+    if job and job.options_json.get("timing_protocol") == "v3":
+        options.update({key:job.options_json[key] for key in ("timing_protocol", "authorization_version", "localization", "content_reselection", "display_tail_ms", "policy_version") if key in job.options_json})
+    queued_status = "queued_v3"
     if not job:
         job = VideoRefinementAnalysisJob(tenant_id=task.tenant_id,task_id=task.id,revision=revision,snapshot_json=snapshot,
-              options_json=options,fingerprint=content_hash({"snapshot":content_hash(snapshot),"brief":task.user_brief,"options":options,"method":"v2"}))
+              status=queued_status,options_json=options,fingerprint=content_hash({"snapshot":content_hash(snapshot),"brief":task.user_brief,"options":options,"method":"v2"}))
         previous = db.query(VideoRefinementAnalysisJob).filter_by(task_id=task.id,tenant_id=task.tenant_id).order_by(VideoRefinementAnalysisJob.id.desc()).first()
         if previous:
             job.batches_json = previous.batches_json
         db.add(job)
-    elif job.status in {"queued","analyzing"}:
+    elif job.status in {"queued","analyzing","queued_v3","analyzing_v3"}:
         if bool(job.options_json.get("auto_preview")) != bool(options.get("auto_preview")):
             raise HTTPException(409,"当前分析正在运行, 请等待完成后重试")
     elif job.status == "failed":
-        job.status="queued";job.error_message="";job.completed_at=None;job.options_json=options;job.snapshot_json=snapshot
+        job.status=queued_status;job.error_message="";job.completed_at=None;job.options_json=options;job.snapshot_json=snapshot
         job.fingerprint=content_hash({"snapshot":content_hash(snapshot),"brief":task.user_brief,"options":options,"method":"v2"})
     try:
         db.commit()
@@ -269,7 +285,7 @@ def auto_preview(task_id: int, payload: RevisionInput, db: Session = Depends(get
             previous = known.get(material["asset_id"])
             if previous and previous["content_hash"] == material["content_hash"] and previous.get("burned_subtitles"):
                 material["burned_subtitles"] = True
-    options = {**_options(db,task),"auto_preview":True,"supplement_narration":"tts"}
+    options = {**_options(db,task),"auto_preview":True}
     _queue_analysis(db,task,payload.revision,snapshot,options)
     return _serialize(db,task)
 
@@ -282,10 +298,17 @@ def update_draft(task_id: int, payload: DraftInput, db: Session = Depends(get_db
     snapshot = _snapshot(db,task).snapshot_json
     from app.services.refinement_voiceover import voiceover_catalog
     requirements = previous.plan_json.get("requirements_resolution",[]) if previous else []
-    if previous and previous.plan_json.get("schema_version") == "video_refinement_plan.v2":
+    compile_options = dict(_options(db,task))
+    if previous and previous.plan_json.get("schema_version") in {"video_refinement_plan.v2", "video_refinement_plan.v3"}:
         snapshot = previous.plan_json.get("analysis",{}).get("context",snapshot)
+        compile_options.update(previous.plan_json.get("generation_policy", {}))
+        if previous.plan_json["schema_version"] == "video_refinement_plan.v3":
+            compile_options["timing_protocol"] = "v3"
+    from app.services.refinement_authorization import AUTHORIZATION_VERSION, manual_permissions
+    compile_options["authorization_version"] = AUTHORIZATION_VERSION
+    compile_options["manual_permissions"] = manual_permissions(payload.items, previous.plan_json if previous else None)
     try:
-        plan = compile_plan(snapshot, payload.items, task.user_brief, task.expected_result, manual=True, requirements=requirements,options=_options(db,task),voiceovers=voiceover_catalog(db,task))
+        plan = compile_plan(snapshot, payload.items, task.user_brief, task.expected_result, manual=True, requirements=requirements,options=compile_options,voiceovers=voiceover_catalog(db,task))
     except ValueError as exc:
         raise HTTPException(422, str(exc)) from exc
     previous = _current_plan(db, task)
@@ -311,7 +334,7 @@ def confirm_plan(task_id: int, payload: ConfirmInput, db: Session = Depends(get_
     if task.status == "PLAN_CONFIRMED" and task.confirmed_revision == payload.revision:
         return _serialize(db, task)
     items = [row for row in plan.plan_json["items"] if row["enabled"]]
-    if plan.plan_json.get("schema_version") == "video_refinement_plan.v2" and plan.plan_json["execution_blockers"]:
+    if plan.plan_json.get("schema_version") in {"video_refinement_plan.v2", "video_refinement_plan.v3"} and plan.plan_json["execution_blockers"]:
         raise HTTPException(422,"请先解决逐条要求和具体执行阻塞; 风险勾选不能替代处理决定")
     if not items:
         raise HTTPException(422, "当前评估没有需要渲染的修改项")
@@ -361,10 +384,15 @@ def create_preview(task_id: int, payload: PreviewInput, db: Session = Depends(ge
         raise HTTPException(422, str(exc)) from exc
     preview = db.query(VideoRefinementPreview).filter_by(task_id=task.id, revision=payload.revision).first()
     if not preview:
-        preview = VideoRefinementPreview(tenant_id=task.tenant_id, task_id=task.id, plan_id=plan.id, revision=payload.revision, plan_hash=plan.plan_hash)
+        from app.services.refinement_queue import require_refinement_worker
+        require_refinement_worker()
+        preview = VideoRefinementPreview(tenant_id=task.tenant_id, task_id=task.id, plan_id=plan.id, revision=payload.revision, plan_hash=plan.plan_hash,
+                                         status="queued_v3")
         db.add(preview)
     elif preview.status == "failed":
-        preview.status = "queued"
+        from app.services.refinement_queue import require_refinement_worker
+        require_refinement_worker()
+        preview.status = "queued_v3"
         preview.error_message = ""
         preview.completed_at = None
     db.commit()
@@ -419,7 +447,8 @@ async def accept_preview(task_id: int, preview_id: int, payload: PreviewInput, d
     db.add(asset)
     db.flush()
     cursor = 0.0
-    v2 = isinstance(preview.recipe_json,dict) and preview.recipe_json.get("schema_version") == "video_refinement_plan.v2"
+    v2 = isinstance(preview.recipe_json,dict) and preview.recipe_json.get("schema_version") in {"video_refinement_plan.v2", "video_refinement_plan.v3"}
+    precise = v2 and preview.recipe_json["schema_version"] == "video_refinement_plan.v3"
     segments = preview.recipe_json["video_track"] if v2 else preview.recipe_json
     for index, segment in enumerate(segments):
         if v2:
@@ -427,14 +456,21 @@ async def accept_preview(task_id: int, preview_id: int, payload: PreviewInput, d
             start = segment["source_range"]["start_ms"]/1000
             cursor = segment["output_range"]["start_ms"]/1000
             source_id = segment["source_asset_id"]
+            source_end = segment["source_range"]["end_ms"]/1000
+            if precise:
+                from app.services.refinement_timing import frame_rate
+                rate = frame_rate(preview.recipe_json["summary"]["frame_rate"])
+                cursor = float(segment["output_frames"]["start_frame"]/rate)
+                duration = float((segment["output_frames"]["end_frame"]-segment["output_frames"]["start_frame"])/rate)
         else:
             duration = segment["duration_ms"]/1000
             start = segment["video_start_ms"]/1000
             source_id = segment["video_asset_id"]
-        target_end = cursor+duration if index < len(segments)-1 else asset.duration_seconds
+            source_end = start+duration
+        target_end = cursor+duration if precise or index < len(segments)-1 else asset.duration_seconds
         db.add(VideoLineageSegment(tenant_id=task.tenant_id, source_asset_id=source_id,
             target_asset_id=asset.id,plan_version_id=plan.id,variant_id=f"refinement-{task.id}-r{plan.revision}",
-            segment_index=index,source_start=start,source_end=start+duration,target_start=cursor,target_end=target_end,created_at=asset.created_at))
+            segment_index=index,source_start=start,source_end=source_end,target_start=cursor,target_end=target_end,created_at=asset.created_at))
         cursor = target_end
     from app.services.video_taxonomy import inherit_public_tags_to_final
     source_assets = db.query(VideoAsset).filter(VideoAsset.tenant_id==task.tenant_id, VideoAsset.id.in_([source.id,*used])).all()
@@ -472,7 +508,7 @@ def list_materials(task_id: int, cursor: str | None = None, search: str = Query(
 
 def _invalidate_jobs(db,task):
     db.query(VideoRefinementPreview).filter(VideoRefinementPreview.task_id==task.id,VideoRefinementPreview.status!="accepted").update({"status":"superseded"},synchronize_session=False)
-    db.query(VideoRefinementAnalysisJob).filter(VideoRefinementAnalysisJob.task_id==task.id,VideoRefinementAnalysisJob.status.in_(["queued","analyzing"])).update({"status":"superseded"},synchronize_session=False)
+    db.query(VideoRefinementAnalysisJob).filter(VideoRefinementAnalysisJob.task_id==task.id,VideoRefinementAnalysisJob.status.in_(["queued","analyzing","queued_v3","analyzing_v3"])).update({"status":"superseded"},synchronize_session=False)
 
 
 @router.post("/{task_id}/materials/refresh")
@@ -553,18 +589,32 @@ def create_voiceover(task_id: int, payload: VoiceoverInput, db: Session = Depend
     plan = _current_plan(db,task)
     if task.status not in EDITABLE or task.current_revision!=payload.revision or not plan or plan.plan_hash!=payload.plan_hash:
         raise HTTPException(409,"请先保存当前草稿, 再生成局部配音")
-    if plan.plan_json.get("schema_version") != "video_refinement_plan.v2":
+    if plan.plan_json.get("schema_version") not in {"video_refinement_plan.v2", "video_refinement_plan.v3"}:
         raise HTTPException(409,"历史方案需先刷新并使用新规则重新分析")
     item = next((r for r in plan.plan_json["items"] if r["item_id"]==payload.item_id and r["enabled"]),None)
     if not item or item["narration_strategy"]!="tts" or not item["script"].strip():
         raise HTTPException(422,"该修改项没有待生成的完整台词")
+    authorization = plan.plan_json.get("edit_authorizations", {}).get(payload.item_id)
+    if authorization is not None and not authorization.get("allow_narration"):
+        raise HTTPException(422,"该编辑项没有生成配音的用户授权")
     parameters = voiceover_parameters()
     fingerprint = voiceover_fingerprint(item["script"],parameters)
     job = db.query(VideoRefinementVoiceover).filter_by(tenant_id=task.tenant_id,task_id=task.id,fingerprint=fingerprint).first()
+    if not job or job.status in {"failed", "superseded", "queued", "queued_v3"}:
+        from app.services.refinement_queue import require_refinement_worker
+        require_refinement_worker()
     if not job:
-        db.add(VideoRefinementVoiceover(tenant_id=task.tenant_id,task_id=task.id,revision=payload.revision,item_id=item["item_id"],fingerprint=fingerprint,script=item["script"].strip(),parameters_json=parameters))
-    elif job.status == "failed":
-        job.status="queued";job.error_message="";job.completed_at=None
+        db.add(VideoRefinementVoiceover(tenant_id=task.tenant_id,task_id=task.id,revision=payload.revision,item_id=item["item_id"],fingerprint=fingerprint,script=item["script"].strip(),parameters_json=parameters,status="queued_v3"))
+    elif job.status in {"failed", "superseded"}:
+        job.status="queued_v3";job.error_message="";job.completed_at=None;job.revision=payload.revision
+    elif job.status in {"queued", "queued_v3"}:
+        db.query(VideoRefinementVoiceover).filter_by(id=job.id,status=job.status).update({"revision":payload.revision,"status":"queued_v3"},synchronize_session=False)
+    if job and job.status == "ready" and plan.plan_json["schema_version"] == "video_refinement_plan.v3":
+        from app.services.refinement_voiceover import ensure_sample_metadata
+        try:
+            ensure_sample_metadata(db,job)
+        except ValueError as exc:
+            raise HTTPException(422,str(exc)) from exc
     try:
         db.commit()
     except IntegrityError:

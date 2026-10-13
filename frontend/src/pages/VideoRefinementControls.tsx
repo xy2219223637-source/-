@@ -5,12 +5,18 @@ import type {DurationPreference, RefinementMaterialPage, RefinementSnapshot, Vid
 
 type Action = (name: string, work: () => Promise<VideoRefinementTask>) => Promise<void>;
 const seconds = (value: number) => (value/1000).toFixed(2)+' 秒';
-const requirementLabels = {EXECUTABLE:'可执行', ALREADY_SATISFIED:'当前已满足', NEEDS_CLARIFICATION:'需要澄清', CONFLICT:'要求冲突', UNSUPPORTED:'能力不支持', AWAITING_MATERIAL:'等待执行条件'};
+const requirementLabels = {EXECUTABLE:'可执行', ALREADY_SATISFIED:'当前已满足', NEEDS_CLARIFICATION:'需要澄清', CONFLICT:'要求冲突', UNSUPPORTED:'能力不支持', AWAITING_MATERIAL:'等待素材'};
 
 export function EvaluationProgress({task}: {task: VideoRefinementTask}) {
-  const working=task.analysis_state?.status==='queued'||task.analysis_state?.status==='analyzing';
-  const stageLabels: Record<string,string>={source:'正在核对源成片',requirements:'正在解析修改意见',materials:'正在准备素材分析',fitting:'正在匹配无字幕画面与配音时长',voiceover:'正在生成并绑定补充段配音',matching:'正在匹配修改意见',planning:'正在生成精修方案'};
-  if(working)return <p className="refine-evaluation refine-note" role="status"><Loader2 size={16} className="animate-spin"/>{stageLabels[task.analysis_state?.progress.stage||'']||'正在准备精修方案'}</p>;
+  const state=task.analysis_state;
+  if(task.worker_state&&task.worker_state.status!=='running'&&!['CANCELLED','COMPLETED'].includes(task.status))return <p className="refine-evaluation refine-risk" role="status">{task.worker_state.message}</p>;
+  if(state?.status==='queued'){
+    const wait=state.queue_wait_seconds||0;
+    const message=wait>=60?`已排队约 ${Math.max(1,Math.round(wait/60))} 分钟, 尚未开始分析. 无需重复提交.`:'等待后台开始分析, 尚未调用 AI.';
+    return <p className="refine-evaluation refine-note" role="status">{message}</p>;
+  }
+  const stageLabels: Record<string,string>={source:'正在核对源成片',requirements:'正在解析修改意见',materials:'正在准备素材分析',localizing:'正在定位商品展示片段',fitting:'正在匹配画面与音频时长',voiceover:'正在生成局部配音',matching:'正在匹配修改意见',planning:'正在生成精修方案'};
+  if(state?.status==='analyzing')return <p className="refine-evaluation refine-note" role="status"><Loader2 size={16} className="animate-spin"/>{stageLabels[state.progress.stage||'']||'正在准备精修方案'}</p>;
   const stats=task.plan?.material_evaluation;
   if(stats?.complete===false&&!stats.partial_accepted)return <p className="refine-evaluation refine-risk" role="status">{stats.failed?'部分素材评估失败, 可重试 AI 精修, 或使用已评估素材继续.':'素材评估尚未完成, 请重试 AI 精修.'}</p>;
   return null;

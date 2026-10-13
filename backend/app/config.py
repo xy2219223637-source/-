@@ -61,6 +61,11 @@ class Settings(BaseSettings):
     director_vision_batch_size: int = 4
     director_ffmpeg_path: str = ""
     director_ffprobe_path: str = ""
+    refinement_precise_timing_enabled: bool = False
+    refinement_localization_enabled: bool = False
+    refinement_content_reselection_enabled: bool = False
+    refinement_display_tail_enabled: bool = False
+    refinement_rollout_tenants: str = ""
     director_keyframe_min_count: int = 3
     director_keyframe_max_count: int = 5
     director_asr_provider: str = "auto"
@@ -150,6 +155,12 @@ class Settings(BaseSettings):
     run_database_init: bool = True
     run_startup_recovery: bool = True
     run_background_workers: bool = True
+    run_refinement_worker: bool | None = None
+
+    @property
+    def refinement_worker_enabled(self) -> bool:
+        # An explicit override isolates refinement without enabling other queues.
+        return self.run_background_workers if self.run_refinement_worker is None else self.run_refinement_worker
 
     redis_url: str = ""
     redis_key_prefix: str = "enrui-ai-commerce-agent:"

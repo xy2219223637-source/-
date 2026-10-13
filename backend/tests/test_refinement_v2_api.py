@@ -34,12 +34,180 @@ class RefinementV2ApiTest(unittest.TestCase):
         self.assertEqual(response.status_code,201,response.text)
         return response.json()
 
+    def test_unavailable_worker_does_not_create_or_retry_analysis(self):
+        task = self.create()
+        for status in ("disabled", "stopped"):
+            with self.subTest(status=status), patch("app.services.refinement_queue.refinement_worker_state",return_value={"status":status,"message":"后台精修服务不可用, 无需重复提交."}):
+                for endpoint in ("analyze", "auto-preview"):
+                    response = self.client.post(f"/api/video-refinements/{task['id']}/{endpoint}",json={"revision":0})
+                    self.assertEqual(response.status_code,503,response.text)
+                self.assertEqual(self.db.query(VideoRefinementAnalysisJob).count(),0)
+        response = self.client.post(f"/api/video-refinements/{task['id']}/analyze",json={"revision":0})
+        self.assertEqual(response.status_code,202,response.text)
+        job = self.db.query(VideoRefinementAnalysisJob).one()
+        job.status = "failed";self.db.commit()
+        with patch("app.services.refinement_queue.refinement_worker_state",return_value={"status":"stopped","message":"后台精修服务未运行"}):
+            response = self.client.post(f"/api/video-refinements/{task['id']}/analyze",json={"revision":0})
+            self.assertEqual(response.status_code,503,response.text)
+        self.db.refresh(job)
+        self.assertEqual(job.status,"failed")
+
+    def test_existing_queue_reports_worker_and_wait_without_changing_job(self):
+        from datetime import datetime, timedelta
+        task = self.create()
+        self.client.post(f"/api/video-refinements/{task['id']}/analyze",json={"revision":0})
+        job = self.db.query(VideoRefinementAnalysisJob).one()
+        job.created_at = datetime.utcnow()-timedelta(minutes=8);self.db.commit()
+        state = {"status":"disabled","message":"后台精修服务已关闭"}
+        with patch("app.services.refinement_queue.refinement_worker_state",return_value=state):
+            response = self.client.get(f"/api/video-refinements/{task['id']}")
+        self.assertEqual(response.json()["worker_state"],state)
+        self.assertEqual(response.json()["analysis_state"]["status"],"queued")
+        self.assertIsNone(response.json()["analysis_state"]["started_at"])
+        self.assertGreaterEqual(response.json()["analysis_state"]["queue_wait_seconds"],480)
+        self.db.refresh(job)
+        self.assertEqual(job.status,"queued_v3")
+        self.assertEqual(job.attempts,0)
+
+    def test_unavailable_worker_rejects_preview_and_voiceover_creation(self):
+        from app.models import VideoRefinementPreview
+        task = self.ready_plan(self.create())
+        payload = {"revision":0,"plan_hash":task["plan_hash"],"acknowledge_risks":True}
+        response = self.client.post(f"/api/video-refinements/{task['id']}/plans/confirm",json=payload)
+        self.assertEqual(response.status_code,200,response.text)
+        with patch("app.services.refinement_queue.refinement_worker_state",return_value={"status":"disabled","message":"后台精修服务已关闭"}):
+            response = self.client.post(f"/api/video-refinements/{task['id']}/previews",json={"revision":0,"plan_hash":task["plan_hash"]})
+            self.assertEqual(response.status_code,503,response.text)
+        self.assertEqual(self.db.query(VideoRefinementPreview).count(),0)
+        record = self.db.query(VideoRefinementPlan).one()
+        plan = deepcopy(record.plan_json)
+        plan["items"][0].update(narration_strategy="tts",script="已授权台词")
+        record.plan_json = plan;record.plan_hash = content_hash(plan);self.db.commit()
+        with patch("app.services.refinement_queue.refinement_worker_state",return_value={"status":"stopped","message":"后台精修服务未运行"}):
+            response = self.client.post(f"/api/video-refinements/{task['id']}/voiceovers",json={"revision":0,"plan_hash":record.plan_hash,"item_id":"visual"})
+            self.assertEqual(response.status_code,503,response.text)
+        self.assertEqual(self.db.query(VideoRefinementVoiceover).count(),0)
+
     def ready_plan(self,task):
         edit=RefinementItem(item_id="visual",type="VISUAL_REPLACE",range={"start_ms":1000,"end_ms":2000},operation="替换展示",reason="商品更清楚",material_segments=[{"asset_id":self.material.id,"source_range":{"start_ms":6000,"end_ms":7000}}])
         plan=compile_plan(task["source_snapshot"],[edit],task["user_brief"],"",manual=False)
         self.db.add(VideoRefinementPlan(task_id=task["id"],revision=0,source_snapshot_id=self.db.query(__import__('app.models',fromlist=['VideoRefinementSnapshot']).VideoRefinementSnapshot).filter_by(task_id=task["id"]).one().id,plan_json=plan,plan_hash=content_hash(plan),origin="human"))
         self.db.commit()
         return self.client.get(f"/api/video-refinements/{task['id']}").json()
+
+    def test_precise_draft_stays_v3_when_generation_gate_is_disabled(self):
+        task = self.ready_plan(self.create())
+        record = self.db.query(VideoRefinementPlan).filter_by(task_id=task["id"]).one()
+        context = deepcopy(task["source_snapshot"])
+        from fractions import Fraction
+        duration = context["source"]["duration_ms"]
+        context["source"].update(frame_rate="30",video_duration_ms=duration,video_duration=str(Fraction(duration,1000)),audio_duration=str(Fraction(duration,1000)),audio_offset="0")
+        plan = compile_plan(context,[RefinementItem.model_validate(row) for row in task["plan"]["items"]],task["user_brief"],"",manual=False,
+                            options={"timing_protocol":"v3","authorization_version":"refinement-authorization-v1"})
+        plan["analysis"] = {"context":context}
+        record.plan_json = plan;record.plan_hash = content_hash(plan);self.db.commit()
+        response = self.client.patch(f"/api/video-refinements/{task['id']}/draft",json={"revision":0,"items":plan["items"]})
+        self.assertEqual(response.status_code,200,response.text)
+        self.assertEqual(response.json()["plan"]["schema_version"],"video_refinement_plan.v3")
+        self.assertFalse(response.json()["plan"]["edit_authorizations"]["visual"]["allow_narration"])
+        current=response.json()
+        self.client.post(f"/api/video-refinements/{task['id']}/analyze",json={"revision":current["current_revision"]})
+        job=self.db.query(VideoRefinementAnalysisJob).filter_by(task_id=task["id"],revision=current["current_revision"]).one()
+        self.assertEqual(job.options_json["timing_protocol"],"v3")
+
+    def test_generation_policy_is_server_owned_and_tenant_scoped(self):
+        from app.config import get_settings
+        settings = get_settings().model_copy(update={"refinement_precise_timing_enabled":True,"refinement_localization_enabled":True,"refinement_rollout_tenants":"t2"})
+        task = self.create()
+        with patch("app.services.refinement_policy.get_settings",return_value=settings):
+            response = self.client.post(f"/api/video-refinements/{task['id']}/analyze",json={"revision":0})
+        self.assertEqual(response.status_code,202,response.text)
+        job = self.db.query(VideoRefinementAnalysisJob).filter_by(task_id=task["id"]).one()
+        self.assertEqual(job.options_json["timing_protocol"],"v2")
+        self.assertFalse(job.options_json["localization"])
+        self.assertEqual(self.client.post(f"/api/video-refinements/{task['id']}/analyze",json={"revision":0,"timing_protocol":"v3"}).status_code,422)
+
+    def test_versioned_jobs_are_invisible_to_legacy_claims_and_retry_never_downgrades(self):
+        from app.config import get_settings
+        settings=get_settings().model_copy(update={"refinement_precise_timing_enabled":True,"refinement_rollout_tenants":"t1"})
+        task=self.create()
+        with patch("app.services.refinement_policy.get_settings",return_value=settings):
+            response=self.client.post(f"/api/video-refinements/{task['id']}/analyze",json={"revision":0})
+        self.assertEqual(response.status_code,202,response.text)
+        self.assertEqual(response.json()["analysis_state"]["status"],"queued")
+        job=self.db.query(VideoRefinementAnalysisJob).filter_by(task_id=task["id"]).one()
+        self.assertEqual(job.status,"queued_v3")
+        self.assertEqual(self.db.query(VideoRefinementAnalysisJob).filter_by(status="queued").count(),0)
+        job.status="failed";self.db.commit()
+        self.client.post(f"/api/video-refinements/{task['id']}/analyze",json={"revision":0})
+        self.db.refresh(job)
+        self.assertEqual(job.options_json["timing_protocol"],"v3")
+        self.assertEqual(job.status,"queued_v3")
+
+    def test_v3_blockers_cannot_be_bypassed_by_risk_acknowledgement(self):
+        task = self.ready_plan(self.create())
+        record = self.db.query(VideoRefinementPlan).filter_by(task_id=task["id"]).one()
+        value = deepcopy(record.plan_json)
+        value.update(schema_version="video_refinement_plan.v3",execution_blockers=[{"item_id":"visual","code":"CONTENT_REVIEW_REQUIRED","message":"需局部核验"}])
+        record.plan_json=value;record.plan_hash=content_hash(value);self.db.commit()
+        response = self.client.post(f"/api/video-refinements/{task['id']}/plans/confirm",json={"revision":0,"plan_hash":record.plan_hash,"acknowledge_risks":True})
+        self.assertEqual(response.status_code,422,response.text)
+
+    def test_v3_acceptance_uses_real_source_end_and_not_container_end(self):
+        from app.models import VideoLineageSegment, VideoRefinementPreview, VideoRefinementVersion
+        from app.services.refinement_media import render_recipe
+        from app.services.refinement_timing import frame_at_ms
+        from pathlib import Path
+        task = self.ready_plan(self.create())
+        record = self.db.query(VideoRefinementPlan).filter_by(task_id=task["id"]).one()
+        value = deepcopy(record.plan_json)
+        value.update(schema_version="video_refinement_plan.v3",renderer_version="v3-render-1")
+        value["summary"].update(frame_rate="30",total_frames=683)
+        for clip in value["video_track"]:
+            clip["output_frames"]={"start_frame":frame_at_ms(clip["output_range"]["start_ms"],30),"end_frame":frame_at_ms(clip["output_range"]["end_ms"],30)}
+        value["video_track"][1]["source_range"]["end_ms"]=6999
+        record.plan_json=value;record.plan_hash=content_hash(value);self.db.commit()
+        payload={"revision":0,"plan_hash":record.plan_hash,"acknowledge_risks":True}
+        self.assertEqual(self.client.post(f"/api/video-refinements/{task['id']}/plans/confirm",json=payload).status_code,200)
+        preview = VideoRefinementPreview(tenant_id="t1",task_id=task["id"],plan_id=record.id,revision=0,plan_hash=record.plan_hash,status="ready",
+            output_url="/preview.mp4",output_hash="b"*64,storage_provider="aliyun_oss",recipe_json=render_recipe(task["source_snapshot"],value),
+            validation_json={"passed":True,"duration_seconds":22.81,"width":720,"height":1280,"fps":30,"has_audio":True,"burned_subtitles":False,"has_background_music":False})
+        self.db.add(preview);self.db.commit()
+        payload.pop("acknowledge_risks")
+        with patch("app.api.video_refinement.verified_path",return_value=Path(self.temp.name)/"preview.mp4"):
+            response=self.client.post(f"/api/video-refinements/{task['id']}/previews/{preview.id}/accept",json=payload)
+        self.assertEqual(response.status_code,200,response.text)
+        version=self.db.query(VideoRefinementVersion).one()
+        segments=self.db.query(VideoLineageSegment).filter_by(target_asset_id=version.output_asset_id).order_by(VideoLineageSegment.segment_index).all()
+        self.assertEqual(segments[1].source_end,6.999)
+        self.assertAlmostEqual(segments[-1].target_end,683/30)
+        self.assertNotEqual(segments[-1].target_end,22.81)
+
+    def test_voiceover_publication_is_superseded_after_revision_change(self):
+        from app.services.refinement_voiceover import run_voiceover
+        from pathlib import Path
+        import wave
+        task = self.create()
+        job = VideoRefinementVoiceover(tenant_id="t1",task_id=task["id"],revision=0,item_id="voice",fingerprint="f"*64,
+                                      script="已授权台词",parameters_json={"speaker":"default"})
+        self.db.add(job);self.db.commit()
+        def synthesize(script,raw,**kwargs):
+            raw.write_bytes(b"provider")
+            response=self.client.patch(f"/api/video-refinements/{task['id']}/requirements",json={"revision":0,"user_brief":"新的目标"})
+            self.assertEqual(response.status_code,200,response.text)
+        def decode(command,**kwargs):
+            with wave.open(str(Path(command[-1])),"wb") as stream:
+                stream.setnchannels(2);stream.setsampwidth(2);stream.setframerate(48000);stream.writeframes(b"\0"*480*4)
+            return SimpleNamespace(returncode=0)
+        storage=SimpleNamespace(name="test",upload_path=AsyncMock(return_value="/voice.wav"),delete=AsyncMock())
+        with patch("app.services.refinement_voiceover.SessionLocal",self.sessions),patch("app.services.refinement_voiceover.synthesize_speech",side_effect=synthesize), \
+             patch("app.services.refinement_voiceover.subprocess.run",side_effect=decode),patch("app.services.refinement_voiceover.align_voiceover_timing"), \
+             patch("app.services.refinement_voiceover.get_storage_by_name",return_value=storage):
+            run_voiceover(job.id)
+        self.db.refresh(job)
+        self.assertEqual(job.status,"superseded")
+        self.assertFalse(job.object_url)
+        storage.delete.assert_awaited_once_with("/voice.wav")
 
     def test_more_than_500_materials_are_frozen_browsable_and_tenant_scoped(self):
         from app.models import VideoAsset
@@ -287,6 +455,7 @@ class RefinementV2ApiTest(unittest.TestCase):
         self.assertEqual(first.json()["analysis_state"]["id"],second.json()["analysis_state"]["id"])
         job = self.db.query(VideoRefinementAnalysisJob).one()
         self.assertTrue(job.options_json["auto_preview"])
+        self.assertNotIn("supplement_narration",job.options_json)
         self.assertEqual(self.client.post(url,json={"revision":1}).status_code,409)
         self.assertEqual(self.client.post(url,json={"revision":0},headers={"x-test-tenant":"t2"}).status_code,404)
         old_fingerprint = job.fingerprint
@@ -295,7 +464,7 @@ class RefinementV2ApiTest(unittest.TestCase):
         job.options_json = {"duration_preference":"preserve"};job.fingerprint = "manual";self.db.commit()
         self.client.post(url,json={"revision":0})
         self.db.refresh(job)
-        self.assertEqual(job.status,"queued")
+        self.assertEqual(job.status,"queued_v3")
         self.assertEqual(job.fingerprint,old_fingerprint)
 
     def test_automatic_plan_is_confirmed_and_preview_queued_atomically(self):
@@ -333,7 +502,7 @@ class RefinementV2ApiTest(unittest.TestCase):
         queued = self.client.post(f"/api/video-refinements/{task['id']}/auto-preview",json={"revision":0}).json()
         async def analyze(context,focus,brief,expected,**kwargs):
             return compile_plan(context,[],brief,expected,manual=False)
-        def prepare(db,current,plan,progress):
+        def prepare(db,current,plan,progress,*,checkpoint=None):
             changed = self.client.patch(f"/api/video-refinements/{task['id']}/requirements",json={"revision":0,"user_brief":"新的修改目标"})
             self.assertEqual(changed.status_code,200,changed.text)
             progress("voiceover")

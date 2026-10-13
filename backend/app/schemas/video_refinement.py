@@ -37,6 +37,7 @@ class MaterialSegment(BaseModel):
     model_config = ConfigDict(extra="forbid")
     asset_id: int = Field(gt=0)
     source_range: TimeRange
+    candidate_id: str | None = Field(default=None, max_length=64)
 
     @model_validator(mode="after")
     def nonempty(self):
@@ -49,6 +50,7 @@ class Requirement(BaseModel):
     model_config = ConfigDict(extra="forbid")
     requirement_id: str
     text: str = Field(min_length=1, max_length=2000)
+    request_quote: str = Field(default="", max_length=2000)
     status: Literal["EXECUTABLE", "ALREADY_SATISFIED", "NEEDS_CLARIFICATION", "CONFLICT", "UNSUPPORTED", "AWAITING_MATERIAL"]
     reason: str = Field(default="", max_length=2000)
     question: str = Field(default="", max_length=2000)

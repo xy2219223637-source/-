@@ -5,13 +5,15 @@ from copy import deepcopy
 
 from app.services.refinement_plan import content_hash
 from app.services.refinement_requirements import verify_requirements
+from app.services.refinement_timing import TIMING_VERSION, frame_at_ms, ms_at_frame, technical_tail_allowed, required_frames, frame_rate
 
 
-def compile_timeline(snapshot, items, brief, expected, *, manual, requirements, options, voiceovers):
+def compile_timeline(snapshot, items, brief, expected, *, manual, requirements, options, voiceovers, frame_coordinates=False):
     source = snapshot["source"]
     duration, fps = source["duration_ms"], source["fps"]
     catalog = {r["asset_id"]: r for r in snapshot["material_catalog"]}
-    tolerance = max(1, round(1000 / fps))
+    tolerance = 1 if frame_coordinates else max(1, round(1000 / fps))
+    boundary_guard = required_frames(60, fps) if frame_coordinates else 60
     blockers, normalized = [], []
     removed, visuals, inserts, voices, compressions = [], [], {}, [], []
     ids, groups = set(), {}
@@ -22,9 +24,11 @@ def compile_timeline(snapshot, items, brief, expected, *, manual, requirements, 
         blockers.append({"item_id": row["item_id"], "code": code, "message": message})
 
     def align(value):
+        if frame_coordinates:
+            return value
         if value in {0,duration}:
             return value
-        return min(duration, round(round(value * fps / 1000) * 1000 / fps))
+        return min(duration, ms_at_frame(frame_at_ms(value, fps), fps))
 
     def overlaps(a, b):
         return a[0] < b[1] and b[0] < a[1]
@@ -40,7 +44,7 @@ def compile_timeline(snapshot, items, brief, expected, *, manual, requirements, 
             block(row, "BOUNDARY_REVIEW_REQUIRED", "缺少可信语音时间, 请播放并人工确认插入或删除边界")
             return
         for point in boundaries:
-            if any(w["start_ms"] - 60 < point < w["end_ms"] + 60 for w in words if 0 < point < duration):
+            if any(w["start_ms"] - boundary_guard < point < w["end_ms"] + boundary_guard for w in words if 0 < point < duration):
                 block(row, "SPEECH_BOUNDARY", "边界过于接近有效发音, 请移动边界或人工核对")
                 return
         if end is None:
@@ -64,7 +68,19 @@ def compile_timeline(snapshot, items, brief, expected, *, manual, requirements, 
         if not voice or voice["status"] != "ready" or voice["fingerprint"] != voiceover_fingerprint(row["script"], voice["parameters"]):
             block(row, "VOICEOVER_REQUIRED", "请先生成并绑定与当前台词一致的局部配音")
             return None
-        if voice["duration_ms"] > length or (length - voice["duration_ms"] > tolerance and not row["narration_padding_reason"]):
+        display_ms = 0
+        if options.get("authorization_version") and row["type"] == "SEGMENT_INSERT":
+            from app.services.refinement_authorization import resolved_authorization
+            from app.schemas.video_refinement import RefinementItem
+            value = {key:value for key,value in row.items() if key in RefinementItem.model_fields}
+            value["material_segments"] = [{key:value for key,value in segment.items() if key in {"asset_id", "source_range", "candidate_id"}} for segment in value["material_segments"]]
+            authorization = resolved_authorization(RefinementItem.model_validate(value), requirements, brief, expected, manual=manual, overrides=options.get("manual_permissions") if manual else None)
+            if authorization["scoped"] and authorization["allow_insert"] and authorization["allow_visual"]:
+                display_ms = min(100, max(0, options.get("display_tail_ms", 0)))
+        gap = length - voice["duration_ms"]
+        padding_allowed = (0 <= gap <= display_ms if options.get("authorization_version") else bool(row["narration_padding_reason"]))
+        row["_display_tail_ms"] = display_ms
+        if not frame_coordinates and (gap < 0 or (not technical_tail_allowed(gap, 1000, fps) and not padding_allowed)):
             block(row, "VOICEOVER_DURATION", "配音实测时长与画面不匹配, 请调整台词或素材选段; 句间留白需明确说明")
         if row["subtitle_strategy"] == "regenerate" and not voice.get("timing", {}).get("segments"):
             block(row, "SUBTITLE_ALIGNMENT", "配音缺少可信字幕时间, 请重新对齐或明确选择不生成字幕")
@@ -107,11 +123,11 @@ def compile_timeline(snapshot, items, brief, expected, *, manual, requirements, 
             left, right = segment["source_range"]["start_ms"], segment["source_range"]["end_ms"]
             if not 0 <= left < right <= asset["duration_ms"]:
                 raise ValueError("素材截取范围为空或超过实测素材时长")
-            a = round(round(left * fps / 1000) * 1000 / fps)
-            b = min(asset["duration_ms"], round(round(right * fps / 1000) * 1000 / fps))
+            a = left if frame_coordinates or segment.get("candidate_id") else ms_at_frame(frame_at_ms(left, fps), fps)
+            b = right if frame_coordinates or segment.get("candidate_id") else min(asset["duration_ms"], ms_at_frame(frame_at_ms(right, fps), fps))
             if a >= b:
                 raise ValueError("素材截取范围不足一帧")
-            aligned.append({"asset_id": segment["asset_id"], "source_range":{"start_ms":a, "end_ms":b}, "requested_range": segment["source_range"], "frame_alignment_error_ms":{"start":a-left,"end":b-right}})
+            aligned.append({"asset_id": segment["asset_id"], "source_range":{"start_ms":a, "end_ms":b}, "requested_range": segment["source_range"], "frame_alignment_error_ms":{"start":a-left,"end":b-right}, **({"candidate_id":segment["candidate_id"]} if segment.get("candidate_id") else {})})
         row["material_segments"] = aligned
         if aligned:
             row["material_asset_id"] = aligned[0]["asset_id"]
@@ -262,10 +278,12 @@ def compile_timeline(snapshot, items, brief, expected, *, manual, requirements, 
     def generated(row,out,length):
         voice = tts(row,length)
         if voice:
-            clip("narration","tts",voice["id"],{"start_ms":0,"end_ms":voice["duration_ms"]},{"start_ms":out,"end_ms":out+length},[row["item_id"]],voice["content_hash"],audio_source_kind="independent_narration", padding_reason=row["narration_padding_reason"])
+            clip("narration","tts",voice["id"],{"start_ms":0,"end_ms":voice["duration_ms"]},{"start_ms":out,"end_ms":out+length},[row["item_id"]],voice["content_hash"],audio_source_kind="independent_narration", padding_reason=row["narration_padding_reason"],
+                 **({"padding_policy":{"version":"display-tail-1","max_display_ms":row.get("_display_tail_ms",0)}} if options.get("authorization_version") else {}))
             if row["subtitle_strategy"] == "regenerate":
                 for index,cue in enumerate(voice.get("timing",{}).get("segments",[])):
-                    a,b = round(cue["start"]*1000),round(cue["end"]*1000)
+                    scale = float(frame_rate(fps)) if frame_coordinates else 1000
+                    a,b = round(cue["start"]*scale),round(cue["end"]*scale)
                     if not 0 <= a < b <= voice["duration_ms"]+tolerance:
                         block(row,"SUBTITLE_ALIGNMENT","配音字幕时间越界")
                         continue
@@ -336,11 +354,12 @@ def compile_timeline(snapshot, items, brief, expected, *, manual, requirements, 
     resolution = verify_requirements(requirements, normalized, blockers)
     alignment = [{"item_id":row["item_id"],"requested_range":row.get("requested_range"),"actual_range":row["range"],"error_ms":row.get("frame_alignment_error_ms"),"material_segments":deepcopy(row["material_segments"])} for row in normalized]
     for row in normalized:
+        row.pop("_display_tail_ms", None)
         row.pop("requested_range", None)  # retained separately in alignment record
         row.pop("frame_alignment_error_ms", None)
         for segment in row["material_segments"]:
             segment.pop("requested_range",None); segment.pop("frame_alignment_error_ms",None)
-    return {"schema_version":"video_refinement_plan.v2","source":deepcopy(source),
+    return {"schema_version":"video_refinement_plan.v2","timing_version":TIMING_VERSION,"source":deepcopy(source),
             "summary":{"objective":brief,"expected_result":expected,"expected_duration_ms":cursor,"duration_delta_ms":cursor-duration,"duration_reason":"由原片坐标和独立音画轨推导; 预览后核对实测时长","confidence_level":"LOW" if any(r["enabled"] and r["confidence_level"]=="LOW" for r in normalized) else "MEDIUM","is_mock":False},
             "items":normalized,"execution_blockers":blockers,"requirements_resolution":resolution,
             "requirements_fingerprint":content_hash({"brief":brief,"expected":expected,"options":options}),

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import time
 from datetime import datetime, timedelta
 
@@ -12,7 +13,7 @@ from app.database import SessionLocal, engine, init_db
 from app.models import AuditLog, CreativeBatchJob, CreativeGeneration
 from app.services.production_queue import start_worker, stop_worker
 from app.services.video_analysis_queue import start_video_analysis_worker, stop_video_analysis_worker
-from app.services.refinement_queue import start_refinement_worker, stop_refinement_worker
+from app.services.refinement_queue import start_refinement_worker, stop_refinement_worker, refinement_worker_state
 from app.services.redis_client import get_redis
 from app.services.feishu_logging import RequestTraceMiddleware, trace_fields
 from app.api import qianchuan, qianchuan_plans, video_repair
@@ -96,9 +97,12 @@ def on_startup() -> None:
     if settings.run_background_workers:
         start_worker()
         start_video_analysis_worker()
-        start_refinement_worker()
         start_qianchuan_worker()
         start_video_repair_worker()
+    if settings.refinement_worker_enabled:
+        start_refinement_worker()
+    else:
+        logging.getLogger(__name__).warning("Refinement worker disabled; refinement generation requests will return 503")
 
 
 def recover_startup_tasks() -> None:
@@ -159,5 +163,6 @@ def health() -> dict:
         "database": engine.dialect.name,
         "redis": redis_status,
         "storage": settings.storage_provider,
+        "refinement_worker": refinement_worker_state(),
         "qianchuan": get_qianchuan_service().configuration(),
     }

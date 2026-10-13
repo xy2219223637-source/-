@@ -212,6 +212,47 @@ function v2Task(): VideoRefinementTask {
 }
 
 describe('视频精修 v2',()=>{
+  it('v3 展示局部选段证据和采样限制, 不将核验结果宣称为 SKU 已确认',async()=>{
+    const value=v2Task();value.plan!.schema_version='video_refinement_plan.v3';
+    value.plan!.items[0].material_segments=[{asset_id:205,source_range:{start_ms:5500,end_ms:6500},candidate_id:'local-1'}];
+    value.plan!.local_selection=[{item_id:value.plan!.items[0].item_id,asset_id:205,candidate_id:'local-1',source_range:{start_ms:5500,end_ms:6500},safe_range:{start_ms:3000,end_ms:9000},preferred_range:{start_ms:5000,end_ms:7000},reason:'包装在中部稳定清晰',verification:{method:'sampled_frames',sampled_times_ms:[3000,5000,8999],risks:['请核对中间画面']},product_match:{sku_verified:false,evidence:'包装颜色与当前商品一致'}}];
+    vi.mocked(videoRefinementApi.get).mockResolvedValue(value);
+    mount('/video-refinements/1');
+    expect(await screen.findByText('素材 205 选择依据: 包装在中部稳定清晰')).toBeTruthy();
+    expect(screen.getByText(/已采样 3 个时间点, 不代表连续观看/)).toBeTruthy();
+    expect(screen.getByText(/SKU 尚需人工核对/)).toBeTruthy();
+    expect(screen.queryByRole('alert')).toBeNull();
+  });
+
+  it('局部定位阶段显示实际阶段而不是预估百分比',async()=>{
+    const value=v2Task();value.analysis_state={id:1,revision:1,status:'analyzing',progress:{stage:'localizing'},error_message:''};
+    vi.mocked(videoRefinementApi.get).mockResolvedValue(value);
+    mount('/video-refinements/1');
+    expect(await screen.findByText('正在定位商品展示片段')).toBeTruthy();
+  });
+  it('自动帧修正显示为非阻塞结果并展示实际源区间',async()=>{
+    const value=v2Task();value.plan!.items[0].material_segments=[{asset_id:205,source_range:{start_ms:0,end_ms:4000}}];
+    value.plan!.automatic_adjustments=[{item_id:'item-pace',asset_id:205,code:'FRAME_BUDGET_CORRECTED',before_range:{start_ms:0,end_ms:4033},after_range:{start_ms:0,end_ms:4000},removed_frames:1,message:'已自动缩短最后一个商品展示片段一帧, 配音完整保留.'}];
+    vi.mocked(videoRefinementApi.get).mockResolvedValue(value);
+    mount('/video-refinements/1');
+    expect(await screen.findByText(/已自动缩短最后一个商品展示片段一帧/)).toBeTruthy();
+    expect(screen.getByText('实际使用素材 205: 00:00.000 - 00:04.000 / 4.00 秒')).toBeTruthy();
+    expect(screen.queryByRole('alert')).toBeNull();
+    expect(screen.queryByText('当前方案缺少的执行条件')).toBeNull();
+    expect(screen.queryByLabelText('对此要求的回答')).toBeNull();
+  });
+
+  it('音频执行阻塞不提示用户缺少素材或需要澄清',async()=>{
+    const value=v2Task();value.plan!.execution_blockers=[{item_id:'item-pace',code:'VOICEOVER_DURATION',category:'audio',message:'配音长于授权区间, 请精简台词'}];
+    value.plan!.requirements_resolution=[{requirement_id:'req',text:'增加展示镜头',status:'EXECUTABLE',reason:'已规划',question:'',item_ids:['item-pace'],decision:'pending',answer:'',execution_blockers:value.plan!.execution_blockers}];
+    vi.mocked(videoRefinementApi.get).mockResolvedValue(value);
+    mount('/video-refinements/1');
+    expect(await screen.findByText('配音长于授权区间, 请精简台词')).toBeTruthy();
+    expect(screen.queryByText('等待素材')).toBeNull();
+    expect(screen.queryByLabelText('对此要求的回答')).toBeNull();
+    expect(screen.getByRole('button',{name:'确认整套方案'})).toHaveProperty('disabled',true);
+  });
+
   it('旧方案缺少执行条件时可以直接启动自动预览, 无需手动选择素材',async()=>{
     const value=v2Task();value.plan!.execution_blockers=[{item_id:'item-pace',code:'VOICEOVER_REQUIRED',message:'缺少配音'}];
     value.plan!.requirements_resolution=[{requirement_id:'req',text:'补充商品画面',status:'AWAITING_MATERIAL',reason:'关联修改尚未具备执行条件',item_ids:['item-pace'],decision:'pending',answer:''}];
@@ -287,6 +328,53 @@ describe('自由修改意见入口',()=>{
 });
 
 describe('后台状态恢复',()=>{
+  it.each(['disabled','stopped'] as const)('精修 worker 为 $0 时明确提示, 不显示正在调用 AI',async(status)=>{
+    const message=status==='disabled'?'后台精修服务已关闭, 请联系管理员启用. 已排队任务保留, 无需重复提交.':'后台精修服务未运行, 请联系管理员检查服务. 已排队任务保留, 无需重复提交.';
+    const value={...v2Task(),status:'CREATED' as const,plan:null,plan_hash:null,worker_state:{status,message},analysis_state:{id:1,revision:1,status:'queued',progress:{},error_message:'',queue_wait_seconds:480}};
+    vi.mocked(videoRefinementApi.get).mockResolvedValue(value);
+    mount('/video-refinements/1');
+    expect(await screen.findByText(message)).toBeTruthy();
+    expect(screen.queryByText('正在准备精修方案')).toBeNull();
+    expect(screen.getByRole('button',{name:'AI 精修并生成预览'})).toHaveProperty('disabled',true);
+    expect(videoRefinementApi.autoPreview).not.toHaveBeenCalled();
+  });
+
+  it('较长排队显示实际等待时间, 不误报 AI 正在运行',async()=>{
+    const value={...v2Task(),status:'CREATED' as const,plan:null,plan_hash:null,worker_state:{status:'running' as const,message:''},analysis_state:{id:1,revision:1,status:'queued',progress:{},error_message:'',queue_wait_seconds:480}};
+    vi.mocked(videoRefinementApi.get).mockResolvedValue(value);
+    mount('/video-refinements/1');
+    expect(await screen.findByText('已排队约 8 分钟, 尚未开始分析. 无需重复提交.')).toBeTruthy();
+    expect(screen.queryByText('正在准备精修方案')).toBeNull();
+  });
+
+  it('同修订轮询恢复 worker 状态, 无需重复提交排队任务',async()=>{
+    const value={...v2Task(),status:'CREATED' as const,plan:null,plan_hash:null,worker_state:{status:'disabled' as const,message:'后台精修服务已关闭'},analysis_state:{id:1,revision:1,status:'queued',progress:{},error_message:''}};
+    const running={...value,worker_state:{status:'running' as const,message:''},analysis_state:{...value.analysis_state,status:'analyzing',progress:{stage:'matching'}}};
+    vi.mocked(videoRefinementApi.get).mockResolvedValueOnce(value).mockResolvedValue(running);
+    vi.useFakeTimers();
+    try{
+      await act(async()=>{mount('/video-refinements/1')});
+      expect(screen.getByText('后台精修服务已关闭')).toBeTruthy();
+      await act(()=>vi.advanceTimersByTimeAsync(2000));
+      expect(screen.queryByText('后台精修服务已关闭')).toBeNull();
+      expect(screen.getByText('正在匹配修改意见')).toBeTruthy();
+      expect(videoRefinementApi.autoPreview).not.toHaveBeenCalled();
+    }finally{cleanup();vi.useRealTimers();}
+  });
+
+  it('没有排队作业时也能发现 worker 已恢复并解锁生成',async()=>{
+    const value={...v2Task(),status:'CREATED' as const,plan:null,plan_hash:null,worker_state:{status:'stopped' as const,message:'后台精修服务未运行'}};
+    vi.mocked(videoRefinementApi.get).mockResolvedValueOnce(value).mockResolvedValue({...value,worker_state:{status:'running',message:''}});
+    vi.useFakeTimers();
+    try{
+      await act(async()=>{mount('/video-refinements/1')});
+      expect(screen.getByRole('button',{name:'AI 精修并生成预览'})).toHaveProperty('disabled',true);
+      await act(()=>vi.advanceTimersByTimeAsync(2000));
+      expect(screen.getByRole('button',{name:'AI 精修并生成预览'})).toHaveProperty('disabled',false);
+      expect(screen.queryByText('后台精修服务未运行')).toBeNull();
+    }finally{cleanup();vi.useRealTimers();}
+  });
+
   it('自动预览完成后更新提示, 不再显示正在生成',async()=>{
     const value=v2Task();value.plan!.automatic_preview=true;
     const created={...value,status:'CREATED' as const,plan:null,plan_hash:null};

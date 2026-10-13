@@ -70,7 +70,7 @@ class AutomaticMaterialsTest(unittest.TestCase):
         self.assertLessEqual(total-1234,34)
         self.assertEqual([s.asset_id for s in edit.material_segments],[2,3])
         self.assertEqual(edit.range.start_ms,4000)
-        self.assertEqual(edit.narration_strategy,"tts")
+        self.assertEqual(edit.narration_strategy,"keep_source")
 
     def test_insufficient_clean_footage_requires_new_material_instead_of_looping(self):
         context = snapshot();edit = item("SEGMENT_INSERT",range={"start_ms":0,"end_ms":0})
@@ -103,8 +103,8 @@ class ConfiguredSpeechTest(unittest.TestCase):
             with self.assertRaisesRegex(ValueError,"可信的分句时间"):
                 transcribe_configured_media(Path("source.mp4"))
 
-    def test_tts_accepts_api_key_and_legacy_credentials_without_mixing_headers(self):
-        for key, app_id, token in (("test-key","",""),("","test-app","test-token")):
+    def test_tts_api_key_does_not_mix_legacy_headers(self):
+        for key, app_id, token in (("test-key","",""),("test-key","test-app","test-token")):
             settings = SimpleNamespace(doubao_tts_api_key=key,doubao_tts_app_id=app_id,doubao_tts_access_token=token,
                                        doubao_tts_resource_id="seed-tts-2.0",doubao_tts_speaker="speaker")
             http = MagicMock();response = http.__enter__.return_value.stream.return_value.__enter__.return_value
@@ -114,8 +114,9 @@ class ConfiguredSpeechTest(unittest.TestCase):
                 synthesize_speech("真实台词",output)
                 self.assertEqual(output.read_bytes(),b"audio")
             headers = http.__enter__.return_value.stream.call_args.kwargs["headers"]
-            self.assertEqual("X-Api-Key" in headers,bool(key))
-            self.assertEqual("X-Api-App-Id" in headers,bool(app_id))
+            self.assertEqual(headers["X-Api-Key"],key)
+            self.assertNotIn("X-Api-App-Id",headers)
+            self.assertNotIn("X-Api-Access-Key",headers)
             self.assertEqual(headers["X-Api-Resource-Id"],"seed-tts-2.0")
             audio_params = http.__enter__.return_value.stream.call_args.kwargs["json"]["req_params"]["audio_params"]
             self.assertTrue(audio_params["enable_subtitle"])
@@ -124,6 +125,6 @@ class ConfiguredSpeechTest(unittest.TestCase):
     def test_missing_tts_configuration_is_actionable_and_sends_no_request(self):
         settings = SimpleNamespace(doubao_tts_api_key="",doubao_tts_app_id="",doubao_tts_access_token="")
         with patch("app.services.tts.get_settings",return_value=settings),patch("app.services.tts.httpx.Client") as http:
-            with self.assertRaisesRegex(ValueError,"backend/.env"):
+            with self.assertRaisesRegex(RuntimeError,"TTS API Key"):
                 synthesize_speech("真实台词",Path("unused.mp3"))
             http.assert_not_called()

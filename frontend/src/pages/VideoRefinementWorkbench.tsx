@@ -21,6 +21,7 @@ const actionNotices: Record<string, string> = {
 };
 function analysisNotice(task: VideoRefinementTask): string {
   const status = task.analysis_state?.status;
+  if(task.worker_state&&task.worker_state.status!=='running'&&(status==='queued'||status==='analyzing'))return '';
   if(status==='queued')return '分析已排队, 将匹配已分析素材并生成方案.';
   if(status==='analyzing')return '正在分析并生成精修方案, 请稍候.';
   if(!task.plan)return '';
@@ -185,16 +186,18 @@ function TaskWorkspace({taskId}: {taskId: number}) {
   },[taskId,retry]);
   const pendingPreview = task?.previews?.some(row=>row.revision===task.current_revision&&(row.status==='queued'||row.status==='rendering'));
   const pendingAnalysis=task?.analysis_state?.status==='queued'||task?.analysis_state?.status==='analyzing';
+  const workerUnavailable=!!task?.worker_state&&task.worker_state.status!=='running';
+  const waitingForWorker=workerUnavailable&&task?.status!=='CANCELLED'&&task?.status!=='COMPLETED';
   const pendingVoice=task?.voiceovers?.some(row=>row.status==='queued'||row.status==='generating');
   useEffect(()=>{
-    if(!pendingPreview&&!pendingAnalysis&&!pendingVoice)return;
+    if(!pendingPreview&&!pendingAnalysis&&!pendingVoice&&!waitingForWorker)return;
     let active = true;
     const timer = window.setInterval(()=>{
-      videoRefinementApi.get(taskId).then(next=>{if(active){pollingFailures.current=0;setPollError('');setError(current=>current==='预览状态加载失败, 请重新加载'?'':current);if(next.current_revision!==task?.current_revision)apply(next);else setTask(current=>current?{...current,status:next.status,previews:next.previews,analysis_state:next.analysis_state,voiceovers:next.voiceovers,output_asset_id:next.output_asset_id,output_version:next.output_version}:next)}})
+      videoRefinementApi.get(taskId).then(next=>{if(active){pollingFailures.current=0;setPollError('');setError(current=>current==='预览状态加载失败, 请重新加载'?'':current);if(next.current_revision!==task?.current_revision)apply(next);else setTask(current=>current?{...current,status:next.status,previews:next.previews,analysis_state:next.analysis_state,worker_state:next.worker_state,voiceovers:next.voiceovers,output_asset_id:next.output_asset_id,output_version:next.output_version}:next)}})
         .catch(()=>{if(active){pollingFailures.current+=1;if(pollingFailures.current>=3)setPollError('任务状态更新暂时中断, 正在自动重试')}});
     },2000);
     return()=>{active=false;window.clearInterval(timer)};
-  },[taskId,pendingPreview,pendingAnalysis,pendingVoice,task?.current_revision]);
+  },[taskId,pendingPreview,pendingAnalysis,pendingVoice,waitingForWorker,task?.current_revision]);
   const dirty = JSON.stringify(draft)!==JSON.stringify(task?.plan?.items||[]);
   const active = draft.find(row=>row.item_id===activeId);
   async function action(name: string, work: () => Promise<VideoRefinementTask>) {
@@ -215,6 +218,7 @@ function TaskWorkspace({taskId}: {taskId: number}) {
   if(!task)return <div className="refine-empty">{error?<><p role="alert">{error}</p><button className="btn-secondary" onClick={()=>setRetry(value=>value+1)}>重新加载</button><Link to="/video-refinements">返回精修工作台</Link></>:<><Loader2 className="animate-spin"/>正在加载任务</>}</div>;
   const source=task.source_snapshot.source;
   const activeMaterial=task.source_snapshot.material_catalog.find(row=>row.asset_id===active?.material_asset_id);
+  const actualSegments=task.plan?.video_track?.filter(clip=>clip.source_kind==='material'&&active&&clip.item_ids.includes(active.item_id)).map(clip=>({asset_id:clip.source_asset_id,source_range:clip.source_range}))??active?.material_segments;
   const cancelled=task.status==='CANCELLED'||task.status==='COMPLETED';
   const legacy=task.source_snapshot.is_mock;
   const v2=task.source_snapshot.schema_version==='video_refinement_snapshot.v2';
@@ -256,11 +260,12 @@ function TaskWorkspace({taskId}: {taskId: number}) {
         {v2&&<><GoalEditor task={task} disabled={!!busy||cancelled||dirty||!!pendingAnalysis} action={action}/><EvaluationProgress task={task}/>{!!task.plan?.material_evaluation?.failed&&!task.plan.material_evaluation.partial_accepted&&!pendingAnalysis&&!task.plan.material_evaluation.complete&&<button className="btn-secondary" disabled={!!busy||cancelled||dirty} onClick={()=>action('requirements',async()=>{const next=await videoRefinementApi.requirements(task.id,{revision:task.current_revision,accept_partial_evaluation:true});return videoRefinementApi.autoPreview(task.id,next.current_revision)})}>接受当前已评估范围并重新规划</button>}<RequirementPanel task={task} disabled={!!busy||cancelled||dirty||!!pendingAnalysis} action={action}/></>}
         {!v2&&!legacy&&!cancelled&&<button className="btn-secondary" disabled={!!busy||dirty} onClick={()=>action('refresh',()=>videoRefinementApi.refreshMaterials(task.id,task.current_revision))}>刷新素材并使用音画独立新规则</button>}
         {task.analysis_state?.status==='failed'&&<div className="refine-error" role="alert">{task.analysis_state.error_message}<button disabled={!!busy||dirty} onClick={()=>action('analyze',()=>generatePreview(task))}>重试后台分析</button></div>}
-        {!task.plan?<div className="refine-no-plan"><h3>目标已保存, 现在生成精修预览</h3><p>AI 自动匹配同商品无字幕素材, 为补充段生成新配音, 完成音画检查后生成视频预览.</p><button className="btn-primary" disabled={!!busy||cancelled||legacy||!!pendingAnalysis} onClick={()=>action('analyze',()=>generatePreview(task))}>{busy==='analyze'?<Loader2 className="animate-spin" size={16}/>:<WandSparkles size={16}/>}{v2?'AI 精修并生成预览':'AI 分析并生成方案'}</button>{busy==='analyze'&&<p role="status">正在读取真实媒体并调用 AI, 请稍候.</p>}</div>:<>
-          {v2&&!cancelled&&!editing&&task.status!=='PLAN_CONFIRMED'&&<div className="refine-inline-actions"><button className="btn-primary" disabled={!!busy||dirty||!!pendingAnalysis} onClick={()=>action('analyze',()=>generatePreview(task))}>{(busy==='analyze'||pendingAnalysis)?<Loader2 size={16} className="animate-spin"/>:<WandSparkles size={16}/>}AI 精修并生成预览</button><span className="refine-note">自动选择无字幕素材并生成补充段配音</span></div>}
+        {!task.plan?<div className="refine-no-plan"><h3>目标已保存, 现在生成精修预览</h3><p>AI 自动匹配同商品无字幕素材, 仅按明确要求生成局部配音, 完成音画检查后生成视频预览.</p><button className="btn-primary" disabled={!!busy||cancelled||legacy||!!pendingAnalysis||workerUnavailable} onClick={()=>action('analyze',()=>generatePreview(task))}>{busy==='analyze'?<Loader2 className="animate-spin" size={16}/>:<WandSparkles size={16}/>}{v2?'AI 精修并生成预览':'AI 分析并生成方案'}</button>{busy==='analyze'&&<p role="status">正在读取真实媒体并调用 AI, 请稍候.</p>}</div>:<>
+          {v2&&!cancelled&&!editing&&task.status!=='PLAN_CONFIRMED'&&<div className="refine-inline-actions"><button className="btn-primary" disabled={!!busy||dirty||!!pendingAnalysis||workerUnavailable} onClick={()=>action('analyze',()=>generatePreview(task))}>{(busy==='analyze'||pendingAnalysis)&&!workerUnavailable?<Loader2 size={16} className="animate-spin"/>:<WandSparkles size={16}/>}AI 精修并生成预览</button><span className="refine-note">自动选择无字幕素材, 仅按明确要求生成局部配音</span></div>}
           <div className="refine-section-heading"><h3>{editing?'修改方案':'完整精修方案'}</h3><button className="refine-text-button" disabled={!!busy||cancelled||!!pendingAnalysis} onClick={()=>{if(editing){setDraft(task.plan!.items.map(row=>structuredClone(row)));setAcknowledged(false)}setEditing(value=>!value)}}><Pencil size={14}/>{editing?'放弃修改':'修改方案'}</button></div>
           <div className="refine-duration"><span>源片 <strong>{seconds(source.duration_ms)}</strong></span><span>预计 <strong>{seconds(source.duration_ms+delta)}</strong></span><span>{delta>0?'+':''}{seconds(delta)}{dirty?' / 未保存':''}</span></div>
           <p className="refine-note">{delta?'时长变化来自启用的裁切和片段插入, 实际结果需渲染后测量.':'当前方案保持源片时长.'}</p>
+          {!dirty&&task.plan.automatic_adjustments?.map((adjustment,index)=><p className="refine-note" role="status" key={index}>{adjustment.message} 素材 {adjustment.asset_id}: {timecode(adjustment.before_range.start_ms)} - {timecode(adjustment.before_range.end_ms)} 调整为 {timecode(adjustment.after_range.start_ms)} - {timecode(adjustment.after_range.end_ms)}.</p>)}
           {v2&&task.plan.execution_blockers.length>0&&<div className="refine-blockers" role="status"><h4>当前方案缺少的执行条件</h4><p className="refine-note">点击 AI 精修并生成预览, 系统会自动核验素材, 准备配音和检查插入边界.</p>{task.plan.execution_blockers.map((row,index)=><p key={index}>{row.message}</p>)}</div>}
           {!draft.length&&<p className="refine-note">当前评估没有需要执行的剪辑动作. 请查看逐条要求的处理结果.</p>}
           <div className="refine-items">{draft.map(item=><article key={item.item_id} className={`${item.item_id===activeId?'is-active':''} ${item.enabled?'':'is-off'}`}>
@@ -290,6 +295,8 @@ function TaskWorkspace({taskId}: {taskId: number}) {
             {(active.script||active.subtitle_text)&&!editing&&<p>文本: {active.script||active.subtitle_text}</p>}
             <p className="refine-risk"><AlertTriangle size={15}/>{active.risk||'区间与修改内容需人工核对.'}</p>{active.dependencies.length>0&&<p className="refine-note">依赖: {active.dependencies.join(', ')}</p>}
             {active.evidence.length>0&&<p className="refine-evidence">分析依据: {active.evidence.join(', ')}</p>}
+            {!editing&&actualSegments?.map((segment,index)=><p className="refine-note" key={index}>实际使用素材 {segment.asset_id}: {timecode(segment.source_range.start_ms)} - {timecode(segment.source_range.end_ms)} / {seconds(segment.source_range.end_ms-segment.source_range.start_ms)}</p>)}
+            {!dirty&&task.plan.local_selection?.filter(selection=>selection.item_id===active.item_id).map(selection=><div key={selection.candidate_id} className="refine-note"><p>素材 {selection.asset_id} 选择依据: {selection.reason}</p><p>采样核验范围: {timecode(selection.safe_range.start_ms)} - {timecode(selection.safe_range.end_ms)}. 已采样 {selection.verification.sampled_times_ms.length} 个时间点, 不代表连续观看.</p><p>商品依据: {selection.product_match.evidence}{!selection.product_match.sku_verified?' / SKU 尚需人工核对':''}</p>{selection.verification.risks.map((risk,index)=><p key={index}>{risk}</p>)}</div>)}
           </section>}
           <details className="refine-findings"><summary>发现但不建议自动修改</summary>{task.plan.findings_not_applied.map(text=><p key={text}>{text}</p>)}</details>
           <div className="refine-plan-actions">{editing?<button className="btn-primary" disabled={!!busy||!dirty||cancelled||legacy} onClick={()=>action('save',()=>videoRefinementApi.updateDraft(task.id,{revision:task.current_revision,items:draft}))}>{busy==='save'&&<Loader2 className="animate-spin" size={16}/>}保存方案修改</button>:task.status==='COMPLETED'?<p className="refine-confirmed"><Check size={18}/>精修 V{task.output_version} 已保存.</p>:task.status==='PLAN_CONFIRMED'?<><p className="refine-confirmed"><Check size={18}/>r{task.confirmed_revision} 已整体确认. {legacy?'请使用真实数据重新开始.':'可以生成视频预览.'}</p>{!legacy&&<><button className="btn-primary" disabled={!!busy||dirty||!!task.plan.execution_blockers.length||pendingPreview||preview?.status==='ready'} onClick={()=>action('preview',()=>videoRefinementApi.preview(task.id,{revision:task.current_revision,plan_hash:task.plan_hash!}))}>{(busy==='preview'||pendingPreview)&&<Loader2 size={16} className="animate-spin"/>}{preview?.status==='failed'?'重新生成预览':'生成精修预览'}</button>{task.plan.execution_blockers.length>0&&<p className="refine-note">请关闭无法自动执行的修改项或补充素材, 保存并重新确认后生成预览.</p>}</>}</>:<>

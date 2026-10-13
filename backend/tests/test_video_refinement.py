@@ -24,6 +24,9 @@ from refinement_fixtures import analyze_mock
 
 class VideoRefinementTest(unittest.TestCase):
     def setUp(self):
+        self.worker_patch = patch("app.services.refinement_queue.refinement_worker_state",return_value={"status":"running","message":""})
+        self.worker_patch.start()
+        self.addCleanup(self.worker_patch.stop)
         async def test_ai(snapshot, focus, brief, expected):
             fixture = deepcopy(snapshot)
             fixture["timeline"] = [{"shot_id": f"mock-shot-{index+1:03d}", "start_ms": start, "end_ms": end} for index, (start, end) in enumerate([(0,5239),(5239,17768),(17768,22780)])]
