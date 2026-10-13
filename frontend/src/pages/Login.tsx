@@ -2,6 +2,7 @@ import { useState, type FormEvent } from 'react';
 import { authApi } from '../api/client';
 import IcpFiling from '../components/IcpFiling';
 import { safeReturnPath } from '../lib/loginReturn';
+import { COMPANY_NAME } from '../lib/siteIdentity';
 
 export default function Login() {
   const [form, setForm] = useState({ phone: '', password: '' });
@@ -35,8 +36,7 @@ export default function Login() {
     <div className="flex flex-1 items-center justify-center">
       <form className="panel p-8 w-full max-w-md space-y-4" onSubmit={submit}>
         <div className="pb-2">
-          <div className="font-display text-4xl leading-none">Dirovo</div>
-          <div className="mt-1 font-display text-lg leading-none tracking-[0.08em]">蒂洛薇</div>
+          <div className="text-xl font-medium leading-7 break-words text-balance">{COMPANY_NAME}</div>
         </div>
         <h1 className="text-base font-medium">登录品牌创作平台</h1>
         <label className="field"><span>手机号</span><input type="tel" inputMode="numeric" autoComplete="tel" required pattern="1[0-9]{10}" maxLength={11} value={form.phone} onChange={(e)=>setForm({...form,phone:e.target.value.replace(/\D/g, '')})}/></label>

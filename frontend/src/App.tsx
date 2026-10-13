@@ -1,6 +1,7 @@
 import { lazy, Suspense } from 'react';
 import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom';
 import { Loader2 } from 'lucide-react';
+import RouteTitle from './components/RouteTitle';
 
 const Layout = lazy(() => import('./components/Layout'));
 const Dashboard = lazy(() => import('./pages/Dashboard'));
@@ -46,6 +47,7 @@ function PageLoading() {
 export default function App() {
   return (
     <BrowserRouter>
+      <RouteTitle />
       <Suspense fallback={<PageLoading />}>
         <Routes>
           <Route path="login" element={<Login />} />
