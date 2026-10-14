@@ -100,6 +100,7 @@ def _next_ecommerce_asset_id() -> Optional[int]:
         assets = db.query(EcommerceVideoAsset).filter(
             EcommerceVideoAsset.asset_kind == "material",
             EcommerceVideoAsset.status == "queued_for_analysis",
+            EcommerceVideoAsset.asset_kind == "material",
             EcommerceVideoAsset.excluded.is_(False),
         ).order_by(EcommerceVideoAsset.created_at, EcommerceVideoAsset.id)
         for asset in assets.yield_per(100):

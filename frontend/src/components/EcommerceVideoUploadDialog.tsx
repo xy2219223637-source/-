@@ -196,6 +196,8 @@ export default function VideoUploadDialog({libraryType,assetKind='material',prod
           if(!asset)throw new Error('上传完成后未返回素材信息');
           uploadedIds.push(asset.id);
           patchItem(item.id,{status:'success',percent:100,error:'',assetId:asset.id});
+          // The record exists as soon as multipart/complete returns; show it while the rest of the batch continues.
+          void onUploaded().catch(()=>{});
         }catch(errorValue){
           patchItem(item.id,{status:'error',percent:0,error:messageFrom(errorValue,'上传失败')});
         }

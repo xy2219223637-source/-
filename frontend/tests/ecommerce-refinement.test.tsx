@@ -148,6 +148,44 @@ describe('电商商品精修入口', () => {
     expect(ecommerceVideoLibraryApi.list).toHaveBeenCalledWith(1, 'finished', 'material');
   });
 
+  it('商品成片时长筛选保留边界, 重置后恢复全部结果', async () => {
+    vi.mocked(ecommerceVideoLibraryApi.list).mockResolvedValue([15, 30, 60, 61].map(seconds => ({
+      ...finalAsset, id: seconds, filename: `${seconds}秒.mp4`, duration_seconds: seconds,
+      created_at: new Date().toISOString(),
+    })));
+    render(<MemoryRouter><EcommerceVideoLibrary assetKind="final_output" /></MemoryRouter>);
+    await screen.findByRole('heading', { name: '15秒.mp4' });
+    for (const [value, filename] of [['under-15', '15秒.mp4'], ['15-30', '30秒.mp4'], ['30-60', '60秒.mp4'], ['over-60', '61秒.mp4']]) {
+      fireEvent.change(screen.getByRole('combobox', { name: '时长' }), { target: { value } });
+      expect(screen.getByRole('heading', { name: filename })).toBeTruthy();
+      expect(screen.getAllByRole('checkbox')).toHaveLength(1);
+    }
+    fireEvent.click(screen.getByRole('button', { name: '重置' }));
+    expect(screen.getAllByRole('checkbox')).toHaveLength(4);
+    expect(screen.getByText(/总分钟 2.8/)).toBeTruthy();
+  });
+
+  it('商品成片按入库时间筛选, 全选仅作用于当前结果', async () => {
+    const oldDate = new Date();
+    oldDate.setDate(oldDate.getDate() - 40);
+    vi.mocked(ecommerceVideoLibraryApi.list).mockResolvedValue([
+      { ...finalAsset, created_at: new Date().toISOString() },
+      { ...finalAsset, id: 102, filename: '历史成片.mp4', created_at: oldDate.toISOString() },
+    ]);
+    render(<MemoryRouter><EcommerceVideoLibrary assetKind="final_output" /></MemoryRouter>);
+    await screen.findByRole('heading', { name: '历史成片.mp4' });
+    fireEvent.change(screen.getByRole('combobox', { name: '入库时间' }), { target: { value: 'today' } });
+    expect(screen.queryByRole('heading', { name: '历史成片.mp4' })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: '选择当前结果' }));
+    expect((screen.getByRole('checkbox', { name: `选择 ${finalAsset.filename}` }) as HTMLInputElement).checked).toBe(true);
+    fireEvent.change(screen.getByRole('combobox', { name: '入库时间' }), { target: { value: 'all' } });
+    expect((screen.getByRole('checkbox', { name: '选择 历史成片.mp4' }) as HTMLInputElement).checked).toBe(false);
+    fireEvent.click(screen.getByRole('button', { name: '选择当前结果' }));
+    expect(screen.getAllByRole('checkbox').every(element => (element as HTMLInputElement).checked)).toBe(true);
+    fireEvent.click(screen.getByRole('button', { name: '取消选择当前结果' }));
+    expect(screen.getAllByRole('checkbox').every(element => !(element as HTMLInputElement).checked)).toBe(true);
+  });
+
   it('商品素材保留分析状态和复用操作', async () => {
     vi.mocked(ecommerceVideoLibraryApi.list).mockResolvedValue([asset]);
     render(<MemoryRouter><EcommerceVideoLibrary assetKind="material" /></MemoryRouter>);

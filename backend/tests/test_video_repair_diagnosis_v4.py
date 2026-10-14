@@ -76,6 +76,57 @@ class V4DiagnosisTests(unittest.TestCase):
                              ACTIONS | {"UNSUPPORTED"})
             self.assertIn("UNSUPPORTED", sent["messages"][0]["content"])
 
+    def test_provider_retries_with_existing_context_when_video_format_is_rejected(self):
+        with patch("app.services.video_repair.ai_provider.OpenAI") as sdk, \
+             patch("app.services.video_repair.ai_provider.get_storage_for_url") as storage:
+            storage.return_value.signed_url.return_value = "https://example.test/source.mp4"
+            sdk.return_value.chat.completions.create.side_effect = [
+                ValueError("video_url unsupported"),
+                SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(
+                    content=json.dumps({"ok": True})))], usage=None),
+            ]
+            provider = OpenAICompatibleDiagnosisProvider(
+                api_key="test", base_url="https://example.test", model="test-model",
+                timeout_seconds=5, prompt_version="v4")
+            result = provider.diagnose({**context(), "video": {
+                "duration_ms": 12000, "source_url": "/source.mp4"}},
+                schema_model=VideoRepairDiagnosisV4)
+            calls = sdk.return_value.chat.completions.create.call_args_list
+            self.assertEqual(result.input_mode, "STRUCTURED_CONTEXT")
+            self.assertEqual(calls[1].kwargs["response_format"], {"type": "json_object"})
+            self.assertTrue(any(item["type"] == "video_url" for item in calls[0].kwargs["messages"][1]["content"]))
+            self.assertFalse(any(item["type"] == "video_url" for item in calls[1].kwargs["messages"][1]["content"]))
+
+    def test_schema_retry_keeps_video_evidence(self):
+        with patch("app.services.video_repair.ai_provider.OpenAI") as sdk, \
+             patch("app.services.video_repair.ai_provider.get_storage_for_url") as storage:
+            storage.return_value.signed_url.return_value = "https://example.test/source.mp4"
+            sdk.return_value.chat.completions.create.side_effect = [
+                ValueError("json_schema unsupported"),
+                SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(
+                    content=json.dumps({"ok": True})))], usage=None),
+            ]
+            provider = OpenAICompatibleDiagnosisProvider(
+                api_key="test", base_url="https://example.test", model="test-model",
+                timeout_seconds=5, prompt_version="v4")
+            result = provider.diagnose({**context(), "video": {
+                "duration_ms": 12000, "source_url": "/source.mp4"}},
+                schema_model=VideoRepairDiagnosisV4)
+            calls = sdk.return_value.chat.completions.create.call_args_list
+            self.assertEqual(result.input_mode, "VIDEO")
+            self.assertEqual(calls[1].kwargs["response_format"], {"type": "json_object"})
+            self.assertTrue(any(item["type"] == "video_url" for item in calls[1].kwargs["messages"][1]["content"]))
+
+    def test_missing_function_demo_is_classified_as_insert_when_ai_proposes_it(self):
+        result = diagnose_video_v4(context("50-60秒没有展示产品功能"), FakeProvider(
+            "CONTENT_INSERT", ["visual", "audio"], "MISSING_PROCESS_EVIDENCE"))
+        self.assertEqual(result.issues[0].suggested_action, "CONTENT_INSERT")
+
+    def test_insert_cannot_claim_to_fix_existing_captions(self):
+        result = diagnose_video_v4(context(), FakeProvider(
+            "CONTENT_INSERT", ["visual", "caption"], "MISSING_PROCESS_EVIDENCE"))
+        self.assertEqual(result.issues[0].suggested_action, "UNSUPPORTED")
+
     def test_audio_replacement_never_claims_to_fix_captions(self):
         result = diagnose_video_v4(context(), FakeProvider(
             "AUDIO_REPLACE", ["audio", "caption"], "COPY_AUDIO_CAPTION_RISK"))

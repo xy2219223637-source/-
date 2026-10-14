@@ -26,6 +26,8 @@ backend/logs/
 backend/migration_backups/
 backups/
 output/
+/outputs/
+/qa-local/
 backend/log/
 backend/logs/
 

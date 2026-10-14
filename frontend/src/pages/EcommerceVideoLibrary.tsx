@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { Download, Eye, Loader2, RefreshCw, Upload } from 'lucide-react';
+import { CheckSquare2, Download, Eye, Film, Loader2, Play, RefreshCw, RotateCcw, Square, Upload } from 'lucide-react';
 import { Link, useNavigate } from 'react-router-dom';
 import { ecommerceProductApi, ecommerceVideoLibraryApi, ecommerceVideoTaxonomyApi, mediaUrl } from '../api/client';
 import EcommerceVideoUploadDialog from '../components/EcommerceVideoUploadDialog';
+import LazyVideo from '../components/LazyVideo';
 import { VideoTaxonomySummary } from '../components/EcommerceVideoTaxonomyEditor';
 import { matchesVideoTaxonomy, VideoBatchTaxonomyBar, VideoTaxonomyFilters } from '../components/EcommerceVideoTaxonomyFilters';
 import type { Product, VideoLibraryAsset, VideoReusableStatus, VideoTaxonomyCatalog, VideoTaxonomyFilterValue } from '../types';
@@ -34,6 +35,8 @@ export default function EcommerceVideoLibrary({ assetKind }: { assetKind: AssetK
   const [filter, setFilter] = useState<VideoTaxonomyFilterValue>(emptyFilter);
   const [selectedIds, setSelectedIds] = useState<number[]>([]);
   const [status, setStatus] = useState('all');
+  const [durationFilter, setDurationFilter] = useState('all');
+  const [dateFilter, setDateFilter] = useState('all');
   const [search, setSearch] = useState('');
   const [uploadOpen, setUploadOpen] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -65,13 +68,30 @@ export default function EcommerceVideoLibrary({ assetKind }: { assetKind: AssetK
 
   const visible = useMemo(() => assets.filter(asset => {
     if (catalog && !matchesVideoTaxonomy(asset, catalog, filter)) return false;
-    if (!isFinal && status !== 'all' && asset.status !== status && asset.reusable_status !== status) return false;
+    if (isFinal) {
+      if (durationFilter !== 'all' && !(durationFilter === 'under-15' && asset.duration_seconds <= 15)
+        && !(durationFilter === '15-30' && asset.duration_seconds > 15 && asset.duration_seconds <= 30)
+        && !(durationFilter === '30-60' && asset.duration_seconds > 30 && asset.duration_seconds <= 60)
+        && !(durationFilter === 'over-60' && asset.duration_seconds > 60)) return false;
+      if (dateFilter !== 'all') {
+        const created = new Date(asset.created_at);
+        const cutoff = new Date();
+        if (dateFilter === 'today') cutoff.setHours(0, 0, 0, 0);
+        else cutoff.setDate(cutoff.getDate() - Number(dateFilter));
+        if (!Number.isFinite(created.getTime()) || created < cutoff) return false;
+      }
+    } else if (status !== 'all' && asset.status !== status && asset.reusable_status !== status) return false;
     const searchContent = isFinal
       ? `${asset.filename} ${asset.taxonomy_tags.map(tag => tag.name).join(' ')}`
       : `${asset.filename} ${asset.analysis?.summary || ''} ${asset.effective_tags.join(' ')}`;
     if (search && !searchContent.toLowerCase().includes(search.toLowerCase())) return false;
     return true;
-  }), [assets, catalog, filter, isFinal, search, status]);
+  }), [assets, catalog, dateFilter, durationFilter, filter, isFinal, search, status]);
+
+  const totalMinutes = useMemo(() => visible.reduce((sum, asset) => sum + asset.duration_seconds, 0) / 60, [visible]);
+  const allVisibleSelected = visible.length > 0 && visible.every(asset => selectedIds.includes(asset.id));
+  const resetFinalFilters = () => { setSearch(''); setDurationFilter('all'); setDateFilter('all'); setFilter(emptyFilter); setSelectedIds([]); };
+  const formatDuration = (seconds: number) => { const total = Math.round(seconds); return `${Math.floor(total / 60).toString().padStart(2, '0')}:${(total % 60).toString().padStart(2, '0')}`; };
 
   async function updateStatus(asset: VideoLibraryAsset, next: VideoReusableStatus) {
     try { await ecommerceVideoLibraryApi.updateReusableStatus(asset.id, next); await refreshAssets(); }
@@ -96,17 +116,23 @@ export default function EcommerceVideoLibrary({ assetKind }: { assetKind: AssetK
     <section className="panel flex flex-wrap items-end gap-3 p-4">
       <label className="field min-w-56 flex-1"><span>商品</span><select className="input-select" value={productId} onChange={event => { setProductId(event.target.value); setSelectedIds([]); }}><option value="">请选择商品</option>{products.map(product => <option key={product.id} value={product.id}>{product.name}</option>)}</select></label>
       <label className="field min-w-48"><span>搜索</span><input className="input" value={search} onChange={event => setSearch(event.target.value)} placeholder={isFinal ? '文件名或标签' : '文件名、摘要或标签'} /></label>
+      {isFinal && <>
+        <label className="field min-w-40"><span>时长</span><select className="input-select" value={durationFilter} onChange={event => setDurationFilter(event.target.value)}><option value="all">全部时长</option><option value="under-15">15 秒内</option><option value="15-30">15-30 秒</option><option value="30-60">30-60 秒</option><option value="over-60">60 秒以上</option></select></label>
+        <label className="field min-w-40"><span>入库时间</span><select className="input-select" value={dateFilter} onChange={event => setDateFilter(event.target.value)}><option value="all">全部时间</option><option value="today">今天</option><option value="7">近 7 天</option><option value="30">近 30 天</option></select></label>
+        <button className="btn-secondary h-[42px]" onClick={resetFinalFilters}><RotateCcw size={15} />重置</button>
+      </>}
       {!isFinal && <label className="field min-w-40"><span>状态</span><select className="input-select" value={status} onChange={event => setStatus(event.target.value)}><option value="all">全部状态</option><option value="uploaded">未分析</option><option value="validating">校验中</option><option value="queued_for_analysis">等待分析</option><option value="analyzing">分析中</option><option value="analyzed">分析完成</option><option value="analysis_failed">分析失败</option><option value="review_required">待确认复用</option><option value="reusable">可复用</option><option value="excluded">已排除</option><option value="blocked">禁止复用</option></select></label>}
       <button className="btn-primary h-[42px]" disabled={!productId || !catalog} onClick={() => setUploadOpen(true)}><Upload size={15} />上传视频</button>
     </section>
     {!products.length && <section className="panel p-8 text-center text-sm">请先创建电商商品。<Link className="ml-2 underline" to="/ecommerce-products/new">创建商品</Link></section>}
     {catalog && <VideoTaxonomyFilters objectType={assetKind} catalog={catalog} value={filter} onChange={setFilter} onRefresh={refreshCatalog} showPresets={false} />}
     {catalog && <VideoBatchTaxonomyBar catalog={catalog} selectedIds={selectedIds} onClear={() => setSelectedIds([])} onDone={async () => { await refreshAssets(); setSelectedIds([]); }} />}
-    <div className="flex items-center justify-between"><span className="text-sm text-[var(--muted)]">共 {visible.length} 条视频</span><button className="btn-secondary" onClick={() => refreshAssets().catch(() => setError('刷新失败'))}><RefreshCw size={14} />刷新</button></div>
+    <div className="flex flex-wrap items-center justify-between gap-3"><span className="text-sm text-[var(--muted)]">共 {visible.length} 条视频{isFinal && ` · 总分钟 ${totalMinutes.toFixed(1)}`}</span><div className="flex items-center gap-2">{isFinal && <button className="btn-secondary" disabled={!visible.length} onClick={() => setSelectedIds(allVisibleSelected ? [] : visible.map(asset => asset.id))}>{allVisibleSelected ? <CheckSquare2 size={15} /> : <Square size={15} />}{allVisibleSelected ? '取消选择当前结果' : '选择当前结果'}</button>}<button className="btn-secondary" onClick={() => refreshAssets().catch(() => setError('刷新失败'))}><RefreshCw size={14} />刷新</button></div></div>
     {busy ? <div className="grid h-32 place-items-center"><Loader2 className="animate-spin" /></div> : <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">{visible.map(asset => <article key={asset.id} className="panel overflow-hidden">
-      <div className="relative"><video className="aspect-video w-full bg-black object-contain" src={mediaUrl(asset.object_url)} controls preload="metadata" />{(!isFinal || finalUploadStatus[asset.status]) && <span role="status" aria-live="polite" className={`pointer-events-none absolute right-3 top-3 inline-flex items-center gap-1 px-2 py-1 text-[11px] font-medium shadow ${assetStatus[asset.status]?.className || 'bg-black/75 text-white'}`}>{['validating', 'queued_for_analysis', 'analyzing'].includes(asset.status) && <Loader2 size={12} className="animate-spin" />}{assetStatus[asset.status]?.label || asset.status}</span>}</div>
+      <div className="relative">{isFinal ? <button className="group relative block aspect-[9/16] w-full overflow-hidden bg-black" onClick={() => navigate(`${basePath}/${asset.id}`)} aria-label={`查看 ${asset.filename}`}><LazyVideo className="pointer-events-none h-full w-full object-contain" muted playsInline preload="metadata" src={`${mediaUrl(asset.object_url)}#t=0.1`} /><span className="absolute inset-0 grid place-items-center bg-black/10 transition-colors group-hover:bg-black/25"><span className="grid h-12 w-12 place-items-center rounded-full bg-white/90 text-black shadow"><Play size={20} fill="currentColor" /></span></span><span className="absolute bottom-3 right-3 bg-black/75 px-2 py-1 text-xs text-white">{formatDuration(asset.duration_seconds)}</span></button> : <video className="aspect-video w-full bg-black object-contain" src={mediaUrl(asset.object_url)} controls preload="metadata" />}{(!isFinal || finalUploadStatus[asset.status]) && <span role="status" aria-live="polite" className={`pointer-events-none absolute right-3 top-3 inline-flex items-center gap-1 px-2 py-1 text-[11px] font-medium shadow ${assetStatus[asset.status]?.className || 'bg-black/75 text-white'}`}>{['validating', 'queued_for_analysis', 'analyzing'].includes(asset.status) && <Loader2 size={12} className="animate-spin" />}{assetStatus[asset.status]?.label || asset.status}</span>}</div>
       <div className="space-y-3 p-4">
         <div className="flex items-start justify-between gap-2"><div className="min-w-0"><h2 className="truncate font-medium" title={asset.filename}>{asset.filename}</h2><p className="mt-1 text-xs text-[var(--muted)]">{asset.duration_seconds.toFixed(1)} 秒 · {asset.width} × {asset.height}</p></div><input type="checkbox" aria-label={`选择 ${asset.filename}`} checked={selectedIds.includes(asset.id)} onChange={() => setSelectedIds(current => current.includes(asset.id) ? current.filter(id => id !== asset.id) : [...current, asset.id])} /></div>
+        {isFinal && <div className="text-xs text-[var(--muted)]"><p>{products.find(product => product.id === asset.product_id)?.name || '未命名商品'}</p><p className="mt-1">入库于 {new Date(asset.created_at).toLocaleString('zh-CN')}</p></div>}
         <VideoTaxonomySummary asset={asset} compact showAiTags={!isFinal} />
         {!isFinal && <><p className="min-h-10 text-sm">{asset.analysis?.summary || '等待 AI 分析'}</p>
         <div className="flex flex-wrap gap-2"><select className="input-select flex-1" aria-label={`复用状态 ${asset.filename}`} value={asset.reusable_status} onChange={event => updateStatus(asset, event.target.value as VideoReusableStatus)}><option value="review_required">待确认</option><option value="reusable">可复用</option><option value="excluded">排除</option><option value="blocked">禁止复用</option></select><button className="btn-secondary" onClick={() => reanalyze(asset)} disabled={['validating', 'queued_for_analysis', 'analyzing'].includes(asset.status) || reanalyzingId !== null}><RefreshCw size={14} />{asset.status === 'uploaded' ? '开始分析' : asset.status === 'analyzing' ? '分析中' : asset.status === 'queued_for_analysis' ? '等待分析' : '重新分析'}</button></div></>}
@@ -114,7 +140,7 @@ export default function EcommerceVideoLibrary({ assetKind }: { assetKind: AssetK
         <div className="flex gap-2"><button className="btn-secondary flex-1" onClick={() => navigate(`${basePath}/${asset.id}`)}><Eye size={14} />查看详情</button><a className="btn-secondary flex-1" href={mediaUrl(asset.object_url)} download><Download size={14} />下载</a></div>
       </div>
     </article>)}</section>}
-    {!busy && !visible.length && !!products.length && <div className="panel p-10 text-center text-sm text-[var(--muted)]">暂无视频</div>}
+    {!busy && !visible.length && !!products.length && <div className="panel p-10 text-center text-sm text-[var(--muted)]">{isFinal && <Film className="mx-auto mb-3" />}暂无视频</div>}
     {uploadOpen && catalog && productId && <EcommerceVideoUploadDialog libraryType="finished" assetKind={assetKind} productId={Number(productId)} productName={products.find(product => String(product.id) === productId)?.name || ''} catalog={catalog} onClose={() => setUploadOpen(false)} onCatalogRefresh={refreshCatalog} onUploaded={async () => { await refreshAssets(); await refreshCatalog(); }} />}
   </div>;
 }
