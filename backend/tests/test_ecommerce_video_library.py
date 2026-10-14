@@ -82,6 +82,8 @@ class EcommerceVideoLibraryTests(unittest.TestCase):
         material = upload("material.mp4", "material")
         final = upload("final.mp4", "final_output")
         assert material.status_code == final.status_code == 200, (material.text, final.text)
+        assert material.json()[0]["status"] == "queued_for_analysis"
+        assert final.json()[0]["status"] == "uploaded"
         assert len(Storage.uploaded_paths) == 2
         assert all(not path.exists() for path in Storage.uploaded_paths)
         with patch.object(ecommerce_video_library, "get_settings", return_value=SimpleNamespace(ecommerce_video_max_upload_mb=1)):
@@ -90,6 +92,7 @@ class EcommerceVideoLibraryTests(unittest.TestCase):
         assert oversized.status_code == 413
         assert len(Storage.uploaded_paths) == 2
         material_id, final_id = material.json()[0]["id"], final.json()[0]["id"]
+        assert client.post(f"/api/ecommerce-video-assets/{final_id}/reanalyze").status_code == 422
         assert client.post(f"/api/ecommerce-video-assets/{material_id}/reanalyze").json()["status"] == "queued_for_analysis"
         with Session(engine) as db:
             db.get(EcommerceVideoAsset, material_id).status = "analyzing"

@@ -6,7 +6,7 @@ from copy import deepcopy
 from time import monotonic
 
 from app.config import get_settings
-from app.models import VideoRefinementVoiceover
+from app.models import EcommerceVideoRefinementVoiceover
 from app.schemas.video_refinement import MaterialSegment, RefinementItem
 from app.services.llm import LLMClient
 from app.services.refinement_plan import compile_plan
@@ -169,7 +169,17 @@ def prepare_narration(db, task, plan, progress, *, checkpoint=None):
     metrics = {"tts_reused":0,"tts_generated":0}
     context = deepcopy(plan["analysis"]["context"])
     items = [RefinementItem.model_validate(row) for row in plan["items"]]
-    parameters = voiceover_parameters()
+    from app.services.refinement_speakers import cached_source_selection, manual_selection, select_source_voice
+    automatic_items = [item for item in items if item.enabled and item.narration_strategy == "tts"
+                       and not (item.tts_speaker or options.get("tts_speaker"))]
+    selection = plan["analysis"].get("voice_selection")
+    if automatic_items:
+        scripts = [item.script for item in automatic_items]
+        if any(not script.strip() for script in scripts):
+            raise ValueError("AI 没有生成补充段的完整台词, 请重试生成方案")
+        progress("voice_matching")
+        selection = cached_source_selection(db,task,context,task.user_brief,task.expected_result,scripts,cached=selection)
+        selection = asyncio.run(select_source_voice(context,task.user_brief,task.expected_result,scripts=scripts,cached=selection))
     lengths = {}
     frame_budgets = {}
     voices = {}
@@ -178,17 +188,22 @@ def prepare_narration(db, task, plan, progress, *, checkpoint=None):
             continue
         if not item.script.strip():
             raise ValueError("AI 没有生成补充段的完整台词, 请重试生成方案")
+        manual_speaker = item.tts_speaker or options.get("tts_speaker")
+        chosen = manual_selection(manual_speaker) if manual_speaker else selection
+        parameters = voiceover_parameters(chosen["speaker"], selection=chosen)
         progress("voiceover")
         fingerprint = voiceover_fingerprint(item.script,parameters)
-        voice = db.query(VideoRefinementVoiceover).filter_by(tenant_id=task.tenant_id,task_id=task.id,fingerprint=fingerprint).first()
+        voice = db.query(EcommerceVideoRefinementVoiceover).filter_by(tenant_id=task.tenant_id,task_id=task.id,fingerprint=fingerprint).first()
+        if voice:
+            voice.parameters_json = parameters
         if not voice:
-            voice = VideoRefinementVoiceover(tenant_id=task.tenant_id,task_id=task.id,revision=task.current_revision,
+            voice = EcommerceVideoRefinementVoiceover(tenant_id=task.tenant_id,task_id=task.id,revision=task.current_revision,
                      item_id=item.item_id,script=item.script.strip(),parameters_json=parameters,fingerprint=fingerprint,status="queued_v3")
             db.add(voice);db.commit()
         elif voice.status in {"failed", "superseded"}:
             voice.status="queued_v3";voice.error_message="";voice.completed_at=None;voice.revision=task.current_revision;db.commit()
         elif voice.status in {"queued", "queued_v3"}:
-            db.query(VideoRefinementVoiceover).filter_by(id=voice.id,status=voice.status).update({"revision":task.current_revision,"status":"queued_v3"},synchronize_session=False)
+            db.query(EcommerceVideoRefinementVoiceover).filter_by(id=voice.id,status=voice.status).update({"revision":task.current_revision,"status":"queued_v3"},synchronize_session=False)
             db.commit();db.refresh(voice)
         if voice.status == "ready":
             metrics["tts_reused"] += 1
@@ -198,7 +213,7 @@ def prepare_narration(db, task, plan, progress, *, checkpoint=None):
         db.commit()
         run_voiceover(voice_id)
         db.expire_all()
-        voice = db.get(VideoRefinementVoiceover,voice_id)
+        voice = db.get(EcommerceVideoRefinementVoiceover,voice_id)
         progress("voiceover")
         if voice.status != "ready":
             raise ValueError(voice.error_message or "局部配音尚未准备完成, 请稍后重试")
@@ -239,6 +254,8 @@ def prepare_narration(db, task, plan, progress, *, checkpoint=None):
                           requirements=plan.get("requirements_resolution",[]),options=plan.get("automation_options",{}),
                           voiceovers=voiceover_catalog(db,task))
     result["analysis"] = {**plan["analysis"],"context":context}
+    if automatic_items:
+        result["analysis"]["voice_selection"] = selection
     result["findings_not_applied"] = plan["findings_not_applied"]
     result["automatic_preview"] = True
     result["automatic_adjustments"] = adjustments

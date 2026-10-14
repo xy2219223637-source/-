@@ -155,7 +155,13 @@ class Settings(BaseSettings):
     run_database_init: bool = True
     run_startup_recovery: bool = True
     run_background_workers: bool = True
+    run_ecommerce_video_analysis_worker: bool | None = None
     run_refinement_worker: bool | None = None
+
+    @property
+    def ecommerce_video_analysis_worker_enabled(self) -> bool:
+        return (self.run_background_workers if self.run_ecommerce_video_analysis_worker is None
+                else self.run_ecommerce_video_analysis_worker)
 
     @property
     def refinement_worker_enabled(self) -> bool:

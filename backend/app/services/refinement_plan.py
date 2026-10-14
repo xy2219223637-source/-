@@ -143,5 +143,5 @@ def compile_plan(snapshot: dict, items: list[RefinementItem], brief: str, expect
         result["requirements_resolution"] = verify_requirements(requirements or [], result["items"], result["execution_blockers"])
     from app.services.refinement_requirements import verify_goal_constraints
     verify_goal_constraints(brief, expected_result, requirements or [], result["items"], result["execution_blockers"])
-    result["generation_policy"] = {key:options[key] for key in ("authorization_version", "timing_protocol", "localization", "content_reselection", "display_tail_ms", "policy_version") if key in options}
+    result["generation_policy"] = {key:options[key] for key in ("authorization_version", "timing_protocol", "localization", "content_reselection", "display_tail_ms", "policy_version", "tts_speaker") if key in options}
     return result

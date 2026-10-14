@@ -1947,3 +1947,16 @@ class EcommerceVideoHighlight(Base):
     selling_points: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
     score: Mapped[float] = mapped_column(Float, nullable=False, default=0.5)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
+from app.models.ecommerce_refinement import (  # noqa: E402, F401
+    EcommerceVideoLineageSegment,
+    EcommerceVideoRefinementAnalysisJob,
+    EcommerceVideoRefinementPlan,
+    EcommerceVideoRefinementPreview,
+    EcommerceVideoRefinementRequest,
+    EcommerceVideoRefinementSnapshot,
+    EcommerceVideoRefinementTask,
+    EcommerceVideoRefinementVersion,
+    EcommerceVideoRefinementVoiceover,
+)

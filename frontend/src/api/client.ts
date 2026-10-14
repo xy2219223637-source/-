@@ -492,6 +492,7 @@ export const videoLibraryApi = {
 };
 
 export const videoRefinementApi = {
+  voiceOptions: () => api.get<import('../types/videoRefinement').RefinementSpeakerCatalog>('/video-refinements/voice-options').then(r=>r.data),
   list: () => api.get<import('../types/videoRefinement').VideoRefinementTask[]>('/video-refinements').then(r => r.data),
   sources: () => api.get<import('../types/videoRefinement').RefinementSource[]>('/video-refinements/sources').then(r => r.data),
   get: (id: number) => api.get<import('../types/videoRefinement').VideoRefinementTask>(`/video-refinements/${id}`).then(r => r.data),
@@ -505,8 +506,8 @@ export const videoRefinementApi = {
 
   materials: (id: number, search = '', cursor?: string) => api.get<import('../types/videoRefinement').RefinementMaterialPage>('/video-refinements/'+id+'/materials', {params:{search,cursor,limit:30}}).then(r=>r.data),
   refreshMaterials: (id: number, revision: number) => api.post<import('../types/videoRefinement').VideoRefinementTask>('/video-refinements/'+id+'/materials/refresh',{revision}).then(r=>r.data),
-  requirements: (id: number, data: {revision: number; user_brief?: string; accept_partial_evaluation?: boolean; duration_preference?: import('../types/videoRefinement').DurationPreference; target_duration_ms?: number; decisions?: Array<{requirement_id: string; decision: 'waived' | 'answered'; answer: string}>}) => api.patch<import('../types/videoRefinement').VideoRefinementTask>('/video-refinements/'+id+'/requirements',data).then(r=>r.data),
-  generateVoiceover: (id: number, revision: number, plan_hash: string, item_id: string) => api.post<import('../types/videoRefinement').VideoRefinementTask>('/video-refinements/'+id+'/voiceovers',{revision,plan_hash,item_id}).then(r=>r.data),
+  requirements: (id: number, data: {revision: number; user_brief?: string; accept_partial_evaluation?: boolean; duration_preference?: import('../types/videoRefinement').DurationPreference; target_duration_ms?: number; tts_speaker?: string | null; decisions?: Array<{requirement_id: string; decision: 'waived' | 'answered'; answer: string}>}) => api.patch<import('../types/videoRefinement').VideoRefinementTask>('/video-refinements/'+id+'/requirements',data).then(r=>r.data),
+  generateVoiceover: (id: number, revision: number, plan_hash: string, item_id: string) => api.post<import('../types/videoRefinement').VideoRefinementTask>('/video-refinements/'+id+'/voiceovers',{revision,plan_hash,item_id},{timeout:300000}).then(r=>r.data),
   accept: (id: number, previewId: number, data: {revision: number; plan_hash: string}) => api.post<import('../types/videoRefinement').VideoRefinementTask>(`/video-refinements/${id}/previews/${previewId}/accept`, data).then(r => r.data),
 };
 

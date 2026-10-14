@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import json
+import math
 import subprocess
 import tempfile
 import uuid
@@ -20,13 +22,14 @@ from app.config import get_settings
 from app.database import SessionLocal, get_db
 from app.models import EcommerceProduct, Tenant, EcommerceVideoAsset, EcommerceVideoAssetAnalysis, EcommerceVideoHighlight, EcommerceVideoUploadSession
 from app.services.llm import LLMClient
+from app.services.director_workflow import _ffmpeg_executable
 from app.services.storage import get_storage_by_name, get_storage_for_url, get_video_storage
-from app.services.transcription import transcribe_media
+from app.services.transcription import transcribe_configured_media
 from app.services.video_analysis_queue import enqueue_video_analysis
 from app.services.ecommerce_video_taxonomy import load_asset_taxonomy
 
 router = APIRouter(prefix="/ecommerce-video-assets", tags=["video-library"])
-PROMPT_VERSION = "video-library-v3-whisper-timestamps"
+PROMPT_VERSION = "video-library-v4-configured-asr"
 REUSABLE_STATUSES = {"review_required", "reusable", "excluded", "blocked"}
 
 
@@ -77,7 +80,11 @@ def _serialize(db: Session, asset: EcommerceVideoAsset, analysis: Any = _NOT_LOA
     if reference_count is _NOT_LOADED:
         reference_count = 0
     if analysis is _NOT_LOADED:
-        analysis = db.query(EcommerceVideoAssetAnalysis).filter(EcommerceVideoAssetAnalysis.asset_id == asset.id).order_by(EcommerceVideoAssetAnalysis.id.desc()).first()
+        query = db.query(EcommerceVideoAssetAnalysis).filter(
+            EcommerceVideoAssetAnalysis.asset_id == asset.id,
+        ).order_by(EcommerceVideoAssetAnalysis.id.desc())
+        analysis = query.filter(EcommerceVideoAssetAnalysis.status == "completed").first() if asset.status == "analyzed" else None
+        analysis = analysis or query.first()
     if highlights is _NOT_LOADED:
         highlights = db.query(EcommerceVideoHighlight).filter(EcommerceVideoHighlight.asset_id == asset.id).order_by(EcommerceVideoHighlight.start_seconds).all()
     if taxonomy_category is _NOT_LOADED or taxonomy_tags is _NOT_LOADED:
@@ -150,10 +157,51 @@ def _split_finished_span(start: float, end: float, words: list[dict[str, Any]],
 
 def _extract_frames(source: Path, duration: float, target: Path) -> list[Path]:
     target.mkdir(parents=True, exist_ok=True)
-    interval = max(1.0, duration / 6)
-    subprocess.run(["ffmpeg", "-y", "-i", str(source), "-vf", f"fps=1/{interval},scale=640:-2",
-                    "-frames:v", "6", str(target / "frame-%02d.jpg")], capture_output=True, text=True, timeout=180, check=True)
-    return sorted(target.glob("frame-*.jpg"))
+    interval = max(0.1, duration / 6)
+    subprocess.run([_ffmpeg_executable(), "-y", "-i", str(source), "-vf", f"fps=1/{interval},scale=640:-2",
+                    "-frames:v", "6", str(target / "frame-%02d.jpg")], capture_output=True, timeout=180, check=True)
+    frames = sorted(target.glob("frame-*.jpg"))
+    if not frames:
+        raise ValueError("无法提取视频关键帧")
+    return frames
+
+
+def _has_media_metadata(asset: EcommerceVideoAsset) -> bool:
+    return (math.isfinite(asset.duration_seconds) and asset.duration_seconds > 0
+            and asset.width > 0 and asset.height > 0)
+
+
+def _read_asset_media(asset: EcommerceVideoAsset) -> tuple[Path, dict[str, Any]]:
+    source = _asset_storage(asset).local_path(asset.object_url)
+    if not source:
+        raise ValueError("无法读取商品视频素材")
+    source = Path(source)
+    media = _probe(source)
+    _validate_media_metadata(media)
+    return source, media
+
+
+def _validate_media_metadata(media: dict[str, Any]) -> None:
+    if (not math.isfinite(media["duration"]) or media["duration"] <= 0
+            or media["width"] <= 0 or media["height"] <= 0):
+        raise ValueError("视频时长或分辨率无效")
+    max_duration = get_settings().video_library_max_duration_seconds
+    if media["duration"] > max_duration + .05:
+        raise ValueError(f"视频超过 {max_duration / 60:g} 分钟限制")
+
+
+def _apply_media_metadata(asset: EcommerceVideoAsset, source: Path, media: dict[str, Any]) -> None:
+    asset.duration_seconds = media["duration"]
+    asset.width = media["width"]
+    asset.height = media["height"]
+    asset.fps = media["fps"]
+    asset.has_audio = media["has_audio"]
+    if asset.library_type == "finished":
+        digest = hashlib.sha256()
+        with source.open("rb") as handle:
+            for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                digest.update(chunk)
+        asset.content_hash = digest.hexdigest()
 
 
 def _normalize_analysis(asset: EcommerceVideoAsset, result: dict[str, Any], transcript: Optional[dict[str, Any]] = None) -> dict[str, Any]:
@@ -199,6 +247,7 @@ def _normalize_analysis(asset: EcommerceVideoAsset, result: dict[str, Any], tran
     result["video_tags"] = list(dict.fromkeys(automatic_tags))[:20]
     result["schema_version"] = "1.0"; result["asset_id"] = asset.asset_id; result["highlights"] = highlights
     result["library_type"] = asset.library_type
+    result["source_hash"] = asset.content_hash
     asset.burned_subtitles = bool(result.get("burned_subtitles", asset.library_type == "finished"))
     asset.has_background_music = bool(result.get("has_background_music", False))
     if transcript:
@@ -206,43 +255,84 @@ def _normalize_analysis(asset: EcommerceVideoAsset, result: dict[str, Any], tran
     return result
 
 
-async def analyze_video_asset(asset_db_id: int, force: bool = False) -> None:
+def _lock_active_analysis(db: Session, asset: EcommerceVideoAsset,
+                          analysis: EcommerceVideoAssetAnalysis) -> bool:
+    db.refresh(asset, with_for_update=True)
+    db.refresh(analysis, with_for_update=True)
+    return asset.status == "analyzing" and analysis.status == "analyzing"
+
+
+async def analyze_video_asset(asset_db_id: int, force: bool = False, *, queued_only: bool = False) -> None:
     db = SessionLocal()
     try:
-        asset = db.query(EcommerceVideoAsset).filter(EcommerceVideoAsset.id == asset_db_id).first()
-        if not asset or asset.excluded:
+        asset = db.query(EcommerceVideoAsset).filter(EcommerceVideoAsset.id == asset_db_id).with_for_update().first()
+        if (not asset or asset.asset_kind != "material" or asset.excluded or asset.status == "analyzing"
+                or (queued_only and asset.status != "queued_for_analysis")):
             return
         prompt_version = PROMPT_VERSION
         cached = db.query(EcommerceVideoAssetAnalysis).filter(EcommerceVideoAssetAnalysis.asset_id == asset.id,
             EcommerceVideoAssetAnalysis.model == get_settings().llm_vision_model,
             EcommerceVideoAssetAnalysis.prompt_version == prompt_version,
             EcommerceVideoAssetAnalysis.status == "completed").order_by(EcommerceVideoAssetAnalysis.id.desc()).first()
-        if cached and not force:
+        if cached and not force and _has_media_metadata(asset):
             asset.status = "analyzed"; db.commit(); return
+        claimed = db.query(EcommerceVideoAsset).filter(
+            EcommerceVideoAsset.id == asset.id,
+            EcommerceVideoAsset.asset_kind == "material",
+            EcommerceVideoAsset.status == asset.status,
+            EcommerceVideoAsset.excluded.is_(False),
+        ).update({EcommerceVideoAsset.status: "analyzing"}, synchronize_session=False)
+        if not claimed:
+            return
+        db.refresh(asset)
         analysis = EcommerceVideoAssetAnalysis(tenant_id=asset.tenant_id, asset_id=asset.id, schema_version="1.0",
             model=get_settings().llm_vision_model, prompt_version=prompt_version, status="analyzing",
             summary="", analysis_json={}, input_video_seconds=asset.duration_seconds, request_count=0, retry_count=0)
         db.add(analysis); asset.status = "analyzing"; db.commit(); db.refresh(analysis)
+        source: Optional[Path] = None
+        try:
+            # Imported and older failed uploads may never have passed validation.
+            if not _has_media_metadata(asset):
+                source, media = _read_asset_media(asset)
+                _apply_media_metadata(asset, source, media)
+                analysis.input_video_seconds = asset.duration_seconds
+                db.commit()
+        except Exception as exc:
+            if not _lock_active_analysis(db, asset, analysis):
+                return
+            analysis.status = "failed"
+            analysis.error_message = str(getattr(exc, "detail", exc))[:1000]
+            analysis.completed_at = datetime.utcnow()
+            asset.status = "analysis_failed"
+            db.commit()
+            return
         transcript: dict[str, Any] = {}
         transcript_error = ""
-        if asset.has_audio and get_settings().whisper_enabled:
+        if asset.has_audio:
             try:
-                source = _asset_storage(asset).local_path(asset.object_url)
+                source = source or _asset_storage(asset).local_path(asset.object_url)
                 if not source: raise RuntimeError("无法从 OSS 获取音频转写源文件")
                 product = db.query(EcommerceProduct).filter(EcommerceProduct.id == asset.product_id).first()
                 vocabulary = f"品牌和商品专有词：{product.name if product else ''}。请识别视频中的商品、品牌及专有词。"
-                transcript = await asyncio.to_thread(transcribe_media, source, vocabulary)
+                transcript = await asyncio.to_thread(transcribe_configured_media, Path(source), vocabulary)
             except Exception as exc:
                 transcript_error = str(exc)[:500]
+        if transcript_error and get_settings().director_asr_required:
+            if not _lock_active_analysis(db, asset, analysis):
+                return
+            analysis.status = "failed"
+            analysis.error_message = f"语音识别失败: {transcript_error}"
+            analysis.completed_at = datetime.utcnow()
+            asset.status = "analysis_failed"
+            db.commit()
+            return
         last_error = ""
         for attempt in range(2):
             try:
+                if not _lock_active_analysis(db, asset, analysis):
+                    return
                 analysis.request_count += 1; analysis.retry_count = attempt; db.commit()
-                material_instruction = (
-                    "这是完整成品视频。按原始镜头和语义分段，记录画面、口播、字幕及背景音乐，便于库内检索和查看。"
-                    if asset.asset_kind == "final_output" else
-                    "这是商品视频素材。按完整语义句、镜头边界和自然停顿分段；记录原声与画面关系、字幕及背景音乐。"
-                )
+                material_instruction = "这是商品视频素材。按完整语义句、镜头边界和自然停顿分段；记录原声与画面关系、字幕及背景音乐。"
                 prompt = f"""分析一条时长 {asset.duration_seconds:.3f} 秒的商品短视频。{material_instruction}
 只返回 JSON，包含 summary, video_tags, people{{count,description}}, product{{visible,name,exposure}}, actions, scenes,
 speech{{summary,selling_points}}, emotion{{intensity,description}}, material_types, recommended_positions,
@@ -252,20 +342,26 @@ lip_visible,speech_text,speaker_id,shot_type,selling_points,score；时间必须
 content_role 使用 hook、pain_point、selling_point、brand_trust、usage、proof、product_demo、cta；代言人、品牌身份、权威背书或品牌信任场景标为 brand_trust；track_role 只能为 a_roll、b_roll、reject。
 有清晰讲话、明显口型、音画匹配且句子完整才是 a_roll；商品包装、细节、使用和效果等辅助画面是 b_roll；
 有口型但声音不匹配、句子残缺的片段标记 reject。a_roll 必须保留完整 speech_text 和稳定 speaker_id。不要虚构看不清或听不清的信息。"""
+                if transcript.get("segments"):
+                    prompt += "\n真实语音转写(时间单位为秒), speech_text 和原声片段必须以此为依据:\n" + json.dumps(
+                        transcript["segments"], ensure_ascii=False,
+                    )
                 if attempt == 0:
                     # Prefer the complete video so motion and speech can be understood.
                     signed = _asset_storage(asset).signed_url(asset.object_url)
                     result = await LLMClient().chat_json([{"role": "user", "content": [
                         {"type": "text", "text": prompt}, {"type": "video_url", "video_url": {"url": signed}}
-                    ]}], temperature=.2, max_tokens=4096)
+                    ]}], model=get_settings().llm_vision_model, temperature=.2, max_tokens=4096)
                 else:
                     # Compatibility fallback for endpoints without video_url support.
-                    source = _asset_storage(asset).local_path(asset.object_url)
+                    source = source or _asset_storage(asset).local_path(asset.object_url)
                     if not source: raise RuntimeError("无法从 OSS 获取视频")
                     with tempfile.TemporaryDirectory(prefix=f"analyze-{asset.id}-") as directory:
                         frames = _extract_frames(source, asset.duration_seconds, Path(directory))
                         result = await LLMClient().chat_vision(prompt + "当前输入仅为均匀抽取的关键帧；无法确认动作边界时使用镜头区间，无法确认的口播和商品可见程度请标为不确定。",
                             [str(frame) for frame in frames], temperature=.2, max_tokens=4096, as_json=True)
+                if not _lock_active_analysis(db, asset, analysis):
+                    return
                 normalized = _normalize_analysis(asset, result, transcript)
                 if transcript_error:
                     normalized["transcript_error"] = transcript_error
@@ -283,7 +379,10 @@ content_role 使用 hook、pain_point、selling_point、brand_trust、usage、pr
                         audio_strategy=item["audio_strategy"], shot_type=item["shot_type"], selling_points=item["selling_points"], score=item["score"]))
                 asset.status = "analyzed"; db.commit(); return
             except Exception as exc:
+                db.rollback()
                 last_error = str(exc)[:1000]
+        if not _lock_active_analysis(db, asset, analysis):
+            return
         analysis.status = "failed"; analysis.error_message = last_error; analysis.completed_at = datetime.utcnow()
         asset.status = "analysis_failed"; db.commit()
     finally:
@@ -297,21 +396,9 @@ def validate_video_asset(asset_db_id: int) -> None:
         if not asset:
             return
         try:
-            media = _probe(_asset_storage(asset).signed_url(asset.object_url))
-            max_duration = get_settings().video_library_max_duration_seconds
-            if media["duration"] > max_duration + .05:
-                raise ValueError(f"视频超过 {max_duration / 60:g} 分钟限制")
-            if asset.library_type == "finished":
-                local = _asset_storage(asset).local_path(asset.object_url)
-                if not local:
-                    raise ValueError("无法读取成品素材")
-                digest = hashlib.sha256()
-                with Path(local).open("rb") as handle:
-                    for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-                        digest.update(chunk)
-                asset.content_hash = digest.hexdigest()
-            asset.duration_seconds = media["duration"]; asset.width = media["width"]; asset.height = media["height"]
-            asset.fps = media["fps"]; asset.has_audio = media["has_audio"]; asset.status = "queued_for_analysis"
+            source, media = _read_asset_media(asset)
+            _apply_media_metadata(asset, source, media)
+            asset.status = "uploaded" if asset.asset_kind == "final_output" else "queued_for_analysis"
         except Exception as exc:
             db.add(EcommerceVideoAssetAnalysis(
                 tenant_id=asset.tenant_id,
@@ -322,7 +409,7 @@ def validate_video_asset(asset_db_id: int) -> None:
                 error_message=str(getattr(exc, "detail", exc))[:1000],
                 completed_at=datetime.utcnow(),
             ))
-            asset.status = "analysis_failed"
+            asset.status = "validation_failed" if asset.asset_kind == "final_output" else "analysis_failed"
         db.commit()
     finally:
         db.close()
@@ -392,15 +479,19 @@ def list_assets(product_id: Optional[int] = None, library_type: Optional[str] = 
         return []
     asset_ids = [asset.id for asset in assets]
     latest_analysis: dict[int, EcommerceVideoAssetAnalysis] = {}
+    completed_analysis: dict[int, EcommerceVideoAssetAnalysis] = {}
     for analysis in db.query(EcommerceVideoAssetAnalysis).filter(EcommerceVideoAssetAnalysis.asset_id.in_(asset_ids)).order_by(EcommerceVideoAssetAnalysis.id.desc()).all():
         latest_analysis.setdefault(analysis.asset_id, analysis)
+        if analysis.status == "completed":
+            completed_analysis.setdefault(analysis.asset_id, analysis)
     highlights_by_asset: dict[int, list[EcommerceVideoHighlight]] = {asset_id: [] for asset_id in asset_ids}
     for highlight in db.query(EcommerceVideoHighlight).filter(EcommerceVideoHighlight.asset_id.in_(asset_ids)).order_by(EcommerceVideoHighlight.asset_id, EcommerceVideoHighlight.start_seconds).all():
         highlights_by_asset[highlight.asset_id].append(highlight)
     categories_by_asset, tags_by_asset = load_asset_taxonomy(db, assets, auth.tenant_id, auth.user_id)
     counts = {}
     return [_serialize(
-        db, asset, latest_analysis.get(asset.id), highlights_by_asset[asset.id],
+        db, asset, (completed_analysis.get(asset.id) or latest_analysis.get(asset.id))
+        if asset.status == "analyzed" else latest_analysis.get(asset.id), highlights_by_asset[asset.id],
         categories_by_asset.get(asset.id), tags_by_asset.get(asset.id, []), auth.user_id, counts.get(asset.id, 0),
     ) for asset in assets]
 
@@ -455,8 +546,10 @@ async def upload_assets(product_id: int = Form(...), source: str = Form("manual_
             if existing:
                 result.append({**_serialize(db, existing, user_id=auth.user_id), "duplicate": True}); continue
             media = _probe(path)
-            max_duration = get_settings().video_library_max_duration_seconds
-            if media["duration"] > max_duration + .05: raise HTTPException(422, f"{filename} 超过 {max_duration / 60:g} 分钟限制")
+            try:
+                _validate_media_metadata(media)
+            except ValueError as exc:
+                raise HTTPException(422, f"{filename}: {exc}") from exc
             storage = _tenant_video_storage(db, auth.tenant_id)
             url = await storage.upload_path(path, filename, f"ecommerce-video-library/{product.id}/source")
         asset = EcommerceVideoAsset(tenant_id=auth.tenant_id, product_id=product.id,
@@ -465,8 +558,11 @@ async def upload_assets(product_id: int = Form(...), source: str = Form("manual_
             reusable_status="blocked" if asset_kind == "final_output" else "review_required",
             object_url=url, storage_provider=storage.name, content_hash=content_hash,
             duration_seconds=media["duration"], width=media["width"], height=media["height"],
-            fps=media["fps"], has_audio=media["has_audio"], status="queued_for_analysis", excluded=False)
-        db.add(asset); db.commit(); db.refresh(asset); enqueue_video_analysis()
+            fps=media["fps"], has_audio=media["has_audio"],
+            status="uploaded" if asset_kind == "final_output" else "queued_for_analysis", excluded=False)
+        db.add(asset); db.commit(); db.refresh(asset)
+        if asset_kind == "material":
+            enqueue_video_analysis()
 
         db.commit()
         result.append(_serialize(db, asset, user_id=auth.user_id))
@@ -507,9 +603,20 @@ def update_reusable_status(asset_id: int, payload: ReusableStatusUpdate,
 
 @router.post("/{asset_id}/reanalyze")
 def reanalyze(asset_id: int, db: Session = Depends(get_db), auth: AuthContext = Depends(current_auth)):
-    asset = db.query(EcommerceVideoAsset).filter(EcommerceVideoAsset.id == asset_id, EcommerceVideoAsset.tenant_id == auth.tenant_id).first()
+    asset = db.query(EcommerceVideoAsset).filter(
+        EcommerceVideoAsset.id == asset_id, EcommerceVideoAsset.tenant_id == auth.tenant_id,
+    ).with_for_update().first()
     if not asset: raise HTTPException(404, "素材不存在")
-    if asset.status in {"queued_for_analysis", "analyzing"}:
+    if asset.asset_kind != "material":
+        raise HTTPException(422, "商品成片不需要库内分析, 仅商品素材支持重新分析")
+    if asset.excluded:
+        raise HTTPException(409, "素材已排除, 请先调整复用状态再分析")
+    if asset.status in {"validating", "queued_for_analysis", "analyzing"}:
         return _serialize(db, asset, user_id=auth.user_id)
-    asset.status = "queued_for_analysis"; db.commit(); enqueue_video_analysis()
+    next_status = "queued_for_analysis" if _has_media_metadata(asset) else "validating"
+    db.query(EcommerceVideoAsset).filter(
+        EcommerceVideoAsset.id == asset.id, EcommerceVideoAsset.status == asset.status,
+    ).update({EcommerceVideoAsset.status: next_status}, synchronize_session=False)
+    db.commit(); enqueue_video_analysis()
+    db.refresh(asset)
     return _serialize(db, asset, user_id=auth.user_id)

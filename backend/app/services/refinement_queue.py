@@ -9,7 +9,7 @@ import tempfile
 import threading
 
 from app.database import SessionLocal
-from app.models import VideoRefinementPlan, VideoRefinementPreview, VideoRefinementTask, VideoRefinementAnalysisJob, VideoRefinementVoiceover
+from app.models import EcommerceVideoRefinementPlan, EcommerceVideoRefinementPreview, EcommerceVideoRefinementTask, EcommerceVideoRefinementAnalysisJob, EcommerceVideoRefinementVoiceover
 from app.services.refinement_media import file_hash, render_preview, verified_path, used_material_ids, verified_asset
 from app.services.storage import get_storage_by_name
 
@@ -45,19 +45,19 @@ def run_preview(preview_id: int) -> None:
     from app.api.video_refinement import _snapshot, _validate_materials, _validate_source
 
     with SessionLocal() as db:
-        pending = db.get(VideoRefinementPreview, preview_id)
+        pending = db.get(EcommerceVideoRefinementPreview, preview_id)
         if not pending or pending.status not in {"queued", "queued_v3"}:
             return
         queued_status = pending.status
         rendering_status = "rendering_v3" if queued_status == "queued_v3" else "rendering"
-        claimed = db.query(VideoRefinementPreview).filter_by(id=preview_id, status=queued_status).update({"status": rendering_status, "attempts": VideoRefinementPreview.attempts + 1}, synchronize_session=False)
+        claimed = db.query(EcommerceVideoRefinementPreview).filter_by(id=preview_id, status=queued_status).update({"status": rendering_status, "attempts": EcommerceVideoRefinementPreview.attempts + 1}, synchronize_session=False)
         db.commit()
         if not claimed:
             return
-        preview = db.get(VideoRefinementPreview, preview_id)
+        preview = db.get(EcommerceVideoRefinementPreview, preview_id)
         attempt = preview.attempts
-        task = db.get(VideoRefinementTask, preview.task_id)
-        plan = db.get(VideoRefinementPlan, preview.plan_id)
+        task = db.get(EcommerceVideoRefinementTask, preview.task_id)
+        plan = db.get(EcommerceVideoRefinementPlan, preview.plan_id)
         uploaded = ""
         try:
             if not task or task.status != "PLAN_CONFIRMED" or task.confirmed_revision != preview.revision or task.current_revision != preview.revision or plan.plan_hash != preview.plan_hash:
@@ -80,31 +80,31 @@ def run_preview(preview_id: int) -> None:
                         verified_path(verified_asset(material,plan.plan_json))
                 storage = get_storage_by_name(snapshot["source"].get("storage_provider", "aliyun_oss"))
                 output_hash = file_hash(output)
-                uploaded = asyncio.run(storage.upload_path(output, f"preview-r{preview.revision}.mp4", f"refinements/{task.id}/previews"))
+                uploaded = asyncio.run(storage.upload_path(output, f"preview-r{preview.revision}.mp4", f"ecommerce-refinements/{task.id}/previews"))
             db.refresh(task)
             db.refresh(preview)
             _validate_source(db, task)
             _validate_materials(db, task, plan.plan_json)
             validate_voiceovers(db,task,plan.plan_json)
-            current_task = db.query(VideoRefinementTask.id).filter(
-                VideoRefinementTask.id == task.id, VideoRefinementTask.status == "PLAN_CONFIRMED",
-                VideoRefinementTask.current_revision == preview.revision, VideoRefinementTask.confirmed_revision == preview.revision,
+            current_task = db.query(EcommerceVideoRefinementTask.id).filter(
+                EcommerceVideoRefinementTask.id == task.id, EcommerceVideoRefinementTask.status == "PLAN_CONFIRMED",
+                EcommerceVideoRefinementTask.current_revision == preview.revision, EcommerceVideoRefinementTask.confirmed_revision == preview.revision,
             ).exists()
-            published = db.query(VideoRefinementPreview).filter(
-                VideoRefinementPreview.id == preview.id, VideoRefinementPreview.status == rendering_status,
-                VideoRefinementPreview.attempts == attempt, current_task,
+            published = db.query(EcommerceVideoRefinementPreview).filter(
+                EcommerceVideoRefinementPreview.id == preview.id, EcommerceVideoRefinementPreview.status == rendering_status,
+                EcommerceVideoRefinementPreview.attempts == attempt, current_task,
             ).update({"status":"ready", "output_url":uploaded, "storage_provider":storage.name,
                 "output_hash":output_hash, "validation_json":validation, "recipe_json":recipe,
                 "completed_at":datetime.utcnow(), "error_message":""}, synchronize_session=False)
             if published:
                 uploaded = ""
             else:
-                db.query(VideoRefinementPreview).filter_by(id=preview.id,status=rendering_status,attempts=attempt).update({"status":"superseded"},synchronize_session=False)
+                db.query(EcommerceVideoRefinementPreview).filter_by(id=preview.id,status=rendering_status,attempts=attempt).update({"status":"superseded"},synchronize_session=False)
             db.commit()
         except Exception as exc:
             logger.exception("Refinement preview %s failed", preview_id)
             db.rollback()
-            preview = db.get(VideoRefinementPreview, preview_id)
+            preview = db.get(EcommerceVideoRefinementPreview, preview_id)
             if preview.status == rendering_status and preview.attempts == attempt:
                 preview.status = "failed"
                 preview.error_message = str(exc)[:500] if isinstance(exc, ValueError) else "预览生成失败, 请检查源片和素材后重试"
@@ -124,7 +124,7 @@ def _loop() -> None:
         try:
             selected = None
             with SessionLocal() as db:
-                for model, runner, prefix in ((VideoRefinementPreview,run_preview,"preview"),(VideoRefinementVoiceover,run_voiceover,"voice"),(VideoRefinementAnalysisJob,run_analysis,"analysis")):
+                for model, runner, prefix in ((EcommerceVideoRefinementPreview,run_preview,"preview"),(EcommerceVideoRefinementVoiceover,run_voiceover,"voice"),(EcommerceVideoRefinementAnalysisJob,run_analysis,"analysis")):
                     row = db.query(model.id).filter(model.status.in_(["queued", "queued_v3"])).order_by(model.id).first()
                     if row:
                         selected = (row.id,runner,prefix)
@@ -148,12 +148,12 @@ def start_refinement_worker() -> None:
     if _thread and _thread.is_alive():
         return
     with SessionLocal() as db:
-        db.query(VideoRefinementPreview).filter_by(status="rendering").update({"status": "queued", "error_message": "服务重启后自动重新排队"}, synchronize_session=False)
-        db.query(VideoRefinementPreview).filter_by(status="rendering_v3").update({"status":"queued_v3","error_message":"服务重启后自动重新排队"},synchronize_session=False)
-        db.query(VideoRefinementAnalysisJob).filter_by(status="analyzing").update({"status":"queued"},synchronize_session=False)
-        db.query(VideoRefinementAnalysisJob).filter_by(status="analyzing_v3").update({"status":"queued_v3"},synchronize_session=False)
-        db.query(VideoRefinementVoiceover).filter_by(status="generating").update({"status":"queued"},synchronize_session=False)
-        db.query(VideoRefinementVoiceover).filter_by(status="generating_v3").update({"status":"queued_v3"},synchronize_session=False)
+        db.query(EcommerceVideoRefinementPreview).filter_by(status="rendering").update({"status": "queued", "error_message": "服务重启后自动重新排队"}, synchronize_session=False)
+        db.query(EcommerceVideoRefinementPreview).filter_by(status="rendering_v3").update({"status":"queued_v3","error_message":"服务重启后自动重新排队"},synchronize_session=False)
+        db.query(EcommerceVideoRefinementAnalysisJob).filter_by(status="analyzing").update({"status":"queued"},synchronize_session=False)
+        db.query(EcommerceVideoRefinementAnalysisJob).filter_by(status="analyzing_v3").update({"status":"queued_v3"},synchronize_session=False)
+        db.query(EcommerceVideoRefinementVoiceover).filter_by(status="generating").update({"status":"queued"},synchronize_session=False)
+        db.query(EcommerceVideoRefinementVoiceover).filter_by(status="generating_v3").update({"status":"queued_v3"},synchronize_session=False)
         db.commit()
     _stop.clear()
     _thread = threading.Thread(target=_loop, name="refinement-preview-queue", daemon=True)
@@ -173,18 +173,18 @@ def run_analysis(job_id):
     from app.api.video_refinement import _save_plan, _validate_source, EDITABLE
     from app.services.refinement_analysis import analyze_source
     with SessionLocal() as db:
-        pending = db.get(VideoRefinementAnalysisJob,job_id)
+        pending = db.get(EcommerceVideoRefinementAnalysisJob,job_id)
         if not pending or pending.status not in {"queued", "queued_v3"}:
             return
         queued_status = pending.status
         analyzing_status = "analyzing_v3" if queued_status == "queued_v3" else "analyzing"
-        claimed = db.query(VideoRefinementAnalysisJob).filter_by(id=job_id,status=queued_status).update({"status":analyzing_status,"attempts":VideoRefinementAnalysisJob.attempts+1,"started_at":datetime.utcnow()},synchronize_session=False)
+        claimed = db.query(EcommerceVideoRefinementAnalysisJob).filter_by(id=job_id,status=queued_status).update({"status":analyzing_status,"attempts":EcommerceVideoRefinementAnalysisJob.attempts+1,"started_at":datetime.utcnow()},synchronize_session=False)
         db.commit()
         if not claimed:
             return
-        job = db.get(VideoRefinementAnalysisJob,job_id)
+        job = db.get(EcommerceVideoRefinementAnalysisJob,job_id)
         attempt = job.attempts
-        task = db.get(VideoRefinementTask,job.task_id)
+        task = db.get(EcommerceVideoRefinementTask,job.task_id)
         def progress(batches,stats):
             db.refresh(task);db.refresh(job)
             if task.current_revision != job.revision or task.status not in EDITABLE or job.status != analyzing_status or job.attempts != attempt:
@@ -220,10 +220,10 @@ def run_analysis(job_id):
             job.completed_at=datetime.utcnow();db.commit()
         except AnalysisSuperseded:
             db.rollback()
-            db.query(VideoRefinementAnalysisJob).filter_by(id=job_id,status=analyzing_status,attempts=attempt).update({"status":"superseded"},synchronize_session=False)
+            db.query(EcommerceVideoRefinementAnalysisJob).filter_by(id=job_id,status=analyzing_status,attempts=attempt).update({"status":"superseded"},synchronize_session=False)
             db.commit()
         except Exception as exc:
             logger.exception("Refinement analysis %s failed",job_id)
             db.rollback()
-            db.query(VideoRefinementAnalysisJob).filter_by(id=job_id,status=analyzing_status,attempts=attempt).update({"status":"failed","error_message":str(exc)[:500] if isinstance(exc,ValueError) else "分析失败, 请检查 AI 配置后重试","completed_at":datetime.utcnow()},synchronize_session=False)
+            db.query(EcommerceVideoRefinementAnalysisJob).filter_by(id=job_id,status=analyzing_status,attempts=attempt).update({"status":"failed","error_message":str(exc)[:500] if isinstance(exc,ValueError) else "分析失败, 请检查 AI 配置后重试","completed_at":datetime.utcnow()},synchronize_session=False)
             db.commit()

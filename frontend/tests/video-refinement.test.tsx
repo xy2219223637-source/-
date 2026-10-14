@@ -2,10 +2,10 @@ import {afterEach, beforeEach, describe, expect, it, vi} from 'vitest';
 import {act, cleanup, fireEvent, render, screen, waitFor} from '@testing-library/react';
 import {MemoryRouter, Route, Routes} from 'react-router-dom';
 import VideoRefinementWorkbench from '../src/pages/VideoRefinementWorkbench';
-import {videoRefinementApi} from '../src/api/client';
+import {ecommerceVideoTaxonomyApi, videoRefinementApi} from '../src/api/client';
 import type {RefinementSource, VideoRefinementTask} from '../src/types/videoRefinement';
 
-vi.mock('../src/api/client',()=>({mediaUrl:(value:string)=>value,videoRefinementApi:{sources:vi.fn(),list:vi.fn(),get:vi.fn(),create:vi.fn(),analyze:vi.fn(),autoPreview:vi.fn(),updateDraft:vi.fn(),confirm:vi.fn(),cancel:vi.fn(),preview:vi.fn(),accept:vi.fn(),materials:vi.fn(),refreshMaterials:vi.fn(),requirements:vi.fn(),generateVoiceover:vi.fn()}}));
+vi.mock('../src/api/client',()=>({mediaUrl:(value:string)=>value,ecommerceVideoTaxonomyApi:{catalog:vi.fn()},videoRefinementApi:{sources:vi.fn(),list:vi.fn(),get:vi.fn(),create:vi.fn(),analyze:vi.fn(),autoPreview:vi.fn(),updateDraft:vi.fn(),confirm:vi.fn(),cancel:vi.fn(),preview:vi.fn(),accept:vi.fn(),materials:vi.fn(),refreshMaterials:vi.fn(),requirements:vi.fn(),generateVoiceover:vi.fn(),voiceOptions:vi.fn()}}));
 const source: RefinementSource = {id:101,product_id:1,product_name:'国光湿巾',filename:'国光湿巾_成片_001.mp4',object_url:'/source.mp4',duration_seconds:22.78,width:720,height:1280,fps:30,has_audio:true,burned_subtitles:true,created_at:'2026-10-06T00:00:00Z'};
 const task: VideoRefinementTask = {
   id:1,source_asset_id:101,product_id:1,source_hash:'a'.repeat(64),snapshot_hash:'s'.repeat(64),user_brief:'提升开头吸引力',expected_result:'',focus:['pace'],status:'PLAN_READY',current_revision:1,confirmed_revision:null,preview_supported:true,created_at:'2026-10-06T00:00:00Z',updated_at:'2026-10-06T00:00:00Z',
@@ -15,7 +15,9 @@ const task: VideoRefinementTask = {
 
 beforeEach(()=>{
   vi.clearAllMocks();
+  vi.mocked(videoRefinementApi.voiceOptions).mockResolvedValue({version:"test",total:276,default_mode:"auto",items:[]});
   vi.mocked(videoRefinementApi.sources).mockResolvedValue([source]);
+  vi.mocked(ecommerceVideoTaxonomyApi.catalog).mockResolvedValue({categories:[],groups:[],public_tags:[],personal_tags:[],presets:[]} as Awaited<ReturnType<typeof ecommerceVideoTaxonomyApi.catalog>>);
   vi.mocked(videoRefinementApi.list).mockResolvedValue([]);
   vi.mocked(videoRefinementApi.get).mockResolvedValue(structuredClone(task));
   vi.mocked(videoRefinementApi.autoPreview).mockResolvedValue(structuredClone(task));
@@ -51,7 +53,7 @@ describe('视频精修工作台',()=>{
     fireEvent.click(screen.getByLabelText('我已播放预览并核对音画, 字幕和商品'));
     fireEvent.click(accept);
     const result=await screen.findByRole('link',{name:'查看精修 V2 成片'});
-    expect(result.getAttribute('href')).toBe('/final-videos/201');
+    expect(result.getAttribute('href')).toBe('/ecommerce-final-videos/201');
     expect(videoRefinementApi.accept).toHaveBeenCalledWith(1,4,{revision:1,plan_hash:task.plan_hash});
     expect(screen.queryByRole('button',{name:'取消任务'})).toBeNull();
   });
@@ -88,7 +90,7 @@ describe('视频精修工作台',()=>{
     vi.mocked(videoRefinementApi.list).mockRejectedValueOnce(new Error('server error')).mockResolvedValueOnce([task]);
     mount();
     await screen.findByRole('button',{name:`选择 ${source.filename}`});
-    expect(screen.queryByText('成片库还没有完整视频')).toBeNull();
+    expect(screen.queryByText('商品成片库还没有可用视频')).toBeNull();
     fireEvent.click(screen.getByRole('tab',{name:/精修任务/}));
     expect(await screen.findByRole('alert')).toHaveProperty('textContent', expect.stringContaining('精修任务加载失败'));
     expect(screen.queryByText('还没有精修任务')).toBeNull();
@@ -102,13 +104,13 @@ describe('视频精修工作台',()=>{
     vi.mocked(videoRefinementApi.sources).mockRejectedValueOnce(new Error('server error')).mockResolvedValueOnce([source]);
     vi.mocked(videoRefinementApi.list).mockResolvedValue([task]);
     mount();
-    expect(await screen.findByRole('alert')).toHaveProperty('textContent', expect.stringContaining('成片加载失败'));
-    expect(screen.queryByText('成片库还没有完整视频')).toBeNull();
+    expect(await screen.findByRole('alert')).toHaveProperty('textContent', expect.stringContaining('商品成片加载失败'));
+    expect(screen.queryByText('商品成片库还没有可用视频')).toBeNull();
     expect(screen.queryByText(/共 0 条结果/)).toBeNull();
     fireEvent.click(screen.getByRole('tab',{name:/精修任务/}));
     await screen.findByRole('link',{name:new RegExp(task.user_brief)});
     expect(screen.queryByRole('alert')).toBeNull();
-    fireEvent.click(screen.getByRole('tab',{name:'选择源成片'}));
+    fireEvent.click(screen.getByRole('tab',{name:'选择商品成片'}));
     fireEvent.click(screen.getByRole('button',{name:'重新加载'}));
     await screen.findByRole('button',{name:`选择 ${source.filename}`});
     expect(videoRefinementApi.sources).toHaveBeenCalledTimes(2);
@@ -119,8 +121,8 @@ describe('视频精修工作台',()=>{
     vi.mocked(videoRefinementApi.sources).mockRejectedValue(new Error('offline'));
     vi.mocked(videoRefinementApi.list).mockRejectedValue(new Error('offline'));
     mount();
-    expect(await screen.findByRole('alert')).toHaveProperty('textContent', expect.stringContaining('成片加载失败'));
-    expect(screen.queryByText('成片库还没有完整视频')).toBeNull();
+    expect(await screen.findByRole('alert')).toHaveProperty('textContent', expect.stringContaining('商品成片加载失败'));
+    expect(screen.queryByText('商品成片库还没有可用视频')).toBeNull();
     fireEvent.click(screen.getByRole('tab',{name:/精修任务/}));
     expect(await screen.findByRole('alert')).toHaveProperty('textContent', expect.stringContaining('精修任务加载失败'));
     expect(screen.queryByText('还没有精修任务')).toBeNull();
@@ -137,8 +139,8 @@ describe('视频精修工作台',()=>{
     mount();
     await screen.findByRole('button',{name:`选择 ${source.filename}`});
     expect(screen.queryByLabelText('精修目标')).toBeNull();
-    fireEvent.change(screen.getByLabelText('搜索成片'),{target:{value:'不存在'}});
-    expect(screen.getByText('没有符合筛选条件的成片')).toBeTruthy();
+    fireEvent.change(screen.getByLabelText('搜索商品成片'),{target:{value:'不存在'}});
+    expect(screen.getByText('没有符合筛选条件的商品成片')).toBeTruthy();
     expect(videoRefinementApi.create).not.toHaveBeenCalled();
   });
 
@@ -146,12 +148,69 @@ describe('视频精修工作台',()=>{
     vi.mocked(videoRefinementApi.create).mockResolvedValue({...task,status:'CREATED',current_revision:0,plan:null,plan_hash:null});
     mount('/video-refinements?source_asset_id=101');
     fireEvent.change(await screen.findByLabelText('修改意见'),{target:{value:'只修改商品画面'}});
+    expect(screen.getByRole('link',{name:'查看商品成片详情'}).getAttribute('href')).toBe('/ecommerce-final-videos/101');
+    expect(screen.getByText(/原成片保持不变/).textContent).toContain('商品成片库');
     expect(videoRefinementApi.create).not.toHaveBeenCalled();
     expect(screen.queryByText('重点方向, 可选')).toBeNull();
     expect(screen.queryByLabelText('预期结果, 可选')).toBeNull();
     fireEvent.click(screen.getByRole('button',{name:'开始精修'}));
     await screen.findByRole('button',{name:'确认整套方案'});
     expect(videoRefinementApi.create).toHaveBeenCalledWith({source_asset_id:101,user_brief:'只修改商品画面',duration_preference:'ai_recommend'});
+  });
+
+  it('缩短目标等于或大于原片时长时提示错误并禁止提交, 改成 20 秒后可提交',async()=>{
+    vi.mocked(videoRefinementApi.create).mockResolvedValue(task);
+    mount('/video-refinements?source_asset_id=101');
+    fireEvent.change(await screen.findByLabelText('修改意见'),{target:{value:'保留核心卖点和原声, 缩短到 20 秒'}});
+    fireEvent.change(screen.getByLabelText('时长目标'),{target:{value:'shorten'}});
+    for(const target of ['100','22.78','0','-1']){
+      fireEvent.change(screen.getByLabelText('目标时长, 秒'),{target:{value:target}});
+      expect(screen.getByRole('button',{name:'开始精修'})).toHaveProperty('disabled',true);
+      expect(screen.getByRole('alert')).toBeTruthy();
+    }
+    expect(videoRefinementApi.create).not.toHaveBeenCalled();
+    fireEvent.change(screen.getByLabelText('目标时长, 秒'),{target:{value:'20'}});
+    fireEvent.click(screen.getByRole('button',{name:'开始精修'}));
+    await waitFor(()=>expect(videoRefinementApi.create).toHaveBeenCalledWith(expect.objectContaining({duration_preference:'shorten',target_duration_ms:20000})));
+  });
+
+  it('修改任务目标同样阻止超长缩短目标, 清空目标显式移除旧目标',async()=>{
+    vi.mocked(videoRefinementApi.get).mockResolvedValue({...task,source_snapshot:{...task.source_snapshot,schema_version:'video_refinement_snapshot.v2'},options:{duration_preference:'shorten',target_duration_ms:20000}});
+    vi.mocked(videoRefinementApi.requirements).mockResolvedValue({...task,current_revision:2});
+    mount('/video-refinements/1');
+    fireEvent.click(await screen.findByText('修改意见与时长目标'));
+    fireEvent.change(screen.getByLabelText('目标时长, 秒'),{target:{value:'100'}});
+    expect(screen.getByRole('button',{name:'保存目标并生成预览'})).toHaveProperty('disabled',true);
+    expect(videoRefinementApi.requirements).not.toHaveBeenCalled();
+    fireEvent.change(screen.getByLabelText('目标时长, 秒'),{target:{value:''}});
+    fireEvent.click(screen.getByRole('button',{name:'保存目标并生成预览'}));
+    await waitFor(()=>expect(videoRefinementApi.requirements).toHaveBeenCalledWith(1,expect.objectContaining({target_duration_ms:null})));
+  });
+
+  it('精修选择页不显示分类标签筛选, 保留搜索和成片操作',async()=>{
+    const tag={id:7,name:'核心卖点',scope:'public' as const,status:'active' as const,source:'manual' as const};
+    vi.mocked(videoRefinementApi.sources).mockResolvedValue([{...source,taxonomy_tags:[tag],public_tags:[tag]}]);
+    mount();
+    await screen.findByRole('button',{name:`选择 ${source.filename}`});
+    expect(ecommerceVideoTaxonomyApi.catalog).not.toHaveBeenCalled();
+    expect(screen.getByLabelText(`预览 ${source.filename}`)).toHaveProperty('src',expect.stringContaining('/source.mp4'));
+    expect(screen.queryByRole('heading',{name:'分类与标签'})).toBeNull();
+    expect(screen.queryByRole('button',{name:'个人标签'})).toBeNull();
+    for(const name of ['筛选商品','筛选时长','筛选画幅','筛选创建时间'])expect(screen.getByRole('combobox',{name})).toBeTruthy();
+    fireEvent.change(screen.getByLabelText('搜索商品成片'),{target:{value:'核心卖点'}});
+    expect(screen.getByRole('button',{name:`选择 ${source.filename}`})).toBeTruthy();
+    expect(screen.getByRole('link',{name:'查看详情'}).getAttribute('href')).toBe('/ecommerce-final-videos/101');
+    expect(screen.getByRole('link',{name:'下载'}).getAttribute('href')).toBe('/source.mp4');
+    fireEvent.click(screen.getByRole('button',{name:`选择 ${source.filename}`}));
+    expect(screen.getByLabelText('修改意见')).toBeTruthy();
+  });
+
+  it('商品成片为空时只引导打开商品成片库, 不关联旧成片库',async()=>{
+    vi.mocked(videoRefinementApi.sources).mockResolvedValue([]);
+    mount();
+    expect(await screen.findByText('商品成片库还没有可用视频')).toBeTruthy();
+    expect(screen.getByRole('link',{name:'打开商品成片库'}).getAttribute('href')).toBe('/ecommerce-final-videos');
+    expect(screen.queryByRole('link',{name:'打开成片库'})).toBeNull();
   });
 
   it('单项编辑保存当前 revision, 保存后再整体确认',async()=>{

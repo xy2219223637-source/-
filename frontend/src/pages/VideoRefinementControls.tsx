@@ -2,6 +2,8 @@ import {useEffect, useRef, useState} from 'react';
 import {Loader2, Plus, RefreshCw, Search, Trash2} from 'lucide-react';
 import {mediaUrl, videoRefinementApi} from '../api/client';
 import type {DurationPreference, RefinementMaterialPage, RefinementSnapshot, VideoRefinementPlanItem, VideoRefinementTask} from '../types/videoRefinement';
+import {RefinementVoicePicker} from './RefinementVoicePicker';
+import {refinementDurationError} from '../lib/refinementDuration';
 
 type Action = (name: string, work: () => Promise<VideoRefinementTask>) => Promise<void>;
 const seconds = (value: number) => (value/1000).toFixed(2)+' 秒';
@@ -15,7 +17,7 @@ export function EvaluationProgress({task}: {task: VideoRefinementTask}) {
     const message=wait>=60?`已排队约 ${Math.max(1,Math.round(wait/60))} 分钟, 尚未开始分析. 无需重复提交.`:'等待后台开始分析, 尚未调用 AI.';
     return <p className="refine-evaluation refine-note" role="status">{message}</p>;
   }
-  const stageLabels: Record<string,string>={source:'正在核对源成片',requirements:'正在解析修改意见',materials:'正在准备素材分析',localizing:'正在定位商品展示片段',fitting:'正在匹配画面与音频时长',voiceover:'正在生成局部配音',matching:'正在匹配修改意见',planning:'正在生成精修方案'};
+  const stageLabels: Record<string,string>={source:'正在核对商品素材',requirements:'正在解析修改意见',materials:'正在准备素材分析',localizing:'正在定位商品展示片段',fitting:'正在匹配画面与音频时长',voice_matching:'正在根据原视频适配中文音色',voiceover:'正在生成局部配音',matching:'正在匹配修改意见',planning:'正在生成精修方案'};
   if(state?.status==='analyzing')return <p className="refine-evaluation refine-note" role="status"><Loader2 size={16} className="animate-spin"/>{stageLabels[state.progress.stage||'']||'正在准备精修方案'}</p>;
   const stats=task.plan?.material_evaluation;
   if(stats?.complete===false&&!stats.partial_accepted)return <p className="refine-evaluation refine-risk" role="status">{stats.failed?'部分素材评估失败, 可重试 AI 精修, 或使用已评估素材继续.':'素材评估尚未完成, 请重试 AI 精修.'}</p>;
@@ -60,8 +62,11 @@ export function GoalEditor({task,disabled,action}: {task: VideoRefinementTask; d
   const [brief,setBrief]=useState(task.user_brief);
   const [preference,setPreference]=useState<DurationPreference>(task.options?.duration_preference||'ai_recommend');
   const [target,setTarget]=useState(task.options?.target_duration_ms?String(task.options.target_duration_ms/1000):'');
-  useEffect(()=>{setBrief(task.user_brief);setPreference(task.options?.duration_preference||'ai_recommend');setTarget(task.options?.target_duration_ms?String(task.options.target_duration_ms/1000):'')},[task.current_revision,task.user_brief,task.options]);
-  return <details className="refine-goal-editor"><summary>修改意见与时长目标</summary><label className="field">精修意见<textarea rows={3} maxLength={2000} value={brief} onChange={e=>setBrief(e.target.value)}/></label><label className="field">时长目标<select value={preference} onChange={e=>setPreference(e.target.value as DurationPreference)}><option value="ai_recommend">由 AI 建议, 确认实际变化</option><option value="preserve">保持原时长</option><option value="shorten">缩短成片</option></select></label>{preference==='shorten'&&<label className="field">目标时长, 秒<input type="number" min="0.1" max={task.source_snapshot.source.duration_ms/1000} step="0.1" value={target} onChange={e=>setTarget(e.target.value)}/></label>}<button className="btn-secondary" disabled={disabled||!brief.trim()||(preference==='shorten'&&!!target&&Number(target)<=0)} onClick={()=>action('requirements',async()=>{const next=await videoRefinementApi.requirements(task.id,{revision:task.current_revision,user_brief:brief.trim(),duration_preference:preference,...(target&&preference==='shorten'?{target_duration_ms:Math.round(Number(target)*1000)}:{})});return videoRefinementApi.autoPreview(task.id,next.current_revision)})}>保存目标并生成预览</button></details>;
+  const [speaker,setSpeaker]=useState<string|null>(task.options?.tts_speaker||null);
+  useEffect(()=>{setBrief(task.user_brief);setPreference(task.options?.duration_preference||'ai_recommend');setTarget(task.options?.target_duration_ms?String(task.options.target_duration_ms/1000):'');setSpeaker(task.options?.tts_speaker||null)},[task.current_revision,task.user_brief,task.options]);
+  const sourceMs = task.source_snapshot.source.duration_ms;
+  const durationError = refinementDurationError(preference, target, sourceMs);
+  return <details className="refine-goal-editor"><summary>修改意见与时长目标</summary><label className="field">精修意见<textarea rows={3} maxLength={2000} value={brief} onChange={e=>setBrief(e.target.value)}/></label><label className="field">时长目标<select value={preference} onChange={e=>setPreference(e.target.value as DurationPreference)}><option value="ai_recommend">由 AI 建议, 确认实际变化</option><option value="preserve">保持原时长</option><option value="shorten">缩短成片</option></select></label>{preference==='shorten'&&<label className="field">目标时长, 秒<input type="number" min="0.001" max={(sourceMs-1)/1000} step="0.001" value={target} aria-invalid={!!durationError} aria-describedby={durationError?'goal-duration-error':undefined} onChange={e=>setTarget(e.target.value)}/></label>}{durationError&&<p id="goal-duration-error" role="alert" className="refine-risk">{durationError}</p>}<RefinementVoicePicker value={speaker} onChange={setSpeaker} disabled={disabled} label="新增配音音色"/><button className="btn-secondary" disabled={disabled||!brief.trim()||!!durationError} onClick={()=>{if(durationError)return;void action('requirements',async()=>{const next=await videoRefinementApi.requirements(task.id,{revision:task.current_revision,user_brief:brief.trim(),duration_preference:preference,tts_speaker:speaker,target_duration_ms:target.trim()&&preference==='shorten'?Math.round(Number(target)*1000):null});return videoRefinementApi.autoPreview(task.id,next.current_revision)})}}>保存目标并生成预览</button></details>;
 }
 
 export function MaterialSegmentsEditor({task,item,disabled,onChange}: {task: VideoRefinementTask; item: VideoRefinementPlanItem; disabled: boolean; onChange: (patch: Partial<VideoRefinementPlanItem>)=>void}) {
@@ -98,6 +103,19 @@ export function MaterialSegmentsEditor({task,item,disabled,onChange}: {task: Vid
 }
 
 export function VoiceoverEditor({task,item,disabled,dirty,action,onChange}: {task: VideoRefinementTask; item: VideoRefinementPlanItem; disabled: boolean; dirty: boolean; action: Action; onChange: (patch: Partial<VideoRefinementPlanItem>)=>void}) {
-  const voices=(task.voiceovers||[]).filter(v=>v.script.trim()===item.script.trim());
-  return <section className="refine-voiceover" aria-label="局部配音"><h4>局部配音 / 豆包默认女声</h4><p className="refine-note">只生成这段新增或改写的台词. 原片其他配音继续保留.</p><button className="btn-secondary" disabled={disabled||dirty||!item.script.trim()||voices.some(v=>['queued','generating'].includes(v.status))} onClick={()=>action('voiceover',()=>videoRefinementApi.generateVoiceover(task.id,task.current_revision,task.plan_hash!,item.item_id))}>{voices.some(v=>['queued','generating'].includes(v.status))?<Loader2 size={16} className="animate-spin"/>:<RefreshCw size={16}/>}生成或重试局部配音</button>{dirty&&<p className="refine-note">请先保存台词草稿, 再生成配音.</p>}{voices.map(voice=><div key={voice.id}><p>{voice.status==='ready'?'配音已准备, 实测 '+seconds(voice.duration_ms):voice.status==='failed'?voice.error_message:voice.status==='queued'?'配音排队中':voice.status==='generating'?'正在生成配音':'历史配音已失效'}</p>{voice.status==='ready'&&<><audio controls preload="metadata" src={mediaUrl(voice.object_url)} aria-label="局部配音试听"/><button className="btn-secondary" disabled={disabled||item.voiceover_id===voice.id} onClick={()=>onChange({voiceover_id:voice.id,subtitle_strategy:voice.timing.segments?.length?'regenerate':item.subtitle_strategy})}>{item.voiceover_id===voice.id?'已绑定到草稿':'绑定到当前草稿'}</button><p className="refine-note">绑定后需保存并重新确认. 配音必须完整播放, 画面长度由所选区间决定.</p>{!voice.timing.segments?.length&&<p className="refine-risk">没有可信字幕时间, 可启用转写对齐或明确选择不生成字幕.</p>}</>}</div>)}</section>;
+  const recommendation=task.plan?.analysis?.voice_selection;
+  const expectedSpeaker=item.tts_speaker||task.options?.tts_speaker||recommendation?.speaker;
+  const voices=(task.voiceovers||[]).filter(v=>v.script.trim()===item.script.trim()&&(!expectedSpeaker||v.parameters.speaker===expectedSpeaker));
+  const pending=voices.some(v=>['queued','generating'].includes(v.status));
+  return <section className="refine-voiceover" aria-label="局部配音">
+    <h4>局部配音 / 中文音色</h4><p className="refine-note">只生成这段新增或改写的台词. 原片其他配音继续保留.</p>
+    <RefinementVoicePicker value={item.tts_speaker||null} disabled={disabled} onChange={tts_speaker=>onChange({tts_speaker,voiceover_id:null})} automaticLabel={task.options?.tts_speaker?'跟随任务指定音色':'自动适配原视频'}/>
+    {!item.tts_speaker&&!task.options?.tts_speaker&&recommendation&&<p className="refine-note">自动推荐: {recommendation.name}. {recommendation.reason}</p>}
+    <button className="btn-secondary" disabled={disabled||dirty||!item.script.trim()||pending} onClick={()=>action('voiceover',()=>videoRefinementApi.generateVoiceover(task.id,task.current_revision,task.plan_hash!,item.item_id))}>{pending?<Loader2 size={16} className="animate-spin"/>:<RefreshCw size={16}/>}生成或重试局部配音</button>
+    {dirty&&<p className="refine-note">请先保存台词和音色草稿, 再生成配音.</p>}
+    {voices.map(voice=><div key={voice.id}><p>{voice.parameters.selection?.name||voice.parameters.speaker} / {voice.status==='ready'?'配音已准备, 实测 '+seconds(voice.duration_ms):voice.status==='failed'?voice.error_message:voice.status==='queued'?'配音排队中':voice.status==='generating'?'正在生成配音':'历史配音已失效'}</p>
+      {voice.parameters.selection&&<p className="refine-note">{voice.parameters.selection.mode==='auto'?'自动选声':'手动选声'}: {voice.parameters.selection.reason}</p>}
+      {voice.status==='ready'&&<><audio controls preload="metadata" src={mediaUrl(voice.object_url)} aria-label="局部配音试听"/><button className="btn-secondary" disabled={disabled||item.voiceover_id===voice.id} onClick={()=>onChange({voiceover_id:voice.id,subtitle_strategy:voice.timing.segments?.length?'regenerate':item.subtitle_strategy})}>{item.voiceover_id===voice.id?'已绑定到草稿':'绑定到当前草稿'}</button><p className="refine-note">绑定后需保存并重新确认. 配音必须完整播放, 画面长度由所选区间决定.</p>{!voice.timing.segments?.length&&<p className="refine-risk">没有可信字幕时间, 可启用转写对齐或明确选择不生成字幕.</p>}</>}
+    </div>)}
+  </section>;
 }

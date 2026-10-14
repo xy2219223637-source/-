@@ -15,7 +15,7 @@ from time import monotonic
 
 from app.config import get_settings
 from app.database import SessionLocal
-from app.models import VideoAsset, VideoAssetAnalysis
+from app.models import EcommerceVideoAsset, EcommerceVideoAssetAnalysis
 from app.schemas.video_refinement import RefinementItem
 from app.services.director_workflow import _ffmpeg_executable
 from app.services.llm import LLMClient
@@ -28,27 +28,28 @@ logger = logging.getLogger(__name__)
 
 def cache_analysis(asset: dict, data: dict, model: str):
     with SessionLocal() as db:
-        current = db.query(VideoAsset).filter_by(id=asset["asset_id"], tenant_id=asset["tenant_id"]).first()
+        current = db.query(EcommerceVideoAsset).filter_by(id=asset["asset_id"], tenant_id=asset["tenant_id"]).first()
         if not current or current.content_hash != asset["content_hash"] or current.object_url != asset["object_url"]:
             return
-        db.add(VideoAssetAnalysis(tenant_id=current.tenant_id,asset_id=current.id, schema_version="1.0",model=model,
+        db.add(EcommerceVideoAssetAnalysis(tenant_id=current.tenant_id,asset_id=current.id, schema_version="1.0",model=model,
                prompt_version="refinement-media-v2",status="completed",summary=str(data.get("summary") or "真实媒体分析"),
                analysis_json={**data,"source_hash":asset["content_hash"]},completed_at=datetime.utcnow()))
         db.commit()
 
 
 def cached_material_analyses(snapshot: dict) -> dict:
-    from app.services.video_analysis_cache import load_cached_analyses
+    from app.services.ecommerce_video_analysis_cache import load_cached_analyses
     catalog = {row["asset_id"]: row for row in snapshot["material_catalog"]}
     with SessionLocal() as db:
         assets = []
         ids = list(catalog)
         for offset in range(0, len(ids), 200):
-            assets.extend(db.query(VideoAsset).filter(
-                VideoAsset.id.in_(ids[offset:offset+200]),
-                VideoAsset.tenant_id == snapshot["tenant_id"],
-                VideoAsset.product_id == snapshot["source"]["product_id"],
-                VideoAsset.asset_kind == "material").all())
+            assets.extend(db.query(EcommerceVideoAsset).filter(
+                EcommerceVideoAsset.id.in_(ids[offset:offset+200]),
+                EcommerceVideoAsset.tenant_id == snapshot["tenant_id"],
+                EcommerceVideoAsset.product_id == snapshot["source"]["product_id"],
+                EcommerceVideoAsset.library_type == "finished",
+                EcommerceVideoAsset.asset_kind == "material").all())
         unchanged = [asset for asset in assets if asset.content_hash == catalog[asset.id]["content_hash"]
                      and asset.object_url == catalog[asset.id]["object_url"]]
         result = load_cached_analyses(db, snapshot["tenant_id"], unchanged, require_visual=True)
@@ -94,7 +95,7 @@ def source_context(snapshot: dict) -> dict:
         return context
     if not context.get("transcript"):
         with SessionLocal() as db:
-            rows = db.query(VideoAssetAnalysis).filter_by(asset_id=source["asset_id"],tenant_id=snapshot["tenant_id"],status="completed").order_by(VideoAssetAnalysis.id.desc()).all()
+            rows = db.query(EcommerceVideoAssetAnalysis).filter_by(asset_id=source["asset_id"],tenant_id=snapshot["tenant_id"],status="completed").order_by(EcommerceVideoAssetAnalysis.id.desc()).all()
             raw = next((r.analysis_json.get("transcript") for r in rows
                         if r.schema_version == "1.0" and r.model not in {"mock", "placeholder"}
                         and not r.analysis_json.get("is_mock")

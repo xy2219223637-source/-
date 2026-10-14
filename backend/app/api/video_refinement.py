@@ -12,7 +12,7 @@ from sqlalchemy.orm import Session
 
 from app.auth import AuthContext, current_auth
 from app.database import get_db
-from app.models import Product, VideoAsset, VideoLineageSegment, VideoRefinementPlan, VideoRefinementPreview, VideoRefinementSnapshot, VideoRefinementTask, VideoRefinementVersion, VideoRefinementRequest, VideoRefinementAnalysisJob, VideoRefinementVoiceover
+from app.models import EcommerceProduct, EcommerceVideoAsset, EcommerceVideoLineageSegment, EcommerceVideoRefinementPlan, EcommerceVideoRefinementPreview, EcommerceVideoRefinementSnapshot, EcommerceVideoRefinementTask, EcommerceVideoRefinementVersion, EcommerceVideoRefinementRequest, EcommerceVideoRefinementAnalysisJob, EcommerceVideoRefinementVoiceover
 from app.schemas.video_refinement import ConfirmInput, DraftInput, PreviewInput, RefinementInput, RevisionInput, RequirementsInput, VoiceoverInput
 from app.services.refinement_analysis import analyze_source, build_snapshot
 from app.services.refinement_media import pin_plan_media, render_recipe, verified_asset, verified_path, used_material_ids
@@ -23,20 +23,20 @@ EDITABLE = ("CREATED", "PLAN_READY", "CONFIGURING", "NEEDS_HUMAN_CONFIRMATION", 
 logger = logging.getLogger(__name__)
 
 
-def _get_task(db: Session, auth: AuthContext, task_id: int) -> VideoRefinementTask:
-    task = db.query(VideoRefinementTask).filter_by(id=task_id, tenant_id=auth.tenant_id).populate_existing().first()
+def _get_task(db: Session, auth: AuthContext, task_id: int) -> EcommerceVideoRefinementTask:
+    task = db.query(EcommerceVideoRefinementTask).filter_by(id=task_id, tenant_id=auth.tenant_id).populate_existing().first()
     if not task:
         raise HTTPException(404, "精修任务不存在")
     return task
 
 
 def _request(db, task):
-    return db.query(VideoRefinementRequest).filter(VideoRefinementRequest.task_id==task.id,VideoRefinementRequest.tenant_id==task.tenant_id,VideoRefinementRequest.revision<=task.current_revision).order_by(VideoRefinementRequest.revision.desc()).first()
+    return db.query(EcommerceVideoRefinementRequest).filter(EcommerceVideoRefinementRequest.task_id==task.id,EcommerceVideoRefinementRequest.tenant_id==task.tenant_id,EcommerceVideoRefinementRequest.revision<=task.current_revision).order_by(EcommerceVideoRefinementRequest.revision.desc()).first()
 
 
-def _snapshot(db: Session, task: VideoRefinementTask):
+def _snapshot(db: Session, task: EcommerceVideoRefinementTask):
     from types import SimpleNamespace
-    base = db.query(VideoRefinementSnapshot).filter_by(task_id=task.id).one()
+    base = db.query(EcommerceVideoRefinementSnapshot).filter_by(task_id=task.id).one()
     request = _request(db,task)
     if not request:
         return base
@@ -48,24 +48,28 @@ def _options(db,task):
     return request.options_json if request else {}
 
 
+def _validate_duration_target(preference: str, target_ms: int | None, source_ms: int) -> None:
+    if preference == "shorten" and target_ms is not None and target_ms >= source_ms:
+        raise HTTPException(422, f"缩短目标必须小于原片时长 {source_ms / 1000:.2f} 秒")
 
-def _current_plan(db: Session, task: VideoRefinementTask) -> VideoRefinementPlan | None:
-    return db.query(VideoRefinementPlan).filter_by(task_id=task.id, revision=task.current_revision).first()
+
+def _current_plan(db: Session, task: EcommerceVideoRefinementTask) -> EcommerceVideoRefinementPlan | None:
+    return db.query(EcommerceVideoRefinementPlan).filter_by(task_id=task.id, revision=task.current_revision).first()
 
 
-def _serialize(db: Session, task: VideoRefinementTask) -> dict:
+def _serialize(db: Session, task: EcommerceVideoRefinementTask) -> dict:
     snapshot, plan = _snapshot(db, task), _current_plan(db, task)
-    previews = db.query(VideoRefinementPreview).filter_by(task_id=task.id, tenant_id=task.tenant_id).order_by(VideoRefinementPreview.id.desc()).all()
-    version = db.query(VideoRefinementVersion).filter_by(task_id=task.id, tenant_id=task.tenant_id).first()
+    previews = db.query(EcommerceVideoRefinementPreview).filter_by(task_id=task.id, tenant_id=task.tenant_id).order_by(EcommerceVideoRefinementPreview.id.desc()).all()
+    version = db.query(EcommerceVideoRefinementVersion).filter_by(task_id=task.id, tenant_id=task.tenant_id).first()
     from app.services.refinement_voiceover import serialize_voiceover
     from app.services.refinement_queue import refinement_worker_state
-    job = db.query(VideoRefinementAnalysisJob).filter_by(task_id=task.id,tenant_id=task.tenant_id).order_by(VideoRefinementAnalysisJob.id.desc()).first()
+    job = db.query(EcommerceVideoRefinementAnalysisJob).filter_by(task_id=task.id,tenant_id=task.tenant_id).order_by(EcommerceVideoRefinementAnalysisJob.id.desc()).first()
     analysis = {"id":job.id,"revision":job.revision,"status":job.status.removesuffix("_v3"),"progress":job.progress_json,"error_message":job.error_message,
                 "created_at":job.created_at.replace(tzinfo=timezone.utc).isoformat(),
                 "started_at":job.started_at.replace(tzinfo=timezone.utc).isoformat() if job.started_at else None,
                 "queue_wait_seconds":max(0,int(((job.started_at or datetime.utcnow())-job.created_at).total_seconds()))} if job else None
     return {"analysis_state":analysis, "worker_state":refinement_worker_state(), "options":_options(db,task),
-            "voiceovers":[serialize_voiceover(v) for v in db.query(VideoRefinementVoiceover).filter_by(task_id=task.id,tenant_id=task.tenant_id).order_by(VideoRefinementVoiceover.id.desc()).all()],
+            "voiceovers":[serialize_voiceover(v) for v in db.query(EcommerceVideoRefinementVoiceover).filter_by(task_id=task.id,tenant_id=task.tenant_id).order_by(EcommerceVideoRefinementVoiceover.id.desc()).all()],
             "id": task.id, "source_asset_id": task.source_asset_id, "product_id": task.product_id,
             "source_hash": task.source_hash, "source_snapshot": snapshot.snapshot_json, "snapshot_hash": snapshot.content_hash,
             "user_brief": task.user_brief, "expected_result": task.expected_result, "focus": task.focus,
@@ -80,7 +84,7 @@ def _serialize(db: Session, task: VideoRefinementTask) -> dict:
             "updated_at": task.updated_at.replace(tzinfo=timezone.utc).isoformat()}
 
 
-def _matching_analysis(db: Session, task: VideoRefinementTask, revision: int) -> dict | None:
+def _matching_analysis(db: Session, task: EcommerceVideoRefinementTask, revision: int) -> dict | None:
     db.refresh(task)
     if task.current_revision != revision + 1 or task.status not in {"PLAN_READY", "NEEDS_HUMAN_CONFIRMATION", "MATERIAL_REQUIRED"}:
         return None
@@ -88,17 +92,17 @@ def _matching_analysis(db: Session, task: VideoRefinementTask, revision: int) ->
     return _serialize(db, task) if plan and plan.origin == "ai" else None
 
 
-def _validate_source(db: Session, task: VideoRefinementTask) -> None:
-    source = db.query(VideoAsset).filter_by(id=task.source_asset_id, tenant_id=task.tenant_id).populate_existing().first()
+def _validate_source(db: Session, task: EcommerceVideoRefinementTask) -> None:
+    source = db.query(EcommerceVideoAsset).filter_by(id=task.source_asset_id, tenant_id=task.tenant_id).populate_existing().first()
     frozen = task.source_snapshot
-    if not source or source.content_hash != task.source_hash or source.product_id != task.product_id or source.object_url != frozen["object_url"] or source.asset_kind != "final_output" or (source.width, source.height, source.fps, round(source.duration_seconds * 1000)) != (frozen["width"], frozen["height"], frozen["fps"], frozen["duration_ms"]):
-        raise HTTPException(409, "源成片内容或商品关联已变化, 请重新创建精修任务")
+    if not source or source.content_hash != task.source_hash or source.product_id != task.product_id or source.object_url != frozen["object_url"] or source.asset_kind != "final_output" or source.library_type != "finished" or source.excluded or source.status in {"validating", "validation_failed"} or (source.width, source.height, source.fps, round(source.duration_seconds * 1000)) != (frozen["width"], frozen["height"], frozen["fps"], frozen["duration_ms"]):
+        raise HTTPException(409, "源商品成片已变化或不可用, 请重新创建精修任务")
 
 
-def _validate_materials(db: Session, task: VideoRefinementTask, plan: dict) -> None:
+def _validate_materials(db: Session, task: EcommerceVideoRefinementTask, plan: dict) -> None:
     frozen = {row["asset_id"]: row for row in _snapshot(db, task).snapshot_json["material_catalog"]}
     for asset_id in used_material_ids(plan):
-        material = db.query(VideoAsset).filter_by(id=asset_id, tenant_id=task.tenant_id, product_id=task.product_id, asset_kind="material").populate_existing().first()
+        material = db.query(EcommerceVideoAsset).filter_by(id=asset_id, tenant_id=task.tenant_id, product_id=task.product_id, library_type="finished", asset_kind="material").populate_existing().first()
         expected = frozen.get(asset_id)
         pinned_hash = next((row["file_sha256"] for row in plan.get("media_verifications", []) if row["asset_id"] == asset_id and expected and row["content_hash"] == expected["content_hash"]), None)
         allowed_hashes = {expected["content_hash"], pinned_hash} if expected else set()
@@ -106,17 +110,17 @@ def _validate_materials(db: Session, task: VideoRefinementTask, plan: dict) -> N
             raise HTTPException(409, "采用的素材已变化或不可用, 请重新建立素材快照")
 
 
-def _cas(db: Session, task: VideoRefinementTask, revision: int, values: dict) -> None:
-    updated = db.query(VideoRefinementTask).filter(
-        VideoRefinementTask.id == task.id, VideoRefinementTask.tenant_id == task.tenant_id,
-        VideoRefinementTask.current_revision == revision, VideoRefinementTask.status.in_(EDITABLE),
+def _cas(db: Session, task: EcommerceVideoRefinementTask, revision: int, values: dict) -> None:
+    updated = db.query(EcommerceVideoRefinementTask).filter(
+        EcommerceVideoRefinementTask.id == task.id, EcommerceVideoRefinementTask.tenant_id == task.tenant_id,
+        EcommerceVideoRefinementTask.current_revision == revision, EcommerceVideoRefinementTask.status.in_(EDITABLE),
     ).update({**values, "updated_at": datetime.utcnow()}, synchronize_session=False)
     if not updated:
         db.rollback()
         raise HTTPException(409, "方案已更新或任务已取消, 请刷新后重试")
 
 
-def _save_plan(db: Session, task: VideoRefinementTask, revision: int, plan: dict, status: str, origin: str) -> dict:
+def _save_plan(db: Session, task: EcommerceVideoRefinementTask, revision: int, plan: dict, status: str, origin: str) -> dict:
     snapshot = _snapshot(db, task)
     if plan.get("schema_version") in {"video_refinement_plan.v2", "video_refinement_plan.v3"}:
         plan["request_snapshot_id"] = getattr(snapshot,"request_id",None)
@@ -135,13 +139,13 @@ def _save_plan(db: Session, task: VideoRefinementTask, revision: int, plan: dict
             if existing:
                 return existing
         raise
-    db.query(VideoRefinementPreview).filter(VideoRefinementPreview.task_id == task.id, VideoRefinementPreview.status != "accepted").update({"status": "superseded"}, synchronize_session=False)
-    saved = VideoRefinementPlan(task_id=task.id, revision=revision + 1, source_snapshot_id=snapshot.id,
+    db.query(EcommerceVideoRefinementPreview).filter(EcommerceVideoRefinementPreview.task_id == task.id, EcommerceVideoRefinementPreview.status != "accepted").update({"status": "superseded"}, synchronize_session=False)
+    saved = EcommerceVideoRefinementPlan(task_id=task.id, revision=revision + 1, source_snapshot_id=snapshot.id,
                               plan_json=plan, plan_hash=content_hash(plan), origin=origin)
     db.add(saved)
     if automatic:
         db.flush()
-        db.add(VideoRefinementPreview(tenant_id=task.tenant_id,task_id=task.id,plan_id=saved.id,revision=revision+1,plan_hash=saved.plan_hash,
+        db.add(EcommerceVideoRefinementPreview(tenant_id=task.tenant_id,task_id=task.id,plan_id=saved.id,revision=revision+1,plan_hash=saved.plan_hash,
                                      status="queued_v3"))
     db.commit()
     db.refresh(task)
@@ -159,16 +163,16 @@ def _queue_analysis(db, task, revision, snapshot, options):
         options["timing_protocol"] = "v3"
     from sqlalchemy.exc import IntegrityError
     from app.services.refinement_queue import enqueue_preview
-    job = db.query(VideoRefinementAnalysisJob).filter_by(task_id=task.id,revision=revision).first()
+    job = db.query(EcommerceVideoRefinementAnalysisJob).filter_by(task_id=task.id,revision=revision).first()
     if job and job.options_json.get("timing_protocol") == "v3":
         options.update({key:job.options_json[key] for key in ("timing_protocol", "authorization_version", "localization", "content_reselection", "display_tail_ms", "policy_version") if key in job.options_json})
     from app.services.refinement_authorization import AUTHORIZATION_VERSION
     options["authorization_version"] = AUTHORIZATION_VERSION
     queued_status = "queued_v3"
     if not job:
-        job = VideoRefinementAnalysisJob(tenant_id=task.tenant_id,task_id=task.id,revision=revision,snapshot_json=snapshot,
+        job = EcommerceVideoRefinementAnalysisJob(tenant_id=task.tenant_id,task_id=task.id,revision=revision,snapshot_json=snapshot,
               status=queued_status,options_json=options,fingerprint=content_hash({"snapshot":content_hash(snapshot),"brief":task.user_brief,"options":options,"method":"v2"}))
-        previous = db.query(VideoRefinementAnalysisJob).filter_by(task_id=task.id,tenant_id=task.tenant_id).order_by(VideoRefinementAnalysisJob.id.desc()).first()
+        previous = db.query(EcommerceVideoRefinementAnalysisJob).filter_by(task_id=task.id,tenant_id=task.tenant_id).order_by(EcommerceVideoRefinementAnalysisJob.id.desc()).first()
         if previous:
             job.batches_json = previous.batches_json
         db.add(job)
@@ -187,33 +191,36 @@ def _queue_analysis(db, task, revision, snapshot, options):
 
 @router.get("")
 def list_refinements(db: Session = Depends(get_db), auth: AuthContext = Depends(current_auth)):
-    tasks = db.query(VideoRefinementTask).filter_by(tenant_id=auth.tenant_id).order_by(VideoRefinementTask.updated_at.desc()).limit(100).all()
+    tasks = db.query(EcommerceVideoRefinementTask).filter_by(tenant_id=auth.tenant_id).order_by(EcommerceVideoRefinementTask.updated_at.desc()).limit(100).all()
     return [_serialize(db, task) for task in tasks]
 
 
 @router.post("", status_code=201)
 def create_refinement(payload: RefinementInput, db: Session = Depends(get_db), auth: AuthContext = Depends(current_auth)):
-    source = db.query(VideoAsset).filter_by(id=payload.source_asset_id, tenant_id=auth.tenant_id, asset_kind="final_output").first()
+    source = db.query(EcommerceVideoAsset).filter_by(id=payload.source_asset_id, tenant_id=auth.tenant_id, library_type="finished", asset_kind="final_output").first()
     if not source:
-        raise HTTPException(404, "成片不存在")
-    product = db.query(Product).filter_by(id=source.product_id, tenant_id=auth.tenant_id).first()
+        raise HTTPException(404, "商品成片不存在")
+    if source.excluded:
+        raise HTTPException(409, "商品成片已排除, 不能用于精修")
+    product = db.query(EcommerceProduct).filter_by(id=source.product_id, tenant_id=auth.tenant_id).first()
     if not product:
-        raise HTTPException(409, "成片关联的商品不存在")
-    if not source.content_hash or not source.object_url or source.width <= 0 or source.height <= 0 or not math.isfinite(source.duration_seconds) or source.duration_seconds < .01 or not math.isfinite(source.fps) or source.fps <= 0:
-        raise HTTPException(422, "源成片缺少有效的媒体信息或内容哈希, 请先完成资产验证")
+        raise HTTPException(409, "成片关联的电商商品不存在")
+    if source.status in {"validating", "validation_failed"} or not source.content_hash or not source.object_url or source.width <= 0 or source.height <= 0 or not math.isfinite(source.duration_seconds) or source.duration_seconds < .01 or not math.isfinite(source.fps) or source.fps <= 0:
+        raise HTTPException(422, "商品成片缺少有效的媒体信息或内容哈希, 请先完成成片验证")
+    _validate_duration_target(payload.duration_preference, payload.target_duration_ms, round(source.duration_seconds * 1000))
     # One ordered streaming SELECT uses a consistent database statement snapshot.
-    materials = list(db.query(VideoAsset).filter_by(tenant_id=auth.tenant_id,product_id=source.product_id,asset_kind="material").order_by(VideoAsset.id).yield_per(200))
+    materials = list(db.query(EcommerceVideoAsset).filter_by(tenant_id=auth.tenant_id,product_id=source.product_id,library_type="finished",asset_kind="material").filter(EcommerceVideoAsset.id != source.id).order_by(EcommerceVideoAsset.id).yield_per(200))
     snapshot = build_snapshot(db, source, product, materials)
     snapshot["tenant_id"] = auth.tenant_id
-    task = VideoRefinementTask(tenant_id=auth.tenant_id, source_asset_id=source.id, product_id=source.product_id,
+    task = EcommerceVideoRefinementTask(tenant_id=auth.tenant_id, source_asset_id=source.id, product_id=source.product_id,
         source_hash=source.content_hash, source_snapshot=snapshot["source"], user_brief=payload.user_brief,
         expected_result=payload.expected_result.strip(), focus=list(dict.fromkeys(payload.focus)), created_by=auth.user_id)
     db.add(task)
     db.flush()
-    db.add(VideoRefinementSnapshot(task_id=task.id, schema_version=snapshot["schema_version"], is_mock=False,
+    db.add(EcommerceVideoRefinementSnapshot(task_id=task.id, schema_version=snapshot["schema_version"], is_mock=False,
                                    snapshot_json=snapshot, content_hash=content_hash(snapshot)))
     if snapshot["schema_version"] == "video_refinement_snapshot.v2":
-        db.add(VideoRefinementRequest(tenant_id=task.tenant_id,task_id=task.id,revision=0,snapshot_json=snapshot,snapshot_hash=content_hash(snapshot),options_json={"duration_preference":payload.duration_preference,"target_duration_ms":payload.target_duration_ms,"decisions":{}}))
+        db.add(EcommerceVideoRefinementRequest(tenant_id=task.tenant_id,task_id=task.id,revision=0,snapshot_json=snapshot,snapshot_hash=content_hash(snapshot),options_json={"duration_preference":payload.duration_preference,"target_duration_ms":payload.target_duration_ms,"tts_speaker":payload.tts_speaker,"decisions":{}}))
     db.commit()
     db.refresh(task)
     return _serialize(db, task)
@@ -221,14 +228,27 @@ def create_refinement(payload: RefinementInput, db: Session = Depends(get_db), a
 
 @router.get("/sources")
 def list_sources(db: Session = Depends(get_db), auth: AuthContext = Depends(current_auth)):
-    rows = db.query(VideoAsset, Product.name).join(Product, Product.id == VideoAsset.product_id).filter(
-        VideoAsset.tenant_id == auth.tenant_id, Product.tenant_id == auth.tenant_id,
-        VideoAsset.asset_kind == "final_output",
-    ).order_by(VideoAsset.created_at.desc(), VideoAsset.id.desc()).all()
+    rows = db.query(EcommerceVideoAsset, EcommerceProduct.name).join(EcommerceProduct, EcommerceProduct.id == EcommerceVideoAsset.product_id).filter(
+        EcommerceVideoAsset.tenant_id == auth.tenant_id, EcommerceProduct.tenant_id == auth.tenant_id,
+        EcommerceVideoAsset.library_type == "finished", EcommerceVideoAsset.asset_kind == "final_output",
+        EcommerceVideoAsset.excluded.is_(False),
+        EcommerceVideoAsset.status.notin_(("validating", "validation_failed")),
+    ).order_by(EcommerceVideoAsset.created_at.desc(), EcommerceVideoAsset.id.desc()).all()
+    from app.services.ecommerce_video_taxonomy import load_asset_taxonomy
+    categories, tags = load_asset_taxonomy(db, [row for row, _ in rows], auth.tenant_id, auth.user_id)
     return [{"id": row.id, "product_id": row.product_id, "product_name": name, "filename": row.filename,
              "object_url": row.object_url, "duration_seconds": row.duration_seconds, "width": row.width, "height": row.height,
              "fps": row.fps, "has_audio": row.has_audio, "burned_subtitles": row.burned_subtitles,
+             "category_id": row.category_id, "category": categories.get(row.id), "taxonomy_tags": tags.get(row.id, []),
+             "public_tags": [tag for tag in tags.get(row.id, []) if tag["scope"] == "public"],
+             "personal_tags": [tag for tag in tags.get(row.id, []) if tag["scope"] == "personal"],
              "created_at": row.created_at.replace(tzinfo=timezone.utc).isoformat()} for row, name in rows]
+
+
+@router.get("/voice-options")
+def list_voice_options(auth: AuthContext = Depends(current_auth)):
+    from app.services.refinement_speakers import CATALOG_VERSION, chinese_speakers
+    return {"version":CATALOG_VERSION, "total":len(chinese_speakers()), "items":chinese_speakers(), "default_mode":"auto"}
 
 
 @router.get("/{task_id}")
@@ -360,7 +380,7 @@ def cancel_refinement(task_id: int, payload: RevisionInput, db: Session = Depend
     if task.status == "CANCELLED" and payload.revision == task.current_revision:
         return _serialize(db, task)
     _cas(db, task, payload.revision, {"status": "CANCELLED", "confirmed_revision": None})
-    db.query(VideoRefinementPreview).filter(VideoRefinementPreview.task_id == task.id, VideoRefinementPreview.status != "accepted").update({"status": "superseded"}, synchronize_session=False)
+    db.query(EcommerceVideoRefinementPreview).filter(EcommerceVideoRefinementPreview.task_id == task.id, EcommerceVideoRefinementPreview.status != "accepted").update({"status": "superseded"}, synchronize_session=False)
     db.commit()
     db.refresh(task)
     return _serialize(db, task)
@@ -370,7 +390,7 @@ def cancel_refinement(task_id: int, payload: RevisionInput, db: Session = Depend
 def create_preview(task_id: int, payload: PreviewInput, db: Session = Depends(get_db), auth: AuthContext = Depends(current_auth)):
     from app.services.refinement_queue import enqueue_preview
 
-    task = db.query(VideoRefinementTask).filter_by(id=task_id, tenant_id=auth.tenant_id).with_for_update().populate_existing().first()
+    task = db.query(EcommerceVideoRefinementTask).filter_by(id=task_id, tenant_id=auth.tenant_id).with_for_update().populate_existing().first()
     if not task:
         raise HTTPException(404, "精修任务不存在")
     plan = _current_plan(db, task)
@@ -384,11 +404,11 @@ def create_preview(task_id: int, payload: PreviewInput, db: Session = Depends(ge
         render_recipe(_snapshot(db, task).snapshot_json, plan.plan_json)
     except ValueError as exc:
         raise HTTPException(422, str(exc)) from exc
-    preview = db.query(VideoRefinementPreview).filter_by(task_id=task.id, revision=payload.revision).first()
+    preview = db.query(EcommerceVideoRefinementPreview).filter_by(task_id=task.id, revision=payload.revision).first()
     if not preview:
         from app.services.refinement_queue import require_refinement_worker
         require_refinement_worker()
-        preview = VideoRefinementPreview(tenant_id=task.tenant_id, task_id=task.id, plan_id=plan.id, revision=payload.revision, plan_hash=plan.plan_hash,
+        preview = EcommerceVideoRefinementPreview(tenant_id=task.tenant_id, task_id=task.id, plan_id=plan.id, revision=payload.revision, plan_hash=plan.plan_hash,
                                          status="queued_v3")
         db.add(preview)
     elif preview.status == "failed":
@@ -404,13 +424,13 @@ def create_preview(task_id: int, payload: PreviewInput, db: Session = Depends(ge
 
 @router.post("/{task_id}/previews/{preview_id}/accept")
 async def accept_preview(task_id: int, preview_id: int, payload: PreviewInput, db: Session = Depends(get_db), auth: AuthContext = Depends(current_auth)):
-    task = db.query(VideoRefinementTask).filter_by(id=task_id, tenant_id=auth.tenant_id).with_for_update().populate_existing().first()
+    task = db.query(EcommerceVideoRefinementTask).filter_by(id=task_id, tenant_id=auth.tenant_id).with_for_update().populate_existing().first()
     if not task:
         raise HTTPException(404, "精修任务不存在")
-    preview = db.query(VideoRefinementPreview).filter_by(id=preview_id, task_id=task.id, tenant_id=auth.tenant_id).with_for_update().first()
+    preview = db.query(EcommerceVideoRefinementPreview).filter_by(id=preview_id, task_id=task.id, tenant_id=auth.tenant_id).with_for_update().first()
     if not preview:
         raise HTTPException(404, "精修预览不存在")
-    existing = db.query(VideoRefinementVersion).filter_by(preview_id=preview.id).first()
+    existing = db.query(EcommerceVideoRefinementVersion).filter_by(preview_id=preview.id).first()
     if existing:
         return _serialize(db, task)
     plan = _current_plan(db, task)
@@ -432,16 +452,13 @@ async def accept_preview(task_id: int, preview_id: int, payload: PreviewInput, d
         raise HTTPException(409, str(exc)) from exc
     if not preview.validation_json.get("passed") or not preview.recipe_json:
         raise HTTPException(409, "预览未通过媒体检查")
-    source = db.get(VideoAsset, task.source_asset_id)
-    parent = db.query(VideoRefinementVersion).filter_by(output_asset_id=source.id, tenant_id=task.tenant_id).first()
+    source = db.get(EcommerceVideoAsset, task.source_asset_id)
+    parent = db.query(EcommerceVideoRefinementVersion).filter_by(output_asset_id=source.id, tenant_id=task.tenant_id).first()
     number = (parent.version if parent else 1) + 1
     metadata = preview.validation_json
-    material_ids = [row["public_asset_id"] for row in snapshot.snapshot_json["material_catalog"] if row["asset_id"] in used]
-    depth = source.generation_depth + 1
-    asset = VideoAsset(tenant_id=task.tenant_id, product_id=task.product_id, project_id=source.project_id,
+    asset = EcommerceVideoAsset(tenant_id=task.tenant_id, product_id=task.product_id,
         asset_id=f"asset-{uuid.uuid4().hex[:12]}", filename=f"{Path(source.filename).stem}-精修V{number}.mp4",
-        source="video_refinement_output", library_type="finished", asset_kind="final_output", generation_depth=depth,
-        origin_asset_ids=[source.asset_id, *material_ids], reusable_status="blocked" if depth > 1 else "review_required",
+        source="video_refinement_output", library_type="finished", asset_kind="final_output", reusable_status="blocked",
         burned_subtitles=metadata["burned_subtitles"], has_background_music=metadata["has_background_music"],
         object_url=preview.output_url, storage_provider=preview.storage_provider, content_hash=preview.output_hash,
         duration_seconds=metadata["duration_seconds"], width=metadata["width"], height=metadata["height"], fps=metadata["fps"],
@@ -470,14 +487,14 @@ async def accept_preview(task_id: int, preview_id: int, payload: PreviewInput, d
             source_id = segment["video_asset_id"]
             source_end = start+duration
         target_end = cursor+duration if precise or index < len(segments)-1 else asset.duration_seconds
-        db.add(VideoLineageSegment(tenant_id=task.tenant_id, source_asset_id=source_id,
+        db.add(EcommerceVideoLineageSegment(tenant_id=task.tenant_id, source_asset_id=source_id,
             target_asset_id=asset.id,plan_version_id=plan.id,variant_id=f"refinement-{task.id}-r{plan.revision}",
             segment_index=index,source_start=start,source_end=source_end,target_start=cursor,target_end=target_end,created_at=asset.created_at))
         cursor = target_end
-    from app.services.video_taxonomy import inherit_public_tags_to_final
-    source_assets = db.query(VideoAsset).filter(VideoAsset.tenant_id==task.tenant_id, VideoAsset.id.in_([source.id,*used])).all()
+    from app.services.ecommerce_video_taxonomy import inherit_public_tags_to_final
+    source_assets = db.query(EcommerceVideoAsset).filter(EcommerceVideoAsset.tenant_id==task.tenant_id, EcommerceVideoAsset.id.in_([source.id,*used])).all()
     inherit_public_tags_to_final(db, asset, source_assets, auth.user_id)
-    db.add(VideoRefinementVersion(tenant_id=task.tenant_id, task_id=task.id, preview_id=preview.id,
+    db.add(EcommerceVideoRefinementVersion(tenant_id=task.tenant_id, task_id=task.id, preview_id=preview.id,
         parent_asset_id=source.id, output_asset_id=asset.id, source_snapshot_id=snapshot.id, plan_id=plan.id,
         version=number, accepted_by=auth.user_id))
     preview.status = "accepted"
@@ -509,8 +526,8 @@ def list_materials(task_id: int, cursor: str | None = None, search: str = Query(
 
 
 def _invalidate_jobs(db,task):
-    db.query(VideoRefinementPreview).filter(VideoRefinementPreview.task_id==task.id,VideoRefinementPreview.status!="accepted").update({"status":"superseded"},synchronize_session=False)
-    db.query(VideoRefinementAnalysisJob).filter(VideoRefinementAnalysisJob.task_id==task.id,VideoRefinementAnalysisJob.status.in_(["queued","analyzing","queued_v3","analyzing_v3"])).update({"status":"superseded"},synchronize_session=False)
+    db.query(EcommerceVideoRefinementPreview).filter(EcommerceVideoRefinementPreview.task_id==task.id,EcommerceVideoRefinementPreview.status!="accepted").update({"status":"superseded"},synchronize_session=False)
+    db.query(EcommerceVideoRefinementAnalysisJob).filter(EcommerceVideoRefinementAnalysisJob.task_id==task.id,EcommerceVideoRefinementAnalysisJob.status.in_(["queued","analyzing","queued_v3","analyzing_v3"])).update({"status":"superseded"},synchronize_session=False)
 
 
 @router.post("/{task_id}/materials/refresh")
@@ -519,9 +536,9 @@ def refresh_materials(task_id: int, payload: RevisionInput, db: Session = Depend
     task = _get_task(db,auth,task_id)
     _validate_source(db,task)
     original = _snapshot(db,task).snapshot_json
-    source = db.get(VideoAsset,task.source_asset_id)
-    product = db.query(Product).filter_by(id=task.product_id,tenant_id=task.tenant_id).one()
-    materials = list(db.query(VideoAsset).filter_by(tenant_id=task.tenant_id,product_id=task.product_id,asset_kind="material").order_by(VideoAsset.id).yield_per(200))
+    source = db.get(EcommerceVideoAsset,task.source_asset_id)
+    product = db.query(EcommerceProduct).filter_by(id=task.product_id,tenant_id=task.tenant_id).one()
+    materials = list(db.query(EcommerceVideoAsset).filter_by(tenant_id=task.tenant_id,product_id=task.product_id,library_type="finished",asset_kind="material").filter(EcommerceVideoAsset.id != source.id).order_by(EcommerceVideoAsset.id).yield_per(200))
     snapshot = build_snapshot(db,source,product,materials)
     snapshot["source"] = deepcopy(original["source"])
     snapshot["tenant_id"] = task.tenant_id
@@ -531,7 +548,7 @@ def refresh_materials(task_id: int, payload: RevisionInput, db: Session = Depend
     options.pop("accept_partial_evaluation", None)
     _cas(db,task,payload.revision,{"current_revision":payload.revision+1,"confirmed_revision":None,"status":"CREATED"})
     _invalidate_jobs(db,task)
-    db.add(VideoRefinementRequest(tenant_id=task.tenant_id,task_id=task.id,revision=payload.revision+1,snapshot_json=snapshot,snapshot_hash=content_hash(snapshot),options_json=options))
+    db.add(EcommerceVideoRefinementRequest(tenant_id=task.tenant_id,task_id=task.id,revision=payload.revision+1,snapshot_json=snapshot,snapshot_hash=content_hash(snapshot),options_json=options))
     db.commit();db.refresh(task)
     return _serialize(db,task)
 
@@ -548,7 +565,7 @@ def update_requirements(task_id: int, payload: RequirementsInput, db: Session = 
     previous = _current_plan(db,task)
     requirements = previous.plan_json.get("requirements_resolution",[]) if previous else []
     if not requirements:
-        last = db.query(VideoRefinementAnalysisJob).filter_by(task_id=task.id,tenant_id=task.tenant_id).order_by(VideoRefinementAnalysisJob.id.desc()).first()
+        last = db.query(EcommerceVideoRefinementAnalysisJob).filter_by(task_id=task.id,tenant_id=task.tenant_id).order_by(EcommerceVideoRefinementAnalysisJob.id.desc()).first()
         requirements = (last.result_json or {}).get("requirements_resolution",[]) if last else []
     known = {r["requirement_id"] for r in requirements}
     for decision in payload.decisions:
@@ -572,12 +589,16 @@ def update_requirements(task_id: int, payload: RequirementsInput, db: Session = 
         options["duration_preference"] = payload.duration_preference
     if "target_duration_ms" in payload.model_fields_set:
         options["target_duration_ms"] = payload.target_duration_ms
+    if "tts_speaker" in payload.model_fields_set:
+        options["tts_speaker"] = payload.tts_speaker
+    _validate_duration_target(options.get("duration_preference", "ai_recommend"),
+                              options.get("target_duration_ms"), snapshot["source"]["duration_ms"])
     values = {"current_revision":payload.revision+1,"confirmed_revision":None,"status":"CREATED"}
     if payload.user_brief is not None:
         values["user_brief"] = payload.user_brief
     _cas(db,task,payload.revision,values)
     _invalidate_jobs(db,task)
-    db.add(VideoRefinementRequest(tenant_id=task.tenant_id,task_id=task.id,revision=payload.revision+1,snapshot_json=deepcopy(snapshot),snapshot_hash=content_hash(snapshot),options_json=options))
+    db.add(EcommerceVideoRefinementRequest(tenant_id=task.tenant_id,task_id=task.id,revision=payload.revision+1,snapshot_json=deepcopy(snapshot),snapshot_hash=content_hash(snapshot),options_json=options))
     db.commit();db.refresh(task)
     return _serialize(db,task)
 
@@ -604,18 +625,42 @@ def create_voiceover(task_id: int, payload: VoiceoverInput, db: Session = Depend
     verify_goal_constraints(task.user_brief,task.expected_result,plan.plan_json.get("requirements_resolution",[]),plan.plan_json["items"],constraint_blockers)
     if constraint_blockers or any(block["code"] in {"REQUIREMENT_CONSTRAINT_VIOLATION", "GOAL_CONSTRAINT_VIOLATION"} for block in plan.plan_json["execution_blockers"]):
         raise HTTPException(422,"当前方案违反明确限制, 请先调整目标或方案再生成配音")
-    parameters = voiceover_parameters()
+    from app.services.refinement_speakers import cached_source_selection, manual_selection, select_source_voice, valid_selection
+    from app.services.refinement_queue import require_refinement_worker
+    manual_speaker = item.get("tts_speaker") or _options(db,task).get("tts_speaker")
+    if manual_speaker:
+        selection = manual_selection(manual_speaker)
+    else:
+        context = plan.plan_json.get("analysis",{}).get("context") or _snapshot(db,task).snapshot_json
+        scripts = [row["script"] for row in plan.plan_json["items"] if row["enabled"] and row["narration_strategy"] == "tts" and not row.get("tts_speaker")]
+        cached = cached_source_selection(db,task,context,task.user_brief,task.expected_result,scripts,
+                                         cached=plan.plan_json.get("analysis",{}).get("voice_selection"))
+        if not valid_selection(cached,context,task.user_brief,task.expected_result,scripts):
+            require_refinement_worker()
+        try:
+            selection = asyncio.run(select_source_voice(context,task.user_brief,task.expected_result,
+                                                        scripts=scripts,cached=cached))
+        except ValueError as exc:
+            raise HTTPException(422,str(exc)) from exc
+        # Source matching may take time; never publish for a changed draft.
+        db.refresh(task)
+        current = _current_plan(db,task)
+        if task.current_revision != payload.revision or task.status not in EDITABLE or not current or current.plan_hash != payload.plan_hash:
+            raise HTTPException(409,"选声期间草稿已变化, 请刷新后重新生成配音")
+    parameters = voiceover_parameters(selection["speaker"],selection=selection)
     fingerprint = voiceover_fingerprint(item["script"],parameters)
-    job = db.query(VideoRefinementVoiceover).filter_by(tenant_id=task.tenant_id,task_id=task.id,fingerprint=fingerprint).first()
+    job = db.query(EcommerceVideoRefinementVoiceover).filter_by(tenant_id=task.tenant_id,task_id=task.id,fingerprint=fingerprint).first()
+    if job:
+        job.parameters_json = parameters
     if not job or job.status in {"failed", "superseded", "queued", "queued_v3"}:
         from app.services.refinement_queue import require_refinement_worker
         require_refinement_worker()
     if not job:
-        db.add(VideoRefinementVoiceover(tenant_id=task.tenant_id,task_id=task.id,revision=payload.revision,item_id=item["item_id"],fingerprint=fingerprint,script=item["script"].strip(),parameters_json=parameters,status="queued_v3"))
+        db.add(EcommerceVideoRefinementVoiceover(tenant_id=task.tenant_id,task_id=task.id,revision=payload.revision,item_id=item["item_id"],fingerprint=fingerprint,script=item["script"].strip(),parameters_json=parameters,status="queued_v3"))
     elif job.status in {"failed", "superseded"}:
         job.status="queued_v3";job.error_message="";job.completed_at=None;job.revision=payload.revision
     elif job.status in {"queued", "queued_v3"}:
-        db.query(VideoRefinementVoiceover).filter_by(id=job.id,status=job.status).update({"revision":payload.revision,"status":"queued_v3"},synchronize_session=False)
+        db.query(EcommerceVideoRefinementVoiceover).filter_by(id=job.id,status=job.status).update({"revision":payload.revision,"status":"queued_v3"},synchronize_session=False)
     if job and job.status == "ready" and plan.plan_json["schema_version"] == "video_refinement_plan.v3":
         from app.services.refinement_voiceover import ensure_sample_metadata
         try:
@@ -640,7 +685,7 @@ def list_voiceovers(task_id: int, db: Session = Depends(get_db), auth: AuthConte
 def get_voiceover(task_id: int, voiceover_id: int, db: Session = Depends(get_db), auth: AuthContext = Depends(current_auth)):
     from app.services.refinement_voiceover import serialize_voiceover
     task = _get_task(db,auth,task_id)
-    row = db.query(VideoRefinementVoiceover).filter_by(id=voiceover_id,task_id=task.id,tenant_id=task.tenant_id).first()
+    row = db.query(EcommerceVideoRefinementVoiceover).filter_by(id=voiceover_id,task_id=task.id,tenant_id=task.tenant_id).first()
     if not row:
         raise HTTPException(404,"配音作业不存在")
     return serialize_voiceover(row)

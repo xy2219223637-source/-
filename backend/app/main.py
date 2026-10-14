@@ -96,9 +96,13 @@ def on_startup() -> None:
         recover_startup_tasks()
     if settings.run_background_workers:
         start_worker()
-        start_video_analysis_worker()
         start_qianchuan_worker()
         start_video_repair_worker()
+    if settings.run_background_workers or settings.ecommerce_video_analysis_worker_enabled:
+        start_video_analysis_worker(
+            include_legacy=settings.run_background_workers,
+            include_ecommerce=settings.ecommerce_video_analysis_worker_enabled,
+        )
     if settings.refinement_worker_enabled:
         start_refinement_worker()
     else:

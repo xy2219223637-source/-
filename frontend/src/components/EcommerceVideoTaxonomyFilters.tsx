@@ -21,7 +21,7 @@ function numberList(value:unknown):number[]{
   return Array.isArray(value)?value.filter((item):item is number=>typeof item==='number'):[];
 }
 
-export function matchesVideoTaxonomy(asset:VideoLibraryAsset,catalog:VideoTaxonomyCatalog,value:VideoTaxonomyFilterValue){
+export function matchesVideoTaxonomy(asset:Pick<VideoLibraryAsset,'category_id'|'category'|'taxonomy_tags'>,catalog:VideoTaxonomyCatalog,value:VideoTaxonomyFilterValue){
   if(value.categoryId!==null){
     const selected=catalog.categories.find(item=>item.id===value.categoryId);
     if(!selected)return false;

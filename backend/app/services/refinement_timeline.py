@@ -65,8 +65,10 @@ def compile_timeline(snapshot, items, brief, expected, *, manual, requirements, 
         if not row["script"].strip():
             block(row, "SCRIPT_REQUIRED", "请填写新增或改写的完整台词")
             return None
-        if not voice or voice["status"] != "ready" or voice["fingerprint"] != voiceover_fingerprint(row["script"], voice["parameters"]):
-            block(row, "VOICEOVER_REQUIRED", "请先生成并绑定与当前台词一致的局部配音")
+        if (not voice or voice["status"] != "ready" or voice["fingerprint"] != voiceover_fingerprint(row["script"], voice["parameters"])
+                or (row.get("tts_speaker") or options.get("tts_speaker"))
+                and (row.get("tts_speaker") or options.get("tts_speaker")) != voice["parameters"].get("speaker")):
+            block(row, "VOICEOVER_REQUIRED", "请先生成并绑定与当前台词及所选音色一致的局部配音")
             return None
         display_ms = 0
         if options.get("authorization_version") and row["type"] == "SEGMENT_INSERT":
@@ -84,7 +86,7 @@ def compile_timeline(snapshot, items, brief, expected, *, manual, requirements, 
             block(row, "VOICEOVER_DURATION", "配音实测时长与画面不匹配, 请调整台词或素材选段; 句间留白需明确说明")
         if row["subtitle_strategy"] == "regenerate" and not voice.get("timing", {}).get("segments"):
             block(row, "SUBTITLE_ALIGNMENT", "配音缺少可信字幕时间, 请重新对齐或明确选择不生成字幕")
-        row["risk"] = (row["risk"] + "; 局部配音使用默认女声, 请核对与原声及音乐的衔接").strip("; ")[:2000]
+        row["risk"] = (row["risk"] + "; 局部配音使用适配或手动选择的中文音色, 请试听核对与原声及音乐的衔接").strip("; ")[:2000]
         return voice
 
     for item in items:

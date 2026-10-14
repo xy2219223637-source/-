@@ -89,7 +89,7 @@ def current_auth(request: Request, credentials: Optional[HTTPAuthorizationCreden
             ("/api/knowledge", "knowledge.access"), ("/api/brand-visuals", "brand_visuals.access"),
             ("/api/design-skills", "design_skills.access"), ("/api/creative-projects", "creative_projects.access"),
             ("/api/detail-page-templates", "creative_projects.access"), ("/api/video-assets", "finished_assets.access"),
-            ("/api/video-refinements", "final_videos.access"),
+            ("/api/video-refinements", "ecommerce_assets.access"),
             ("/api/director-projects", "director.access"),
         )
         required = next((code for prefix, code in route_permissions if path.startswith(prefix)), None)

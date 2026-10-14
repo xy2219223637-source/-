@@ -4,7 +4,7 @@ import {ecommerceVideoTaxonomyApi} from '../api/client';
 import type {VideoLibraryAsset,VideoObjectType,VideoTagAssignment,VideoTaxonomyCatalog,VideoTaxonomyTag} from '../types';
 
 type SummaryProps={
-  asset:VideoLibraryAsset;
+  asset:Pick<VideoLibraryAsset,'category'|'public_tags'|'personal_tags'|'ai_tags'|'effective_tags'>;
   compact?:boolean;
   showAiTags?:boolean;
   onEdit?:()=>void;
