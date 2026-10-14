@@ -91,13 +91,15 @@ def compile_plan(snapshot: dict, items: list[RefinementItem], brief: str, expect
         if protocol == "v3":
             raise ValueError("精确时间协议需要真实媒体快照")
         return _compile_v1(snapshot, items, brief, expected_result, manual=manual)
+    from app.services.refinement_requirements import duration_options
+    options = duration_options(brief, expected_result, options, snapshot["source"]["duration_ms"], requirements=requirements)
     records, blockers = {}, []
     if options.get("authorization_version"):
         from app.services.refinement_authorization import apply_authorizations
         items = [item.model_copy(deep=True) for item in items]
         records, blockers = apply_authorizations(items, requirements or [], snapshot["source"]["duration_ms"],
                                                 brief=brief, expected=expected_result, manual=manual,
-                                                overrides=options.get("manual_permissions") if manual else None)
+                                                overrides=options.get("manual_permissions") if manual else None, options=options)
     if protocol == "v3":
         from app.services.refinement_precise import compile_precise
         result = compile_precise(snapshot, items, brief, expected_result, manual=manual,
@@ -139,5 +141,7 @@ def compile_plan(snapshot: dict, items: list[RefinementItem], brief: str, expect
                     result["execution_blockers"].append({"item_id":item.item_id,"code":"CONTENT_REVIEW_REQUIRED","category":"content", "message":"选段缺少可信局部核验或超出动作安全边界, 请重新定位素材"})
         result["local_selection"] = evidence
         result["requirements_resolution"] = verify_requirements(requirements or [], result["items"], result["execution_blockers"])
+    from app.services.refinement_requirements import verify_goal_constraints
+    verify_goal_constraints(brief, expected_result, requirements or [], result["items"], result["execution_blockers"])
     result["generation_policy"] = {key:options[key] for key in ("authorization_version", "timing_protocol", "localization", "content_reselection", "display_tail_ms", "policy_version") if key in options}
     return result

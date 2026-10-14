@@ -71,6 +71,7 @@ export interface MaterialSegment {asset_id: number; source_range: TimeRange; can
 export interface RefinementRequirement {
   requirement_id: string; text: string; request_quote?: string; reason: string; question: string; item_ids: string[];
   status: 'EXECUTABLE' | 'ALREADY_SATISFIED' | 'NEEDS_CLARIFICATION' | 'CONFLICT' | 'UNSUPPORTED' | 'AWAITING_MATERIAL';
+  planning_status?: RefinementRequirement['status']; planning_reason?: string; conflict_ids?: string[];
   decision: 'pending' | 'waived' | 'answered'; answer: string;
   execution_blockers?: RefinementBlocker[];
 }

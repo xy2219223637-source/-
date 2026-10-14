@@ -24,14 +24,36 @@ export function EvaluationProgress({task}: {task: VideoRefinementTask}) {
 
 export function RequirementPanel({task, disabled, action}: {task: VideoRefinementTask; disabled: boolean; action: Action}) {
   const [answers,setAnswers]=useState<Record<string,string>>({});
-  const rows=(task.plan?.requirements_resolution||[]).filter(row=>row.decision!=='waived'&&!['EXECUTABLE','ALREADY_SATISFIED'].includes(row.status)&&(row.status!=='AWAITING_MATERIAL'||!!row.question?.trim()));
+  const rows=(task.plan?.requirements_resolution||[]).filter(row=>row.decision!=='waived'&&['NEEDS_CLARIFICATION','CONFLICT','AWAITING_MATERIAL'].includes(row.planning_status||row.status)&&!!row.question?.trim());
   if(!rows.length)return null;
-  async function decide(id: string, decision: 'answered'|'waived') {
-    await action('requirements',async()=>{const next=await videoRefinementApi.requirements(task.id,{revision:task.current_revision,decisions:[{requirement_id:id,decision,answer:answers[id]||''}]});return videoRefinementApi.autoPreview(task.id,next.current_revision)});
+  type RequirementRow = typeof rows[number];
+  const groups: RequirementRow[][]=[];
+  const remaining=new Set<RequirementRow>(rows);
+  for(const row of rows){
+    if(!remaining.delete(row))continue;
+    const group: RequirementRow[]=[row];
+    if(row.status==='CONFLICT'){
+      // Expand connected conflicts only when one answer resolves the same question.
+      for(let i=0;i<group.length;i++)for(const candidate of remaining){
+        const member=group[i];
+        if(candidate.status==='CONFLICT'&&candidate.reason.trim()===row.reason.trim()&&candidate.question.trim()===row.question.trim()&&
+          (member.conflict_ids?.includes(candidate.requirement_id)||candidate.conflict_ids?.includes(member.requirement_id))){
+          group.push(candidate);remaining.delete(candidate);
+        }
+      }
+    }
+    groups.push(group);
   }
-  return <section className="refine-requirements" aria-label="需要补充或确认的要求"><h3>需要您补充或确认</h3>{rows.map(row=><div key={row.requirement_id} className="refine-requirement"><div><strong>{row.text}</strong><span className="refine-status">{requirementLabels[row.status]}</span></div><p>{row.reason}</p>
-    <p>{row.question||'请补充影响执行的必要信息.'}</p><label className="field">对此要求的回答<input value={answers[row.requirement_id]||''} maxLength={2000} onChange={e=>setAnswers(current=>({...current,[row.requirement_id]:e.target.value}))}/></label><div className="refine-inline-actions"><button className="btn-secondary" disabled={disabled||!answers[row.requirement_id]?.trim()} onClick={()=>decide(row.requirement_id,'answered')}>保存回答并重新规划</button><button className="refine-text-button" disabled={disabled} onClick={()=>decide(row.requirement_id,'waived')}>放弃这条要求并重新规划</button></div>
-  </div>)}</section>;
+  async function decide(ids: string[], decision: 'answered'|'waived', answerId: string) {
+    await action('requirements',async()=>{const next=await videoRefinementApi.requirements(task.id,{revision:task.current_revision,decisions:ids.map(requirement_id=>({requirement_id,decision,answer:decision==='answered'?answers[answerId]||'':''}))});return videoRefinementApi.autoPreview(task.id,next.current_revision)});
+  }
+  return <section className="refine-requirements" aria-label="需要补充或确认的要求"><h3>需要您补充或确认</h3>{groups.map(group=>{
+    const row=group[0];
+    const grouped=group.length>1;
+    return <div key={row.requirement_id} className="refine-requirement"><div><strong>{grouped?'涉及以下要求':row.text}</strong><span className="refine-status">{requirementLabels[row.status]}</span></div>{grouped&&<ul>{group.map(member=><li key={member.requirement_id}>{member.text}</li>)}</ul>}<p>{row.reason}</p>
+      <p>{row.question}</p><label className="field">{grouped?'对此冲突的回答':'对此要求的回答'}<input disabled={disabled} value={answers[row.requirement_id]||''} maxLength={2000} onChange={e=>setAnswers(current=>({...current,[row.requirement_id]:e.target.value}))}/></label><div className="refine-inline-actions"><button className="btn-secondary" disabled={disabled||!answers[row.requirement_id]?.trim()} onClick={()=>decide(group.map(member=>member.requirement_id),'answered',row.requirement_id)}>保存回答并重新规划</button>{group.map(member=><button key={member.requirement_id} className="refine-text-button" disabled={disabled} onClick={()=>decide([member.requirement_id],'waived',row.requirement_id)}>{grouped?`放弃要求: ${member.text}`:'放弃这条要求并重新规划'}</button>)}</div>
+    </div>;
+  })}</section>;
 }
 
 export function GoalEditor({task,disabled,action}: {task: VideoRefinementTask; disabled: boolean; action: Action}) {

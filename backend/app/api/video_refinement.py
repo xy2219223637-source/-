@@ -162,6 +162,8 @@ def _queue_analysis(db, task, revision, snapshot, options):
     job = db.query(VideoRefinementAnalysisJob).filter_by(task_id=task.id,revision=revision).first()
     if job and job.options_json.get("timing_protocol") == "v3":
         options.update({key:job.options_json[key] for key in ("timing_protocol", "authorization_version", "localization", "content_reselection", "display_tail_ms", "policy_version") if key in job.options_json})
+    from app.services.refinement_authorization import AUTHORIZATION_VERSION
+    options["authorization_version"] = AUTHORIZATION_VERSION
     queued_status = "queued_v3"
     if not job:
         job = VideoRefinementAnalysisJob(tenant_id=task.tenant_id,task_id=task.id,revision=revision,snapshot_json=snapshot,
@@ -597,6 +599,11 @@ def create_voiceover(task_id: int, payload: VoiceoverInput, db: Session = Depend
     authorization = plan.plan_json.get("edit_authorizations", {}).get(payload.item_id)
     if authorization is not None and not authorization.get("allow_narration"):
         raise HTTPException(422,"该编辑项没有生成配音的用户授权")
+    from app.services.refinement_requirements import verify_goal_constraints
+    constraint_blockers = []
+    verify_goal_constraints(task.user_brief,task.expected_result,plan.plan_json.get("requirements_resolution",[]),plan.plan_json["items"],constraint_blockers)
+    if constraint_blockers or any(block["code"] in {"REQUIREMENT_CONSTRAINT_VIOLATION", "GOAL_CONSTRAINT_VIOLATION"} for block in plan.plan_json["execution_blockers"]):
+        raise HTTPException(422,"当前方案违反明确限制, 请先调整目标或方案再生成配音")
     parameters = voiceover_parameters()
     fingerprint = voiceover_fingerprint(item["script"],parameters)
     job = db.query(VideoRefinementVoiceover).filter_by(tenant_id=task.tenant_id,task_id=task.id,fingerprint=fingerprint).first()

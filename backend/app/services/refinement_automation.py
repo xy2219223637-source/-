@@ -160,7 +160,7 @@ async def prepare_materials(client, context, items, candidates, stats, *, length
 
 def prepare_narration(db, task, plan, progress, *, checkpoint=None):
     from app.services.refinement_voiceover import ensure_sample_metadata,run_voiceover,voiceover_catalog,voiceover_fingerprint,voiceover_parameters
-    if any(block["code"] in {"EDIT_AUTHORIZATION_REQUIRED", "SOURCE_AUDIO_OFFSET", "SOURCE_AUDIO_DURATION"}
+    if any(block["code"] in {"EDIT_AUTHORIZATION_REQUIRED", "SOURCE_AUDIO_OFFSET", "SOURCE_AUDIO_DURATION", "REQUIREMENT_CONSTRAINT_VIOLATION", "GOAL_CONSTRAINT_VIOLATION", "REQUIREMENT_NOT_PLANNED", "UNREQUESTED_EDIT", "REQUIREMENT_UNRESOLVED"}
            or block["code"] == "AUDIO_METADATA_REQUIRED" and not block.get("item_id") for block in plan["execution_blockers"]):
         return plan
     started = monotonic()

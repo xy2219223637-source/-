@@ -29,8 +29,8 @@ class RefinementV2ApiTest(unittest.TestCase):
             analysis_json={"source_hash":self.material.content_hash,"summary":"同商品画面","highlights":[{"start":0,"end":2,"description":"商品展示"}]}))
         self.db.commit()
 
-    def create(self):
-        response=self.client.post("/api/video-refinements",json={"source_asset_id":self.source.id,"user_brief":"仅替换画面, 保留原配音","duration_preference":"preserve"})
+    def create(self, *, user_brief="仅替换画面, 保留原配音", duration_preference="preserve"):
+        response=self.client.post("/api/video-refinements",json={"source_asset_id":self.source.id,"user_brief":user_brief,"duration_preference":duration_preference})
         self.assertEqual(response.status_code,201,response.text)
         return response.json()
 
@@ -71,7 +71,7 @@ class RefinementV2ApiTest(unittest.TestCase):
 
     def test_unavailable_worker_rejects_preview_and_voiceover_creation(self):
         from app.models import VideoRefinementPreview
-        task = self.ready_plan(self.create())
+        task = self.ready_plan(self.create(user_brief="替换商品展示画面和口播"))
         payload = {"revision":0,"plan_hash":task["plan_hash"],"acknowledge_risks":True}
         response = self.client.post(f"/api/video-refinements/{task['id']}/plans/confirm",json=payload)
         self.assertEqual(response.status_code,200,response.text)
@@ -432,7 +432,7 @@ class RefinementV2ApiTest(unittest.TestCase):
         self.assertNotIn("accept_partial_evaluation",refreshed["options"])
 
     def test_voiceover_requests_are_idempotent_and_stale_drafts_are_rejected(self):
-        task=self.create()
+        task=self.create(user_brief="新增商品讲解口播",duration_preference="ai_recommend")
         edit=RefinementItem(item_id="insert",type="SEGMENT_INSERT",range={"start_ms":0,"end_ms":0},operation="新增段落",reason="新增内容",script="真实台词",narration_strategy="tts",boundary_reviewed=True,material_segments=[{"asset_id":self.material.id,"source_range":{"start_ms":0,"end_ms":4000}}])
         response=self.client.patch(f"/api/video-refinements/{task['id']}/draft",json={"revision":0,"items":[edit.model_dump()]})
         self.assertEqual(response.status_code,200,response.text)
@@ -445,6 +445,25 @@ class RefinementV2ApiTest(unittest.TestCase):
         self.assertEqual(self.client.get(f"/api/video-refinements/{task['id']}/voiceovers",headers={"x-test-tenant":"t2"}).status_code,404)
         request["revision"]=0
         self.assertEqual(self.client.post(f"/api/video-refinements/{task['id']}/voiceovers",json=request).status_code,409)
+
+    def test_old_plan_cannot_bypass_current_audio_constraints(self):
+        for brief, answer in (("仅替换画面, 保留原配音", ""), ("增加镜头, 不要重新配音", ""), ("增加镜头", "不要生成配音")):
+            with self.subTest(brief=brief,answer=answer):
+                task=self.ready_plan(self.create(user_brief=brief))
+                record=self.db.query(VideoRefinementPlan).filter_by(task_id=task["id"]).one()
+                plan=deepcopy(record.plan_json)
+                plan["items"][0].update(narration_strategy="tts",script="旧草稿台词")
+                plan["edit_authorizations"]={"visual":{"allow_narration":True}}
+                if answer:
+                    plan["requirements_resolution"]=[{"requirement_id":"req","text":"镜头展示","status":"EXECUTABLE","reason":"旧方案","item_ids":["visual"],"decision":"answered","answer":answer}]
+                self.assertFalse(plan["execution_blockers"])
+                record.plan_json=plan;record.plan_hash=content_hash(plan);self.db.commit()
+                with patch("app.services.refinement_queue.require_refinement_worker") as worker:
+                    response=self.client.post(f"/api/video-refinements/{task['id']}/voiceovers",json={"revision":0,"plan_hash":record.plan_hash,"item_id":"visual"})
+                self.assertEqual(response.status_code,422,response.text)
+                self.assertIn("违反明确限制",response.json()["detail"])
+                worker.assert_not_called()
+        self.assertEqual(self.db.query(VideoRefinementVoiceover).count(),0)
 
     def test_automatic_preview_is_idempotent_and_scoped_to_current_tenant_and_revision(self):
         task = self.create()
@@ -519,7 +538,7 @@ class RefinementV2ApiTest(unittest.TestCase):
     def test_automatic_narration_binds_measured_audio_and_reuses_the_same_asset(self):
         from app.models import VideoRefinementTask
         from app.services.refinement_automation import prepare_narration
-        task_data = self.create();task = self.db.get(VideoRefinementTask,task_data["id"])
+        task_data = self.create(user_brief="新增商品讲解口播",duration_preference="ai_recommend");task = self.db.get(VideoRefinementTask,task_data["id"])
         context = deepcopy(task_data["source_snapshot"])
         context["material_evaluation"] = {"complete":True,"records":[{"asset_id":self.material.id,"status":"evaluated","score":100,
             "batches":[{"segments":[{"start_ms":0,"end_ms":5000}]}]}]}
@@ -527,7 +546,7 @@ class RefinementV2ApiTest(unittest.TestCase):
             operation="补充画面",reason="展示商品",script="真实补充台词",narration_strategy="tts",subtitle_strategy="regenerate",
             material_segments=[{"asset_id":self.material.id,"source_range":{"start_ms":0,"end_ms":2000}}],requirement_ids=["req"])
         plan = compile_plan(context,[edit],task.user_brief,"",manual=False,
-            requirements=[{"requirement_id":"req","text":"商品展示","status":"EXECUTABLE","reason":"商品画面需要补充","item_ids":[]}])
+            requirements=[{"requirement_id":"req","text":"新增商品讲解口播","request_quote":"新增商品讲解口播","status":"EXECUTABLE","reason":"商品画面需要补充","item_ids":[]}])
         plan["analysis"] = {"context":context};plan["automation_options"] = {"auto_preview":True,"accept_partial_evaluation":True}
         def generate(voice_id):
             row = self.db.get(VideoRefinementVoiceover,voice_id)
