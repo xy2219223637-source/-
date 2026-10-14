@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+from copy import deepcopy
 from datetime import datetime
 import logging
 from pathlib import Path
@@ -69,18 +70,21 @@ def run_preview(preview_id: int) -> None:
             snapshot = _snapshot(db, task).snapshot_json
             from app.services.refinement_voiceover import validate_voiceovers
             validate_voiceovers(db,task,plan.plan_json)
-            with tempfile.TemporaryDirectory(prefix=f"refinement-preview-{preview.id}-") as directory:
+            frozen_plan = deepcopy(plan.plan_json)
+            task_id, revision = task.id, preview.revision
+            db.commit()
+            with tempfile.TemporaryDirectory(prefix=f"refinement-preview-{preview_id}-") as directory:
                 output = Path(directory) / "preview.mp4"
-                validation, recipe = render_preview(snapshot, plan.plan_json, output)
+                validation, recipe = render_preview(snapshot, frozen_plan, output)
                 # Recheck file bytes after rendering; a metadata-only comparison is insufficient.
-                verified_path(verified_asset(snapshot["source"],plan.plan_json))
-                used = used_material_ids(plan.plan_json)
+                verified_path(verified_asset(snapshot["source"],frozen_plan))
+                used = used_material_ids(frozen_plan)
                 for material in snapshot["material_catalog"]:
                     if material["asset_id"] in used:
-                        verified_path(verified_asset(material,plan.plan_json))
+                        verified_path(verified_asset(material,frozen_plan))
                 storage = get_storage_by_name(snapshot["source"].get("storage_provider", "aliyun_oss"))
                 output_hash = file_hash(output)
-                uploaded = asyncio.run(storage.upload_path(output, f"preview-r{preview.revision}.mp4", f"ecommerce-refinements/{task.id}/previews"))
+                uploaded = asyncio.run(storage.upload_path(output, f"preview-r{revision}.mp4", f"ecommerce-refinements/{task_id}/previews"))
             db.refresh(task)
             db.refresh(preview)
             _validate_source(db, task)
@@ -185,30 +189,48 @@ def run_analysis(job_id):
         job = db.get(EcommerceVideoRefinementAnalysisJob,job_id)
         attempt = job.attempts
         task = db.get(EcommerceVideoRefinementTask,job.task_id)
+        revision, task_id = job.revision, job.task_id
+        snapshot, options = deepcopy(job.snapshot_json), deepcopy(job.options_json)
+        saved_batches, saved_stats = deepcopy(job.batches_json), deepcopy(job.progress_json)
         def progress(batches,stats):
-            db.refresh(task);db.refresh(job)
-            if task.current_revision != job.revision or task.status not in EDITABLE or job.status != analyzing_status or job.attempts != attempt:
-                raise AnalysisSuperseded()
-            job.batches_json=batches;job.progress_json=dict(stats)
-            db.commit()
+            nonlocal saved_batches, saved_stats
+            with SessionLocal() as checkpoint_db:
+                active = checkpoint_db.query(EcommerceVideoRefinementTask.id).filter(
+                    EcommerceVideoRefinementTask.id == task_id,
+                    EcommerceVideoRefinementTask.current_revision == revision,
+                    EcommerceVideoRefinementTask.status.in_(EDITABLE),
+                ).exists()
+                updated = checkpoint_db.query(EcommerceVideoRefinementAnalysisJob).filter(
+                    EcommerceVideoRefinementAnalysisJob.id == job_id,
+                    EcommerceVideoRefinementAnalysisJob.status == analyzing_status,
+                    EcommerceVideoRefinementAnalysisJob.attempts == attempt, active,
+                ).update({"batches_json":batches,"progress_json":dict(stats)},synchronize_session=False)
+                checkpoint_db.commit()
+                if not updated:
+                    raise AnalysisSuperseded()
+            saved_batches, saved_stats = deepcopy(batches), dict(stats)
         try:
             if not task or task.current_revision!=job.revision or task.status not in EDITABLE:
                 raise AnalysisSuperseded()
             _validate_source(db,task)
-            plan = asyncio.run(analyze_source(job.snapshot_json,task.focus,task.user_brief,task.expected_result,
-                               options=job.options_json,progress=progress,batches=job.batches_json))
-            if job.options_json.get("auto_preview"):
+            # 读取输入后释放连接；AI 请求期间只通过短事务保存检查点。
+            db.close()
+            plan = asyncio.run(analyze_source(snapshot,task.focus,task.user_brief,task.expected_result,
+                               options=options,progress=progress,batches=saved_batches))
+            if options.get("auto_preview"):
                 from app.services.refinement_automation import prepare_narration
                 def stage(name):
-                    progress(job.batches_json,{**job.progress_json,"stage":name})
+                    progress(saved_batches,{**saved_stats,"stage":name})
                 def checkpoint(context):
                     from copy import deepcopy
                     from app.services.refinement_selection import checkpoint_key
                     key = checkpoint_key(context, task.user_brief, task.expected_result)
                     saved = {field:deepcopy(context.get(field, {})) for field in ("localization_cache", "local_candidates")}
-                    progress({**job.batches_json,key:saved},{**job.progress_json,**context.get("material_evaluation", {}),"stage":"localizing"})
+                    progress({**saved_batches,key:saved},{**saved_stats,**context.get("material_evaluation", {}),"stage":"localizing"})
                 plan = prepare_narration(db,task,plan,stage,checkpoint=checkpoint)
-            db.refresh(task);db.refresh(job)
+            db.close()
+            task = db.get(EcommerceVideoRefinementTask,task_id)
+            job = db.get(EcommerceVideoRefinementAnalysisJob,job_id)
             if job.status!=analyzing_status or job.attempts!=attempt or task.current_revision!=job.revision:
                 raise AnalysisSuperseded()
             _validate_source(db,task)

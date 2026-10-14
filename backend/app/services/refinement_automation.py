@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 from copy import deepcopy
 from time import monotonic
+from types import SimpleNamespace
 
 from app.config import get_settings
 from app.models import EcommerceVideoRefinementVoiceover
@@ -163,6 +164,7 @@ def prepare_narration(db, task, plan, progress, *, checkpoint=None):
     if any(block["code"] in {"EDIT_AUTHORIZATION_REQUIRED", "SOURCE_AUDIO_OFFSET", "SOURCE_AUDIO_DURATION", "REQUIREMENT_CONSTRAINT_VIOLATION", "GOAL_CONSTRAINT_VIOLATION", "REQUIREMENT_NOT_PLANNED", "UNREQUESTED_EDIT", "REQUIREMENT_UNRESOLVED"}
            or block["code"] == "AUDIO_METADATA_REQUIRED" and not block.get("item_id") for block in plan["execution_blockers"]):
         return plan
+    task = SimpleNamespace(**{key:getattr(task,key) for key in ("id", "tenant_id", "current_revision", "user_brief", "expected_result")})
     started = monotonic()
     options = plan.get("automation_options", {})
     precise = options.get("timing_protocol") == "v3"
@@ -179,6 +181,7 @@ def prepare_narration(db, task, plan, progress, *, checkpoint=None):
             raise ValueError("AI 没有生成补充段的完整台词, 请重试生成方案")
         progress("voice_matching")
         selection = cached_source_selection(db,task,context,task.user_brief,task.expected_result,scripts,cached=selection)
+        db.commit()
         selection = asyncio.run(select_source_voice(context,task.user_brief,task.expected_result,scripts=scripts,cached=selection))
     lengths = {}
     frame_budgets = {}
@@ -247,12 +250,14 @@ def prepare_narration(db, task, plan, progress, *, checkpoint=None):
             lengths[item.item_id] = ms_at_frame(frames, fps)
             if item.type == "SEGMENT_INSERT":
                 item.duration_delta_ms = lengths[item.item_id]
+    ready_voices = voiceover_catalog(db,task)
+    db.commit()
     progress("fitting")
     adjustments = asyncio.run(prepare_materials(LLMClient(),context,items,plan_candidates(context),context["material_evaluation"],
                                               lengths=lengths,frame_budgets=frame_budgets, progress=progress, options=options, checkpoint=checkpoint))
     result = compile_plan(context,items,task.user_brief,task.expected_result,manual=False,
                           requirements=plan.get("requirements_resolution",[]),options=plan.get("automation_options",{}),
-                          voiceovers=voiceover_catalog(db,task))
+                          voiceovers=ready_voices)
     result["analysis"] = {**plan["analysis"],"context":context}
     if automatic_items:
         result["analysis"]["voice_selection"] = selection

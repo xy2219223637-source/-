@@ -8,7 +8,7 @@ import uuid
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, load_only
 
 from app.auth import AuthContext, current_auth
 from app.database import get_db
@@ -63,8 +63,12 @@ def _serialize(db: Session, task: EcommerceVideoRefinementTask) -> dict:
     version = db.query(EcommerceVideoRefinementVersion).filter_by(task_id=task.id, tenant_id=task.tenant_id).first()
     from app.services.refinement_voiceover import serialize_voiceover
     from app.services.refinement_queue import refinement_worker_state
-    job = db.query(EcommerceVideoRefinementAnalysisJob).filter_by(task_id=task.id,tenant_id=task.tenant_id).order_by(EcommerceVideoRefinementAnalysisJob.id.desc()).first()
-    analysis = {"id":job.id,"revision":job.revision,"status":job.status.removesuffix("_v3"),"progress":job.progress_json,"error_message":job.error_message,
+    job_type = EcommerceVideoRefinementAnalysisJob
+    job = db.query(job_type).options(load_only(
+        job_type.id, job_type.revision, job_type.status, job_type.progress_json,
+        job_type.error_message, job_type.created_at, job_type.started_at,
+    )).filter_by(task_id=task.id,tenant_id=task.tenant_id).order_by(job_type.id.desc()).first()
+    analysis = {"id":job.id,"revision":job.revision,"status":job.status.removesuffix("_v3"),"progress":{k:v for k,v in job.progress_json.items() if k != "records"},"error_message":job.error_message,
                 "created_at":job.created_at.replace(tzinfo=timezone.utc).isoformat(),
                 "started_at":job.started_at.replace(tzinfo=timezone.utc).isoformat() if job.started_at else None,
                 "queue_wait_seconds":max(0,int(((job.started_at or datetime.utcnow())-job.created_at).total_seconds()))} if job else None
@@ -166,8 +170,8 @@ def _queue_analysis(db, task, revision, snapshot, options):
     job = db.query(EcommerceVideoRefinementAnalysisJob).filter_by(task_id=task.id,revision=revision).first()
     if job and job.options_json.get("timing_protocol") == "v3":
         options.update({key:job.options_json[key] for key in ("timing_protocol", "authorization_version", "localization", "content_reselection", "display_tail_ms", "policy_version") if key in job.options_json})
-    from app.services.refinement_authorization import AUTHORIZATION_VERSION
-    options["authorization_version"] = AUTHORIZATION_VERSION
+    policy = generation_policy(task.tenant_id)
+    options.update({key:policy[key] for key in ("authorization_version", "policy_version")})
     queued_status = "queued_v3"
     if not job:
         job = EcommerceVideoRefinementAnalysisJob(tenant_id=task.tenant_id,task_id=task.id,revision=revision,snapshot_json=snapshot,
@@ -191,8 +195,16 @@ def _queue_analysis(db, task, revision, snapshot, options):
 
 @router.get("")
 def list_refinements(db: Session = Depends(get_db), auth: AuthContext = Depends(current_auth)):
-    tasks = db.query(EcommerceVideoRefinementTask).filter_by(tenant_id=auth.tenant_id).order_by(EcommerceVideoRefinementTask.updated_at.desc()).limit(100).all()
-    return [_serialize(db, task) for task in tasks]
+    task = EcommerceVideoRefinementTask
+    # Project list fields only; full snapshots and plans belong to the detail API.
+    rows = db.query(
+        task.id, task.source_snapshot["filename"].as_string().label("source_filename"),
+        task.user_brief, task.status, task.current_revision, task.created_at, task.updated_at,
+    ).filter(task.tenant_id == auth.tenant_id).order_by(task.updated_at.desc(), task.id.desc()).limit(100).all()
+    return [{"id": row.id, "source_filename": row.source_filename, "user_brief": row.user_brief,
+             "status": row.status, "current_revision": row.current_revision,
+             "created_at": row.created_at.replace(tzinfo=timezone.utc).isoformat(),
+             "updated_at": row.updated_at.replace(tzinfo=timezone.utc).isoformat()} for row in rows]
 
 
 @router.post("", status_code=201)
@@ -253,7 +265,41 @@ def list_voice_options(auth: AuthContext = Depends(current_auth)):
 
 @router.get("/{task_id}")
 def get_refinement(task_id: int, db: Session = Depends(get_db), auth: AuthContext = Depends(current_auth)):
-    return _serialize(db, _get_task(db, auth, task_id))
+    result = _serialize(db, _get_task(db, auth, task_id))
+    db.close()
+    return result
+
+
+@router.get("/{task_id}/status")
+def get_refinement_status(task_id: int, db: Session = Depends(get_db), auth: AuthContext = Depends(current_auth)):
+    task_type = EcommerceVideoRefinementTask
+    task = db.query(task_type).options(load_only(task_type.id, task_type.tenant_id, task_type.status, task_type.current_revision)).filter_by(id=task_id, tenant_id=auth.tenant_id).first()
+    if not task:
+        raise HTTPException(404, "精修任务不存在")
+    job_type = EcommerceVideoRefinementAnalysisJob
+    job = db.query(job_type).options(load_only(
+        job_type.id, job_type.revision, job_type.status, job_type.progress_json,
+        job_type.error_message, job_type.created_at, job_type.started_at,
+    )).filter_by(task_id=task_id,tenant_id=auth.tenant_id).order_by(job_type.id.desc()).first()
+    analysis = {"id":job.id,"revision":job.revision,"status":job.status.removesuffix("_v3"),"progress":{k:v for k,v in job.progress_json.items() if k != "records"},"error_message":job.error_message,
+                "created_at":job.created_at.replace(tzinfo=timezone.utc).isoformat(),
+                "started_at":job.started_at.replace(tzinfo=timezone.utc).isoformat() if job.started_at else None,
+                "queue_wait_seconds":max(0,int(((job.started_at or datetime.utcnow())-job.created_at).total_seconds()))} if job else None
+    preview_type = EcommerceVideoRefinementPreview
+    previews = db.query(preview_type).options(load_only(
+        preview_type.id, preview_type.revision, preview_type.plan_hash, preview_type.status,
+        preview_type.output_url, preview_type.validation_json, preview_type.error_message,
+    )).filter_by(task_id=task_id,tenant_id=auth.tenant_id).order_by(preview_type.id.desc()).all()
+    from app.services.refinement_queue import refinement_worker_state
+    from app.services.refinement_voiceover import serialize_voiceover
+    voices = db.query(EcommerceVideoRefinementVoiceover).filter_by(task_id=task_id,tenant_id=auth.tenant_id).order_by(EcommerceVideoRefinementVoiceover.id.desc()).all()
+    version = db.query(EcommerceVideoRefinementVersion.output_asset_id, EcommerceVideoRefinementVersion.version).filter_by(task_id=task_id,tenant_id=auth.tenant_id).first()
+    result = {"id":task.id,"status":task.status,"current_revision":task.current_revision,
+              "analysis_state":analysis,"worker_state":refinement_worker_state(),"voiceovers":[serialize_voiceover(v) for v in voices],
+              "previews":[{"id":p.id,"revision":p.revision,"plan_hash":p.plan_hash,"status":p.status.removesuffix("_v3"),"output_url":p.output_url,"validation":p.validation_json,"error_message":p.error_message} for p in previews],
+              "output_asset_id":version.output_asset_id if version else None,"output_version":version.version if version else None}
+    db.close()
+    return result
 
 
 @router.post("/{task_id}/analyze")
@@ -326,8 +372,9 @@ def update_draft(task_id: int, payload: DraftInput, db: Session = Depends(get_db
         compile_options.update(previous.plan_json.get("generation_policy", {}))
         if previous.plan_json["schema_version"] == "video_refinement_plan.v3":
             compile_options["timing_protocol"] = "v3"
-    from app.services.refinement_authorization import AUTHORIZATION_VERSION, manual_permissions
-    compile_options["authorization_version"] = AUTHORIZATION_VERSION
+    from app.services.refinement_authorization import AUTHORIZATION_VERSION, autonomous_editing, manual_permissions
+    if not autonomous_editing(compile_options):
+        compile_options["authorization_version"] = AUTHORIZATION_VERSION
     compile_options["manual_permissions"] = manual_permissions(payload.items, previous.plan_json if previous else None)
     try:
         plan = compile_plan(snapshot, payload.items, task.user_brief, task.expected_result, manual=True, requirements=requirements,options=compile_options,voiceovers=voiceover_catalog(db,task))

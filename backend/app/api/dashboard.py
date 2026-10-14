@@ -4,7 +4,8 @@ from collections import defaultdict
 from datetime import datetime, timedelta
 
 from fastapi import APIRouter, Depends
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, load_only
+from app.services.generation_summary import generation_summary_rows
 
 from app.auth import AuthContext, current_auth
 from app.database import get_db
@@ -32,12 +33,15 @@ def get_stats(db: Session = Depends(get_db), auth: AuthContext = Depends(current
     """Tenant-wide dashboard for the current creative-project workflow."""
     projects = (
         db.query(CreativeProject)
+        .options(load_only(CreativeProject.id, CreativeProject.product_id, CreativeProject.name,
+                           CreativeProject.platform, CreativeProject.status, CreativeProject.review_status,
+                           CreativeProject.updated_at))
         .filter(CreativeProject.tenant_id == auth.tenant_id)
         .order_by(CreativeProject.updated_at.desc())
         .all()
     )
     project_ids = [project.id for project in projects]
-    products = db.query(Product).filter(Product.tenant_id == auth.tenant_id).all()
+    products = db.query(Product).options(load_only(Product.id, Product.name, Product.image_urls, Product.detail_image_urls)).filter(Product.tenant_id == auth.tenant_id).all()
     products_by_id = {product.id: product for product in products}
     product_names = {product.id: product.name for product in products}
     product_ids_with_assets = {
@@ -55,6 +59,7 @@ def get_stats(db: Session = Depends(get_db), auth: AuthContext = Depends(current
 
     modules = (
         db.query(StoryboardModule)
+        .options(load_only(StoryboardModule.project_id, StoryboardModule.preview_node_id, StoryboardModule.final_node_id))
         .filter(StoryboardModule.tenant_id == auth.tenant_id)
         .all()
     )
@@ -62,11 +67,10 @@ def get_stats(db: Session = Depends(get_db), auth: AuthContext = Depends(current
     for module in modules:
         modules_by_project[module.project_id].append(module)
 
-    generations = (
+    generations = generation_summary_rows(
         db.query(CreativeGeneration)
         .filter(CreativeGeneration.tenant_id == auth.tenant_id)
         .order_by(CreativeGeneration.updated_at.desc())
-        .all()
     )
     generations_by_project: dict[int, list[CreativeGeneration]] = defaultdict(list)
     for generation in generations:

@@ -3,14 +3,19 @@ import {act, cleanup, fireEvent, render, screen, waitFor} from '@testing-library
 import {MemoryRouter, Route, Routes} from 'react-router-dom';
 import VideoRefinementWorkbench from '../src/pages/VideoRefinementWorkbench';
 import {ecommerceVideoTaxonomyApi, videoRefinementApi} from '../src/api/client';
-import type {RefinementSource, VideoRefinementTask} from '../src/types/videoRefinement';
+import type {RefinementSource, VideoRefinementTask, VideoRefinementTaskSummary} from '../src/types/videoRefinement';
 
-vi.mock('../src/api/client',()=>({mediaUrl:(value:string)=>value,ecommerceVideoTaxonomyApi:{catalog:vi.fn()},videoRefinementApi:{sources:vi.fn(),list:vi.fn(),get:vi.fn(),create:vi.fn(),analyze:vi.fn(),autoPreview:vi.fn(),updateDraft:vi.fn(),confirm:vi.fn(),cancel:vi.fn(),preview:vi.fn(),accept:vi.fn(),materials:vi.fn(),refreshMaterials:vi.fn(),requirements:vi.fn(),generateVoiceover:vi.fn(),voiceOptions:vi.fn()}}));
+vi.mock('../src/api/client',()=>({mediaUrl:(value:string)=>value,ecommerceVideoTaxonomyApi:{catalog:vi.fn()},videoRefinementApi:{sources:vi.fn(),list:vi.fn(),get:vi.fn(),state:vi.fn(),create:vi.fn(),analyze:vi.fn(),autoPreview:vi.fn(),updateDraft:vi.fn(),confirm:vi.fn(),cancel:vi.fn(),preview:vi.fn(),accept:vi.fn(),materials:vi.fn(),refreshMaterials:vi.fn(),requirements:vi.fn(),generateVoiceover:vi.fn(),voiceOptions:vi.fn()}}));
 const source: RefinementSource = {id:101,product_id:1,product_name:'国光湿巾',filename:'国光湿巾_成片_001.mp4',object_url:'/source.mp4',duration_seconds:22.78,width:720,height:1280,fps:30,has_audio:true,burned_subtitles:true,created_at:'2026-10-06T00:00:00Z'};
 const task: VideoRefinementTask = {
   id:1,source_asset_id:101,product_id:1,source_hash:'a'.repeat(64),snapshot_hash:'s'.repeat(64),user_brief:'提升开头吸引力',expected_result:'',focus:['pace'],status:'PLAN_READY',current_revision:1,confirmed_revision:null,preview_supported:true,created_at:'2026-10-06T00:00:00Z',updated_at:'2026-10-06T00:00:00Z',
   source_snapshot:{schema_version:'video_refinement_snapshot.v1',is_mock:false,fixture:'guoguang-001.v1',source:{asset_id:101,product_id:1,product_name:source.product_name,filename:source.filename,object_url:source.object_url,version:'v1',sku:null,content_hash:'a'.repeat(64),duration_ms:22780,width:720,height:1280,aspect_ratio:'9:16',fps:30,has_audio:true,burned_subtitles:true,has_background_music:true},timeline:[{shot_id:'mock-shot-001',start_ms:0,end_ms:5000,label:'示例开场',is_mock:false}],transcript:[],subtitles:[],material_catalog:[],capabilities:{visual:{state:'PLAN_ONLY',reason:'画面仅保存方案'},pace:{state:'PLAN_ONLY',reason:'节奏仅保存方案'},voice:{state:'HUMAN_REQUIRED',reason:'混合音轨不能直接替换口播'},subtitles:{state:'HUMAN_REQUIRED',reason:'硬字幕禁止叠加'},aspect_ratio_locked:true,sku_verified:false}},
   plan_hash:'b'.repeat(64),plan:{schema_version:'video_refinement_plan.v1',source:{} as VideoRefinementTask['source_snapshot']['source'],summary:{objective:'提升开头吸引力',expected_result:'',expected_duration_ms:21980,duration_delta_ms:-800,duration_reason:'缩短开场',confidence_level:'MEDIUM',is_mock:false},items:[{item_id:'item-pace',type:'PACE_RECUT',range:{start_ms:0,end_ms:5000},operation:'压缩开场停顿',reason:'开场吸引力目标',evidence:['mock-shot-001'],confidence_level:'MEDIUM',enabled:true,duration_delta_ms:-800,material_asset_id:null,script:'',subtitle_text:'',risk:'需核对原声连续性',dependencies:[],status:'PROPOSED'}],execution_blockers:[],findings_not_applied:['音乐保持原样']},
+};
+
+const taskSummary: VideoRefinementTaskSummary = {
+  id:task.id,source_filename:source.filename,user_brief:task.user_brief,status:task.status,
+  current_revision:task.current_revision,created_at:task.created_at,updated_at:task.updated_at,
 };
 
 beforeEach(()=>{
@@ -20,6 +25,7 @@ beforeEach(()=>{
   vi.mocked(ecommerceVideoTaxonomyApi.catalog).mockResolvedValue({categories:[],groups:[],public_tags:[],personal_tags:[],presets:[]} as Awaited<ReturnType<typeof ecommerceVideoTaxonomyApi.catalog>>);
   vi.mocked(videoRefinementApi.list).mockResolvedValue([]);
   vi.mocked(videoRefinementApi.get).mockResolvedValue(structuredClone(task));
+  vi.mocked(videoRefinementApi.state).mockImplementation((id,signal)=>videoRefinementApi.get(id,signal));
   vi.mocked(videoRefinementApi.autoPreview).mockResolvedValue(structuredClone(task));
   vi.spyOn(HTMLMediaElement.prototype,'pause').mockImplementation(()=>{});
 });
@@ -29,6 +35,19 @@ function mount(path='/video-refinements') {
 }
 
 describe('视频精修工作台',()=>{
+  it('仅使用轻量摘要显示任务, 打开任务后才加载详情',async()=>{
+    vi.mocked(videoRefinementApi.list).mockResolvedValue([taskSummary]);
+    mount();
+    fireEvent.click(screen.getByRole('tab',{name:/精修任务/}));
+    const link=await screen.findByRole('link',{name:new RegExp(task.user_brief)});
+    expect(link.textContent).toContain(source.filename);
+    expect(link.textContent).toContain('方案待确认 / r1');
+    expect(videoRefinementApi.get).not.toHaveBeenCalled();
+    fireEvent.click(link);
+    await waitFor(()=>expect(videoRefinementApi.get).toHaveBeenCalledWith(task.id));
+    expect(await screen.findByRole('button',{name:'修改方案'})).toBeTruthy();
+  });
+
   it('插入项只编辑插入位置, 保存时保持零长度的源片区间',async()=>{
     const insertion={...task,plan:{...task.plan!,items:[{...task.plan!.items[0],type:'SEGMENT_INSERT' as const,range:{start_ms:0,end_ms:0},duration_delta_ms:1800,material_asset_id:7}]}};
     vi.mocked(videoRefinementApi.get).mockResolvedValue(insertion);
@@ -87,7 +106,7 @@ describe('视频精修工作台',()=>{
   });
 
   it('任务列表失败时仍可选择成片, 重试只请求任务列表',async()=>{
-    vi.mocked(videoRefinementApi.list).mockRejectedValueOnce(new Error('server error')).mockResolvedValueOnce([task]);
+    vi.mocked(videoRefinementApi.list).mockRejectedValueOnce(new Error('server error')).mockResolvedValueOnce([taskSummary]);
     mount();
     await screen.findByRole('button',{name:`选择 ${source.filename}`});
     expect(screen.queryByText('商品成片库还没有可用视频')).toBeNull();
@@ -102,7 +121,7 @@ describe('视频精修工作台',()=>{
 
   it('成片请求失败时仍可查看任务, 不显示没有成片',async()=>{
     vi.mocked(videoRefinementApi.sources).mockRejectedValueOnce(new Error('server error')).mockResolvedValueOnce([source]);
-    vi.mocked(videoRefinementApi.list).mockResolvedValue([task]);
+    vi.mocked(videoRefinementApi.list).mockResolvedValue([taskSummary]);
     mount();
     expect(await screen.findByRole('alert')).toHaveProperty('textContent', expect.stringContaining('商品成片加载失败'));
     expect(screen.queryByText('商品成片库还没有可用视频')).toBeNull();
@@ -523,11 +542,47 @@ describe('后台状态恢复',()=>{
     try{
       await act(async()=>{mount('/video-refinements/1')});
       expect(screen.getByText('正在匹配修改意见')).toBeTruthy();
-      await act(()=>vi.advanceTimersByTimeAsync(6000));
+      await act(()=>vi.advanceTimersByTimeAsync(14000));
       expect(screen.getByText('任务状态更新暂时中断, 正在自动重试')).toBeTruthy();
       expect(screen.queryByRole('alert')).toBeNull();
-      await act(()=>vi.advanceTimersByTimeAsync(2000));
+      await act(()=>vi.advanceTimersByTimeAsync(16000));
       expect(screen.queryByText('任务状态更新暂时中断, 正在自动重试')).toBeNull();
-    }finally{vi.useRealTimers();}
+    }finally{cleanup();vi.useRealTimers();}
+  });
+
+  it('状态请求未结束时不叠加轮询, 离开页面会取消请求',async()=>{
+    const analyzing={...v2Task(),status:'CREATED' as const,plan:null,plan_hash:null,analysis_state:{id:1,revision:1,status:'analyzing',progress:{stage:'matching'},error_message:''}};
+    let resolvePoll!: (value:VideoRefinementTask)=>void;
+    const pending=new Promise<VideoRefinementTask>(resolve=>{resolvePoll=resolve});
+    vi.mocked(videoRefinementApi.get).mockResolvedValueOnce(analyzing).mockReturnValueOnce(pending).mockResolvedValue(analyzing);
+    vi.useFakeTimers();
+    try{
+      await act(async()=>{mount('/video-refinements/1')});
+      await act(()=>vi.advanceTimersByTimeAsync(20000));
+      expect(videoRefinementApi.get).toHaveBeenCalledTimes(2);
+      const signal=vi.mocked(videoRefinementApi.get).mock.calls[1][1];
+      expect(signal?.aborted).toBe(false);
+      await act(async()=>resolvePoll(analyzing));
+      await act(()=>vi.advanceTimersByTimeAsync(2000));
+      expect(videoRefinementApi.get).toHaveBeenCalledTimes(3);
+      cleanup();
+      expect(signal?.aborted).toBe(true);
+      await act(()=>vi.advanceTimersByTimeAsync(30000));
+      expect(videoRefinementApi.get).toHaveBeenCalledTimes(3);
+    }finally{cleanup();vi.useRealTimers();}
+  });
+
+  it('同一版本仅轮询轻量状态, 不反复加载素材快照和方案',async()=>{
+    const analyzing={...v2Task(),status:'CREATED' as const,plan:null,plan_hash:null,analysis_state:{id:1,revision:1,status:'analyzing',progress:{stage:'matching'},error_message:''}};
+    vi.mocked(videoRefinementApi.get).mockResolvedValue(analyzing);
+    vi.mocked(videoRefinementApi.state).mockResolvedValue({id:analyzing.id,status:analyzing.status,current_revision:analyzing.current_revision,analysis_state:analyzing.analysis_state});
+    vi.useFakeTimers();
+    try{
+      await act(async()=>{mount('/video-refinements/1')});
+      await act(()=>vi.advanceTimersByTimeAsync(10000));
+      expect(videoRefinementApi.get).toHaveBeenCalledTimes(1);
+      expect(videoRefinementApi.state).toHaveBeenCalledTimes(5);
+      expect(screen.getByText('正在匹配修改意见')).toBeTruthy();
+    }finally{cleanup();vi.useRealTimers();}
   });
 });

@@ -11,7 +11,7 @@ from unittest.mock import AsyncMock, patch
 
 from fastapi import FastAPI, Header
 from fastapi.testclient import TestClient
-from sqlalchemy import create_engine, inspect, text
+from sqlalchemy import create_engine, event, inspect, text
 from sqlalchemy.orm import sessionmaker
 
 from app.api.video_refinement import router
@@ -433,6 +433,35 @@ class VideoRefinementTest(unittest.TestCase):
         self.assertEqual(self.client.post(path+"/cancel", json={"revision": 1}).status_code, 200)
         self.assertEqual(self.save(task, task["plan"]["items"]).status_code, 409)
         self.assertEqual(self.confirm(task).status_code, 409)
+
+    def test_list_returns_summaries_with_one_query_and_preserves_detail(self):
+        first = self.create()
+        second = self.create()
+        foreign = EcommerceVideoRefinementTask(
+            tenant_id="t2", source_asset_id=self.source.id, product_id=self.product.id,
+            source_hash="a" * 64, source_snapshot={"filename": "foreign.mp4"},
+            user_brief="foreign", created_by="owner",
+        )
+        self.db.add(foreign)
+        self.db.commit()
+        statements = []
+        def record_query(conn, cursor, statement, parameters, context, executemany):
+            statements.append(statement)
+        event.listen(self.engine, "before_cursor_execute", record_query)
+        try:
+            with patch("app.api.video_refinement._serialize", side_effect=AssertionError("detail loaded")):
+                response = self.client.get("/api/video-refinements")
+        finally:
+            event.remove(self.engine, "before_cursor_execute", record_query)
+        self.assertEqual(response.status_code, 200, response.text)
+        rows = response.json()
+        self.assertEqual([row["id"] for row in rows], [second["id"], first["id"]])
+        self.assertEqual(len(statements), 1)
+        self.assertEqual(set(rows[0]), {"id", "source_filename", "user_brief", "status", "current_revision", "created_at", "updated_at"})
+        self.assertEqual(rows[0]["source_filename"], second["source_snapshot"]["source"]["filename"])
+        for key in ("user_brief", "status", "current_revision", "created_at", "updated_at"):
+            self.assertEqual(rows[0][key], second[key])
+        self.assertEqual(self.client.get(f"/api/video-refinements/{second['id']}").json(), second)
 
     def test_failed_analysis_materials_are_candidates_without_fabricated_metadata(self):
         failed = self.asset("failed-analysis.mov")

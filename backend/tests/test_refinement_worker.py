@@ -39,7 +39,7 @@ class RefinementWorkerTest(unittest.TestCase):
 
         for shared, override, refine in ((False,None,False),(False,True,True),(True,None,True),(True,False,False)):
             with self.subTest(shared=shared, override=override), ExitStack() as stack:
-                settings = get_settings().model_copy(update={"run_database_init":False,"run_startup_recovery":False,"run_background_workers":shared,"run_refinement_worker":override})
+                settings = get_settings().model_copy(update={"run_database_init":False,"run_startup_recovery":False,"run_background_workers":shared,"run_refinement_worker":override,"run_ecommerce_video_analysis_worker":None})
                 stack.enter_context(patch.object(main,"settings",settings))
                 names = ("start_worker","start_video_analysis_worker","start_refinement_worker","start_qianchuan_worker","start_video_repair_worker","init_db","recover_startup_tasks")
                 calls = {name:stack.enter_context(patch.object(main,name)) for name in names}

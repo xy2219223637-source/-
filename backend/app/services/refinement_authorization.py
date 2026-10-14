@@ -5,6 +5,13 @@ import re
 
 
 AUTHORIZATION_VERSION = "refinement-authorization-v2-goal-constraints"
+AUTONOMOUS_VERSION = "refinement-authorization-v3-ai-autonomous"
+
+
+def autonomous_editing(options=None) -> bool:
+    return (options or {}).get("authorization_version") == AUTONOMOUS_VERSION
+
+
 _SEPARATOR = r"[,，;；。.!！？?\n]|并且|同时|然后|并(?=新增|增加|补充|修改|替换)"
 _VOICE = r"(?:台词|配音|口播|讲解)"
 _ACTION = r"(?:新增|增加|补充|改写|修改|改动|改变|更改|变更|调整|替换|精简|缩短|改短|重写|重新生成|生成|重配|重新配|重录|改)"
@@ -119,6 +126,9 @@ def _restrict(authorization: dict, item, clauses: list[str]) -> dict:
 
 def item_authorization(item, requirements, brief: str | None, expected: str = "", *, manual=False, options=None) -> dict:
     keys = ("allow_visual", "allow_narration", "allow_insert", "allow_rewrite", "allow_cut")
+    if autonomous_editing(options):
+        return {"version":AUTONOMOUS_VERSION, **dict.fromkeys(keys, True), "scoped":True,
+                "evidence":[{"source":"ai_autonomous", "quote":brief or expected or "AI 自主精修"}]}
     result = {"version":AUTHORIZATION_VERSION, **dict.fromkeys(keys, False), "evidence":[], "scoped":False}
     clauses = active_clauses(brief, expected, requirements)
     if manual:
@@ -192,6 +202,8 @@ def manual_permissions(items, previous):
 
 def resolved_authorization(item, requirements, brief, expected="", *, manual=False, overrides=None, options=None):
     authorization = item_authorization(item, requirements, brief, expected, manual=manual and overrides is None, options=options)
+    if autonomous_editing(options):
+        return authorization
     override = (overrides or {}).get(item.item_id, {})
     if override.get("evidence"):
         for key in ("allow_visual", "allow_narration", "allow_insert", "allow_rewrite", "allow_cut"):

@@ -78,7 +78,7 @@ def compile_precise(snapshot, items, brief, expected, *, manual, requirements, o
     internal_options = deepcopy(options)
     if options.get("target_duration_ms"):
         internal_options["target_duration_ms"] = frame_at_ms(options["target_duration_ms"], fps)
-    graph = compile_timeline(context, converted, brief, expected, manual=manual, requirements=[],
+    graph = compile_timeline(context, converted, brief, expected, manual=manual, requirements=requirements,
                              options=internal_options, voiceovers=internal_voices, frame_coordinates=True)
     rows = {row["item_id"]:row for row in graph["items"]}
     blockers = graph["execution_blockers"]
@@ -196,5 +196,5 @@ def compile_precise(snapshot, items, brief, expected, *, manual, requirements, o
                             expected_duration_ms=ms_at_frame(total, fps), duration_delta_ms=ms_at_frame(total, fps)-original_duration)
     graph["snapshot_hash"] = content_hash(snapshot)
     graph["requirements_fingerprint"] = content_hash({"brief":brief,"expected":expected,"options":options,"timing":PRECISE_TIMING_VERSION})
-    graph["requirements_resolution"] = verify_requirements(requirements, graph["items"], blockers)
+    graph["requirements_resolution"] = verify_requirements(requirements, graph["items"], blockers, options=options)
     return graph

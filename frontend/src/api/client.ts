@@ -495,9 +495,10 @@ export const videoLibraryApi = {
 
 export const videoRefinementApi = {
   voiceOptions: () => api.get<import('../types/videoRefinement').RefinementSpeakerCatalog>('/video-refinements/voice-options').then(r=>r.data),
-  list: () => api.get<import('../types/videoRefinement').VideoRefinementTask[]>('/video-refinements').then(r => r.data),
+  list: () => api.get<import('../types/videoRefinement').VideoRefinementTaskSummary[]>('/video-refinements').then(r => r.data),
   sources: () => api.get<import('../types/videoRefinement').RefinementSource[]>('/video-refinements/sources').then(r => r.data),
-  get: (id: number) => api.get<import('../types/videoRefinement').VideoRefinementTask>(`/video-refinements/${id}`).then(r => r.data),
+  get: (id: number, signal?: AbortSignal) => api.get<import('../types/videoRefinement').VideoRefinementTask>(`/video-refinements/${id}`, {signal}).then(r => r.data),
+  state: (id: number, signal?: AbortSignal) => api.get<import('../types/videoRefinement').VideoRefinementTaskState>(`/video-refinements/${id}/status`, {signal, timeout:15000}).then(r => r.data),
   create: (data: { source_asset_id: number; user_brief: string; expected_result?: string; focus?: import('../types/videoRefinement').RefinementFocus[]; duration_preference?: import('../types/videoRefinement').DurationPreference; target_duration_ms?: number }) => api.post<import('../types/videoRefinement').VideoRefinementTask>('/video-refinements', data).then(r => r.data),
   analyze: (id: number, revision: number) => api.post<import('../types/videoRefinement').VideoRefinementTask>(`/video-refinements/${id}/analyze`, { revision }).then(r => r.data),
   autoPreview: (id: number, revision: number) => api.post<import('../types/videoRefinement').VideoRefinementTask>(`/video-refinements/${id}/auto-preview`, { revision }).then(r => r.data),

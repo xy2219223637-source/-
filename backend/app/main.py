@@ -6,6 +6,7 @@ from datetime import datetime, timedelta
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from starlette.concurrency import run_in_threadpool
 
 from app.api import admin, auth, auto_edit, brands, creative, dashboard, director, ecommerce_products, ecommerce_video_library, ecommerce_video_taxonomy, knowledge, products, quality, skills, templates, operations, production, storage, video_library, video_taxonomy, video_refinement, videos
 from app.config import get_settings
@@ -42,6 +43,15 @@ app.add_middleware(
 )
 
 
+def write_request_audit(request_id, method, path, status_code, duration_ms):
+    db = SessionLocal()
+    try:
+        db.add(AuditLog(request_id=request_id, method=method, path=path, status_code=status_code, duration_ms=duration_ms))
+        db.commit()
+    finally:
+        db.close()
+
+
 @app.middleware("http")
 async def audit_requests(request, call_next):
     request_id = trace_fields()["request_id"]
@@ -50,12 +60,8 @@ async def audit_requests(request, call_next):
     duration_ms = int((time.perf_counter() - started) * 1000)
     response.headers["x-request-id"] = request_id
     if request.url.path.startswith("/api"):
-        db = SessionLocal()
-        try:
-            db.add(AuditLog(request_id=request_id, method=request.method, path=request.url.path, status_code=response.status_code, duration_ms=duration_ms))
-            db.commit()
-        finally:
-            db.close()
+        # 等待数据库连接时不能阻塞事件循环，否则其他请求无法完成并归还连接。
+        await run_in_threadpool(write_request_audit, request_id, request.method, request.url.path, response.status_code, duration_ms)
     return response
 
 app.add_middleware(RequestTraceMiddleware)

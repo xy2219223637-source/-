@@ -70,6 +70,14 @@ export interface VideoRefinementTask {
   previews?: VideoRefinementPreview[]; output_asset_id?: number | null; output_version?: number | null;
 }
 
+export interface VideoRefinementTaskSummary {
+  id: number; source_filename: string; user_brief: string; status: VideoRefinementTask['status'];
+  current_revision: number; created_at: string; updated_at: string;
+}
+
+export type VideoRefinementTaskState = Pick<VideoRefinementTask,
+  'id' | 'status' | 'current_revision' | 'analysis_state' | 'worker_state' | 'voiceovers' | 'previews' | 'output_asset_id' | 'output_version'>;
+
 export type DurationPreference = 'preserve' | 'shorten' | 'ai_recommend';
 export interface TimeRange {start_ms: number; end_ms: number}
 export interface MaterialSegment {asset_id: number; source_range: TimeRange; candidate_id?: string | null}

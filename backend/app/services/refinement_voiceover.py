@@ -156,10 +156,14 @@ def run_voiceover(job_id):
             task = db.get(EcommerceVideoRefinementTask,job.task_id)
             if not task or task.status in {"CANCELLED","COMPLETED"} or task.current_revision != job.revision:
                 job.status = "superseded"; db.commit(); return
-            with tempfile.TemporaryDirectory(prefix=f"refinement-voice-{job.id}-") as directory:
+            task_id, revision = task.id, job.revision
+            script, parameters = job.script, dict(job.parameters_json)
+            provider = task.source_snapshot.get("storage_provider","aliyun_oss")
+            db.commit()
+            with tempfile.TemporaryDirectory(prefix=f"refinement-voice-{job_id}-") as directory:
                 raw, output = Path(directory)/"raw.mp3", Path(directory)/"voice.wav"
                 timing = {}
-                synthesize_speech(job.script,raw,speaker=job.parameters_json["speaker"],parameters=job.parameters_json,timing_output=timing)
+                synthesize_speech(script,raw,speaker=parameters["speaker"],parameters=parameters,timing_output=timing)
                 process = subprocess.run([_ffmpeg_executable(),"-y","-i",str(raw),"-vn","-ar","48000","-ac","2","-c:a","pcm_s16le",str(output)],capture_output=True,timeout=180)
                 if process.returncode or not output.is_file():
                     raise ValueError("生成配音无法完整解码")
@@ -168,17 +172,17 @@ def run_voiceover(job_id):
                     duration_ms = round(stream.getnframes()*1000/stream.getframerate())
                 if duration_ms <= 0:
                     raise ValueError("配音服务返回空音频")
-                align_voiceover_timing(timing,output,job.script,duration_ms)
-                storage = get_storage_by_name(task.source_snapshot.get("storage_provider","aliyun_oss"))
+                align_voiceover_timing(timing,output,script,duration_ms)
+                storage = get_storage_by_name(provider)
                 digest = file_hash(output)
-                uploaded = asyncio.run(storage.upload_path(output,f"voice-{job.id}.wav",f"ecommerce-refinements/{task.id}/voiceovers"))
+                uploaded = asyncio.run(storage.upload_path(output,f"voice-{job_id}.wav",f"ecommerce-refinements/{task_id}/voiceovers"))
             db.refresh(task)
-            active = db.query(EcommerceVideoRefinementTask.id).filter(EcommerceVideoRefinementTask.id==task.id,EcommerceVideoRefinementTask.current_revision==job.revision,EcommerceVideoRefinementTask.status.notin_(["CANCELLED","COMPLETED"])).exists()
-            published = db.query(EcommerceVideoRefinementVoiceover).filter(EcommerceVideoRefinementVoiceover.id==job.id,EcommerceVideoRefinementVoiceover.status==generating_status,EcommerceVideoRefinementVoiceover.attempts==attempt,active).update({"status":"ready","object_url":uploaded,"storage_provider":storage.name,"content_hash":digest,"duration_ms":duration_ms,"timing_json":timing,"error_message":"","completed_at":datetime.utcnow()},synchronize_session=False)
+            active = db.query(EcommerceVideoRefinementTask.id).filter(EcommerceVideoRefinementTask.id==task_id,EcommerceVideoRefinementTask.current_revision==revision,EcommerceVideoRefinementTask.status.notin_(["CANCELLED","COMPLETED"])).exists()
+            published = db.query(EcommerceVideoRefinementVoiceover).filter(EcommerceVideoRefinementVoiceover.id==job_id,EcommerceVideoRefinementVoiceover.status==generating_status,EcommerceVideoRefinementVoiceover.attempts==attempt,active).update({"status":"ready","object_url":uploaded,"storage_provider":storage.name,"content_hash":digest,"duration_ms":duration_ms,"timing_json":timing,"error_message":"","completed_at":datetime.utcnow()},synchronize_session=False)
             if published:
                 uploaded = ""
             else:
-                db.query(EcommerceVideoRefinementVoiceover).filter_by(id=job.id,status=generating_status,attempts=attempt).update({"status":"superseded"},synchronize_session=False)
+                db.query(EcommerceVideoRefinementVoiceover).filter_by(id=job_id,status=generating_status,attempts=attempt).update({"status":"superseded"},synchronize_session=False)
             db.commit()
         except Exception as exc:
             db.rollback()

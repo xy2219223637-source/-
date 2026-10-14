@@ -348,12 +348,14 @@ def compile_timeline(snapshot, items, brief, expected, *, manual, requirements, 
         cursor += length
     if cursor <= 0:
         raise ValueError("精修后视频时长必须大于零")
-    if options.get("duration_preference") == "preserve" and cursor != duration:
+    from app.services.refinement_authorization import autonomous_editing
+    autonomous = autonomous_editing(options)
+    if not autonomous and options.get("duration_preference") == "preserve" and cursor != duration:
         blockers.append({"item_id":"","code":"DURATION_CONFLICT","message":"当前方案改变了时长, 与保持原时长的明确要求冲突"})
     target = options.get("target_duration_ms")
-    if options.get("duration_preference") == "shorten" and (cursor >= duration or target and cursor > target+tolerance):
+    if not autonomous and options.get("duration_preference") == "shorten" and (cursor >= duration or target and cursor > target+tolerance):
         blockers.append({"item_id":"","code":"DURATION_CONFLICT","message":"方案尚未达到缩短目标, 请调整完整台词或裁切区间"})
-    resolution = verify_requirements(requirements, normalized, blockers)
+    resolution = verify_requirements(requirements, normalized, blockers, options=options)
     alignment = [{"item_id":row["item_id"],"requested_range":row.get("requested_range"),"actual_range":row["range"],"error_ms":row.get("frame_alignment_error_ms"),"material_segments":deepcopy(row["material_segments"])} for row in normalized]
     for row in normalized:
         row.pop("_display_tail_ms", None)

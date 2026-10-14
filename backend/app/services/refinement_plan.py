@@ -112,7 +112,7 @@ def compile_plan(snapshot: dict, items: list[RefinementItem], brief: str, expect
         from app.services.refinement_requirements import verify_requirements
         result["edit_authorizations"] = records
         result["execution_blockers"].extend(blockers)
-        result["requirements_resolution"] = verify_requirements(requirements or [], result["items"], result["execution_blockers"])
+        result["requirements_resolution"] = verify_requirements(requirements or [], result["items"], result["execution_blockers"], options=options)
     if options.get("localization"):
         from app.services.refinement_selection import checked_range
         from app.services.refinement_requirements import verify_requirements
@@ -140,8 +140,10 @@ def compile_plan(snapshot: dict, items: list[RefinementItem], brief: str, expect
                 except (ValueError, KeyError):
                     result["execution_blockers"].append({"item_id":item.item_id,"code":"CONTENT_REVIEW_REQUIRED","category":"content", "message":"选段缺少可信局部核验或超出动作安全边界, 请重新定位素材"})
         result["local_selection"] = evidence
-        result["requirements_resolution"] = verify_requirements(requirements or [], result["items"], result["execution_blockers"])
+        result["requirements_resolution"] = verify_requirements(requirements or [], result["items"], result["execution_blockers"], options=options)
     from app.services.refinement_requirements import verify_goal_constraints
-    verify_goal_constraints(brief, expected_result, requirements or [], result["items"], result["execution_blockers"])
+    from app.services.refinement_authorization import autonomous_editing
+    if not autonomous_editing(options):
+        verify_goal_constraints(brief, expected_result, requirements or [], result["items"], result["execution_blockers"])
     result["generation_policy"] = {key:options[key] for key in ("authorization_version", "timing_protocol", "localization", "content_reselection", "display_tail_ms", "policy_version", "tts_speaker") if key in options}
     return result

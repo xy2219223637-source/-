@@ -16,6 +16,16 @@ def _binding(row, asset, uploads):
     recorded_hash = data.get("source_hash")
     if recorded_hash:
         return {"method": "content_hash"} if recorded_hash == asset.content_hash else None
+    # Adopt completed observations attached to the current ecommerce record.
+    # Persist the file hash on first reuse; subsequent reuse remains version-bound.
+    if (row.tenant_id == asset.tenant_id and row.asset_id == asset.id
+            and row.status == "completed" and row.completed_at
+            and data.get("schema_version") == "1.0"
+            and (row.prompt_version in LIBRARY_PROMPT_VERSIONS or row.prompt_version.startswith("imported-legacy:"))
+            and re.fullmatch(r"[0-9a-fA-F]{64}", asset.content_hash or "")
+            and asset.duration_seconds > 0
+            and abs(row.input_video_seconds - asset.duration_seconds) <= .05):
+        return {"method": "current_asset_record", "asset_id": asset.id}
     # Historical library analyses predate source_hash. A completed upload links
     # their public asset identity to an immutable object and upload version.
     if (row.prompt_version not in LIBRARY_PROMPT_VERSIONS
