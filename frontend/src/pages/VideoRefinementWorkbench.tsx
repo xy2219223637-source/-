@@ -1,26 +1,33 @@
 import {useEffect, useMemo, useRef, useState} from 'react';
 import {Link, useNavigate, useParams, useSearchParams} from 'react-router-dom';
-import {AlertTriangle, ArrowLeft, Check, ChevronLeft, ChevronRight, Film, Loader2, LockKeyhole, Pencil, Search, WandSparkles} from 'lucide-react';
+import {AlertTriangle, ArrowLeft, Check, ChevronLeft, ChevronRight, Download, Eye, Film, Loader2, LockKeyhole, Pencil, RefreshCw, Search, WandSparkles} from 'lucide-react';
 import {mediaUrl, videoRefinementApi} from '../api/client';
-import type {RefinementSource, RefinementSnapshot, VideoRefinementPlanItem, VideoRefinementTask} from '../types/videoRefinement';
+import {VideoTaxonomySummary} from '../components/EcommerceVideoTaxonomyEditor';
+import {refinementDurationError} from '../lib/refinementDuration';
+import type {RefinementSource, RefinementSnapshot, VideoRefinementPlanItem, VideoRefinementTask, VideoRefinementTaskSummary} from '../types/videoRefinement';
 import './VideoRefinementWorkbench.css';
 import {EvaluationProgress, GoalEditor, MaterialSegmentsEditor, RequirementPanel, VoiceoverEditor} from './VideoRefinementControls';
 
 const statusLabels: Record<VideoRefinementTask['status'], string> = {CREATED:'待生成方案', PLAN_READY:'方案待确认', CONFIGURING:'方案已修改', NEEDS_HUMAN_CONFIRMATION:'需要人工确认', MATERIAL_REQUIRED:'需要素材映射', PLAN_CONFIRMED:'方案已确认', CANCELLED:'已取消', COMPLETED:'精修版本已保存'};
 const itemLabels = {VISUAL_REPLACE:'画面替换', PACE_RECUT:'剪辑节奏', SEGMENT_INSERT:'片段插入', VOICE_REPLACE:'配音台词', SUBTITLE_EDIT:'字幕文本'};
 const seconds = (ms: number) => `${(ms / 1000).toFixed(2)} 秒`;
+const sourceTaxonomy = (source: RefinementSource) => ({
+  category_id:source.category_id??null, category:source.category??null, taxonomy_tags:source.taxonomy_tags??[],
+  public_tags:source.public_tags??[], personal_tags:source.personal_tags??[], ai_tags:[], effective_tags:[],
+});
 const timecode = (ms: number) => `${String(Math.floor(ms / 60000)).padStart(2,'0')}:${(ms % 60000 / 1000).toFixed(3).padStart(6,'0')}`;
 const actionNotices: Record<string, string> = {
   confirm:'整套方案已确认, 可以生成视频预览.',
   save:'新草稿已保存, 旧预览失效, 需要重新确认.',
   cancel:'任务已取消.',
   preview:'预览已排队, 完成后可播放核对.',
-  accept:'精修版本已保存到成片库.',
+  accept:'精修版本已保存到商品成片库.',
   voiceover:'配音已排队, 完成后试听并显式绑定到草稿.',
   refresh:'素材已刷新, 旧确认和预览失效, 请重新分析.',
 };
 function analysisNotice(task: VideoRefinementTask): string {
   const status = task.analysis_state?.status;
+  if(task.worker_state&&task.worker_state.status!=='running'&&(status==='queued'||status==='analyzing'))return '';
   if(status==='queued')return '分析已排队, 将匹配已分析素材并生成方案.';
   if(status==='analyzing')return '正在分析并生成精修方案, 请稍候.';
   if(!task.plan)return '';
@@ -28,7 +35,7 @@ function analysisNotice(task: VideoRefinementTask): string {
   if(task.plan.automatic_preview&&status==='ready'){
     const preview=task.previews?.find(row=>row.revision===task.current_revision&&row.plan_hash===task.plan_hash&&row.status!=='superseded');
     if(preview?.status==='ready')return '精修预览已生成, 请播放核对后另存精修版本.';
-    if(preview?.status==='accepted')return '精修版本已保存到成片库.';
+    if(preview?.status==='accepted')return '精修版本已保存到商品成片库.';
     if(preview?.status==='failed')return '';
     if(preview?.status==='queued'||preview?.status==='rendering')return '精修方案已就绪, 视频预览正在生成.';
   }
@@ -55,8 +62,10 @@ function SourceSetup({source}: {source: RefinementSource}) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const submitting = useRef(false);
+  const sourceMs = Math.round(source.duration_seconds * 1000);
+  const durationError = refinementDurationError(durationPreference, target, sourceMs);
   async function create() {
-    if(submitting.current)return;
+    if(submitting.current||durationError||!brief.trim())return;
     submitting.current=true;
     setBusy(true); setError('');
     try {
@@ -65,18 +74,19 @@ function SourceSetup({source}: {source: RefinementSource}) {
     } catch (error) {setError(errorMessage(error))} finally {submitting.current=false;setBusy(false)}
   }
   return <div className="refine-setup">
-    <section className="refine-source-preview" aria-label="已选源成片">
-      <video key={source.id} src={mediaUrl(source.object_url)} controls playsInline preload="metadata" aria-label="源成片播放器" />
-      <div><strong>{source.filename}</strong><p>{source.product_name} / {source.width} x {source.height} / {seconds(source.duration_seconds * 1000)}</p><Link to={`/final-videos/${source.id}`}>查看成片详情</Link></div>
+    <section className="refine-source-preview" aria-label="已选商品成片">
+      <video key={source.id} src={mediaUrl(source.object_url)} controls playsInline preload="metadata" aria-label="商品成片播放器" />
+      <div><strong>{source.filename}</strong><p>{source.product_name} / {source.width} x {source.height} / {seconds(source.duration_seconds * 1000)}</p><Link to={`/ecommerce-final-videos/${source.id}`}>查看商品成片详情</Link></div>
     </section>
     <section className="refine-brief">
       <h2>您希望这条视频怎么改?</h2>
-      <p>用自己的话填写修改意见, AI 会分析成片和素材并生成视频预览.</p>
+      <p>用自己的话填写修改意见, AI 会分析所选商品成片和同商品素材并生成视频预览.</p>
       <label className="field">修改意见<textarea rows={4} maxLength={2000} value={brief} onChange={e=>{setBrief(e.target.value);setError('')}} placeholder="自由描述您的意见, 例如: 厨房展示部分短一点, 多展示产品细节, 保留原配音" /></label>
-      <label className="field">时长目标<select value={durationPreference} onChange={e=>setDurationPreference(e.target.value as typeof durationPreference)}><option value="ai_recommend">由 AI 建议, 确认实际变化</option><option value="preserve">保持原时长</option><option value="shorten">缩短成片</option></select></label>{durationPreference==='shorten'&&<label className="field">目标时长, 秒<input type="number" min="0.1" max={source.duration_seconds} step="0.1" value={target} onChange={e=>setTarget(e.target.value)}/></label>}
-      <p className="refine-note">AI 自动选择同商品无字幕素材, 为补充段生成新配音并制作预览. 播放核对后另存精修版本.</p>
+      <label className="field">时长目标<select value={durationPreference} onChange={e=>setDurationPreference(e.target.value as typeof durationPreference)}><option value="ai_recommend">由 AI 建议, 确认实际变化</option><option value="preserve">保持原时长</option><option value="shorten">缩短成片</option></select></label>{durationPreference==='shorten'&&<label className="field">目标时长, 秒<input type="number" min="0.001" max={(sourceMs-1)/1000} step="0.001" value={target} aria-invalid={!!durationError} aria-describedby={durationError?'source-duration-error':undefined} onChange={e=>setTarget(e.target.value)}/></label>}
+      {durationError&&<p id="source-duration-error" role="alert" className="refine-risk">{durationError}</p>}
+      <p className="refine-note">AI 根据修改意向自主匹配同商品素材并完成画面, 配音和时长调整. 播放核对后另存到商品成片库, 原成片保持不变.</p>
       {error&&<p role="alert" className="refine-error">{error}</p>}
-      <button className="btn-primary" disabled={busy||!brief.trim()||(durationPreference==='shorten'&&!!target&&Number(target)<=0)} onClick={create}>{busy?<Loader2 size={16} className="animate-spin"/>:<WandSparkles size={16}/>}开始精修</button>
+      <button className="btn-primary" disabled={busy||!brief.trim()||!!durationError} onClick={create}>{busy?<Loader2 size={16} className="animate-spin"/>:<WandSparkles size={16}/>}开始精修</button>
     </section>
   </div>;
 }
@@ -85,7 +95,7 @@ function SourcePicker() {
   const [params] = useSearchParams();
   const preselected = Number(params.get('source_asset_id'));
   const [sources, setSources] = useState<RefinementSource[]>([]);
-  const [tasks, setTasks] = useState<VideoRefinementTask[]>([]);
+  const [tasks, setTasks] = useState<VideoRefinementTaskSummary[]>([]);
   const [sourcesLoading, setSourcesLoading] = useState(true);
   const [tasksLoading, setTasksLoading] = useState(true);
   const [sourcesError, setSourcesError] = useState('');
@@ -108,9 +118,9 @@ function SourcePicker() {
       setSources(assets);
       if(preselected){
         if(assets.some(row=>row.id===preselected))setSelected(preselected);
-        else setSelectionError('预选成片不存在或无权访问, 请重新选择');
+        else setSelectionError('预选商品成片不存在或不可用, 请重新选择');
       }
-    }).catch(error=>{if(active)setSourcesError(errorMessage(error, '成片加载失败, 请重试'))}).finally(()=>{if(active)setSourcesLoading(false)});
+    }).catch(error=>{if(active)setSourcesError(errorMessage(error, '商品成片加载失败, 请重试'))}).finally(()=>{if(active)setSourcesLoading(false)});
     return ()=>{active=false};
   },[preselected,sourcesRetry]);
   useEffect(()=>{
@@ -122,33 +132,37 @@ function SourcePicker() {
     return ()=>{active=false};
   },[tasksRetry]);
   const products = useMemo(()=>Array.from(new Map(sources.map(row=>[row.product_id,row.product_name])).entries()),[sources]);
-  const visible = sources.filter(row=>(!search||`${row.filename} ${row.product_name}`.toLowerCase().includes(search.toLowerCase()))&&(!product||row.product_id===Number(product))&&(!duration||(duration==='short'?row.duration_seconds<15:duration==='medium'?row.duration_seconds>=15&&row.duration_seconds<=30:row.duration_seconds>30))&&(!aspect||(aspect==='portrait'?row.height>row.width:row.width>=row.height))&&(!recent||Date.now()-new Date(row.created_at).getTime()<=Number(recent)*86400000));
+  const visible = sources.filter(row=>(!search||`${row.filename} ${row.product_name} ${(row.taxonomy_tags??[]).map(tag=>tag.name).join(' ')}`.toLowerCase().includes(search.trim().toLowerCase()))&&(!product||row.product_id===Number(product))&&(!duration||(duration==='short'?row.duration_seconds<15:duration==='medium'?row.duration_seconds>=15&&row.duration_seconds<=30:row.duration_seconds>30))&&(!aspect||(aspect==='portrait'?row.height>row.width:row.width>=row.height))&&(!recent||Date.now()-new Date(row.created_at).getTime()<=Number(recent)*86400000));
   const source = sources.find(row=>row.id===selected);
   const loading = tab==='sources'?sourcesLoading:tasksLoading;
   const error = tab==='sources'?sourcesError:tasksError;
-  if(source)return <><button className="refine-text-button" onClick={()=>setSelected(null)}><ArrowLeft size={15}/>重新选择成片</button><SourceSetup key={source.id} source={source}/></>;
+  if(source)return <><button className="refine-text-button" onClick={()=>setSelected(null)}><ArrowLeft size={15}/>重新选择商品成片</button><SourceSetup key={source.id} source={source}/></>;
   return <>
     <div className="refine-tabs" role="tablist" aria-label="精修入口">
-      <button role="tab" aria-selected={tab==='sources'} onClick={()=>setTab('sources')}>选择源成片</button>
+      <button role="tab" aria-selected={tab==='sources'} onClick={()=>setTab('sources')}>选择商品成片</button>
       <button role="tab" aria-selected={tab==='tasks'} onClick={()=>setTab('tasks')}>精修任务 <span>{tasksLoading?'...':tasksError?'加载失败':tasks.length}</span></button>
     </div>
     {error&&<div className="refine-error" role="alert">{error}<button onClick={()=>tab==='sources'?setSourcesRetry(value=>value+1):setTasksRetry(value=>value+1)}>重新加载</button></div>}
     {tab==='sources'&&selectionError&&<div className="refine-error" role="alert">{selectionError}</div>}
-    {loading?<div className="refine-empty" role="status"><Loader2 className="animate-spin"/>{tab==='sources'?'正在加载成片':'正在加载精修任务'}</div>:tab==='sources'?<>
+    {loading?<div className="refine-empty" role="status"><Loader2 className="animate-spin"/>{tab==='sources'?'正在加载商品成片':'正在加载精修任务'}</div>:tab==='sources'?<>
       <div className="refine-filters">
-        <label className="refine-search"><Search size={16}/><input aria-label="搜索成片" value={search} onChange={e=>setSearch(e.target.value)} placeholder="搜索成片或商品" /></label>
+        <label className="refine-search"><Search size={16}/><input aria-label="搜索商品成片" value={search} onChange={e=>setSearch(e.target.value)} placeholder="文件名, 商品或标签" /></label>
         <select aria-label="筛选商品" value={product} onChange={e=>setProduct(e.target.value)}><option value="">全部商品</option>{products.map(([id,name])=><option key={id} value={id}>{name}</option>)}</select>
         <select aria-label="筛选时长" value={duration} onChange={e=>setDuration(e.target.value)}><option value="">全部时长</option><option value="short">15 秒内</option><option value="medium">15-30 秒</option><option value="long">30 秒以上</option></select>
         <select aria-label="筛选画幅" value={aspect} onChange={e=>setAspect(e.target.value)}><option value="">全部画幅</option><option value="portrait">竖屏</option><option value="landscape">横屏或方形</option></select>
         <select aria-label="筛选创建时间" value={recent} onChange={e=>setRecent(e.target.value)}><option value="">全部时间</option><option value="7">近 7 天</option><option value="30">近 30 天</option></select>
       </div>
-      {(!sourcesError||sources.length>0)&&<p className="refine-note">选择一条完整成片开始. 共 {visible.length} 条结果.</p>}
-      <div className="refine-source-grid">{visible.map(row=><button className="refine-source-choice" key={row.id} onClick={()=>setSelected(row.id)} aria-label={`选择 ${row.filename}`}>
-        <div className="refine-thumbnail"><Film size={32}/><span>{seconds(row.duration_seconds*1000)}</span></div>
-        <div><strong>{row.filename}</strong><p>{row.product_name}</p><span>{row.width} x {row.height} / {new Date(row.created_at).toLocaleDateString('zh-CN')}</span></div>
-      </button>)}</div>
-      {!sourcesError&&!visible.length&&<div className="refine-empty"><Film size={32}/><h2>{sources.length?'没有符合筛选条件的成片':'成片库还没有完整视频'}</h2><p>{sources.length?'调整搜索或筛选条件后重试.':'完成视频编排或成品混剪后, 即可在这里选择精修.'}</p><Link className="btn-secondary" to="/final-videos">打开成片库</Link></div>}
-    </>:<div className="refine-task-list">{tasks.map(task=><Link key={task.id} to={`/video-refinements/${task.id}`}><div><strong>{task.source_snapshot.source.filename}</strong><p>{task.user_brief}</p></div><span>{statusLabels[task.status]} / r{task.current_revision}</span><ChevronRight size={18}/></Link>)}{!tasksError&&!tasks.length&&<div className="refine-empty"><h2>还没有精修任务</h2><p>从源成片开始, 保存目标和方案后会出现在这里.</p></div>}</div>}
+      {(!sourcesError||sources.length>0)&&<div className="refine-source-toolbar"><p className="refine-note">从商品成片库选择一条成片开始精修. 共 {visible.length} 条结果.</p><button className="btn-secondary" onClick={()=>setSourcesRetry(value=>value+1)}><RefreshCw size={14}/>刷新成片</button></div>}
+      <div className="refine-source-grid">{visible.map(row=><article className="refine-source-choice" key={row.id}>
+        <video className="refine-source-thumbnail" src={mediaUrl(row.object_url)} controls playsInline preload="metadata" aria-label={`预览 ${row.filename}`}/>
+        <div className="refine-source-info"><strong>{row.filename}</strong><p>{row.product_name}</p><span>{seconds(row.duration_seconds*1000)} / {row.width} x {row.height}</span>
+          <VideoTaxonomySummary asset={sourceTaxonomy(row)} compact showAiTags={false}/>
+          <div className="refine-inline-actions"><Link className="btn-secondary" to={`/ecommerce-final-videos/${row.id}`}><Eye size={14}/>查看详情</Link><a className="btn-secondary" href={mediaUrl(row.object_url)} download><Download size={14}/>下载</a></div>
+          <button className="btn-primary w-full justify-center" onClick={()=>setSelected(row.id)} aria-label={`选择 ${row.filename}`}><WandSparkles size={14}/>选择此成片</button>
+        </div>
+      </article>)}</div>
+      {!sourcesError&&!visible.length&&<div className="refine-empty"><Film size={32}/><h2>{sources.length?'没有符合筛选条件的商品成片':'商品成片库还没有可用视频'}</h2><p>{sources.length?'调整搜索或筛选条件后重试.':'请先为电商商品上传成片, 完成文件校验后即可开始精修, 无需库内分析.'}</p><Link className="btn-secondary" to="/ecommerce-final-videos">打开商品成片库</Link></div>}
+    </>:<div className="refine-task-list">{tasks.map(task=><Link key={task.id} to={`/video-refinements/${task.id}`}><div><strong>{task.source_filename}</strong><p>{task.user_brief}</p></div><span>{statusLabels[task.status]} / r{task.current_revision}</span><ChevronRight size={18}/></Link>)}{!tasksError&&!tasks.length&&<div className="refine-empty"><h2>还没有精修任务</h2><p>选择商品成片并保存修改意见后, 任务会出现在这里.</p></div>}</div>}
   </>;
 }
 
@@ -185,18 +199,35 @@ function TaskWorkspace({taskId}: {taskId: number}) {
   },[taskId,retry]);
   const pendingPreview = task?.previews?.some(row=>row.revision===task.current_revision&&(row.status==='queued'||row.status==='rendering'));
   const pendingAnalysis=task?.analysis_state?.status==='queued'||task?.analysis_state?.status==='analyzing';
+  const workerUnavailable=!!task?.worker_state&&task.worker_state.status!=='running';
+  const waitingForWorker=workerUnavailable&&task?.status!=='CANCELLED'&&task?.status!=='COMPLETED';
   const pendingVoice=task?.voiceovers?.some(row=>row.status==='queued'||row.status==='generating');
   useEffect(()=>{
-    if(!pendingPreview&&!pendingAnalysis&&!pendingVoice)return;
+    if(!pendingPreview&&!pendingAnalysis&&!pendingVoice&&!waitingForWorker)return;
     let active = true;
-    const timer = window.setInterval(()=>{
-      videoRefinementApi.get(taskId).then(next=>{if(active){pollingFailures.current=0;setPollError('');setError(current=>current==='预览状态加载失败, 请重新加载'?'':current);if(next.current_revision!==task?.current_revision)apply(next);else setTask(current=>current?{...current,status:next.status,previews:next.previews,analysis_state:next.analysis_state,voiceovers:next.voiceovers,output_asset_id:next.output_asset_id,output_version:next.output_version}:next)}})
-        .catch(()=>{if(active){pollingFailures.current+=1;if(pollingFailures.current>=3)setPollError('任务状态更新暂时中断, 正在自动重试')}});
-    },2000);
-    return()=>{active=false;window.clearInterval(timer)};
-  },[taskId,pendingPreview,pendingAnalysis,pendingVoice,task?.current_revision]);
+    const controller = new AbortController();
+    let timer: ReturnType<typeof window.setTimeout>;
+    async function poll() {
+      try {
+        const next = await videoRefinementApi.state(taskId,controller.signal);
+        if(!active)return;
+        pollingFailures.current=0;setPollError('');setError(current=>current==='预览状态加载失败, 请重新加载'?'':current);
+        if(next.current_revision!==task?.current_revision){
+          const updated=await videoRefinementApi.get(taskId,controller.signal);
+          if(active)apply(updated);
+        } else setTask(current=>current?{...current,...next}:current);
+      } catch {
+        if(active){pollingFailures.current+=1;if(pollingFailures.current>=3)setPollError('任务状态更新暂时中断, 正在自动重试')}
+      } finally {
+        if(active)timer=window.setTimeout(poll,Math.min(30000,2000*2**Math.min(pollingFailures.current,4)));
+      }
+    }
+    timer=window.setTimeout(poll,2000);
+    return()=>{active=false;window.clearTimeout(timer);controller.abort()};
+  },[taskId,pendingPreview,pendingAnalysis,pendingVoice,waitingForWorker,task?.current_revision]);
   const dirty = JSON.stringify(draft)!==JSON.stringify(task?.plan?.items||[]);
   const active = draft.find(row=>row.item_id===activeId);
+  const activeVoice = task?.voiceovers?.find(row=>row.id===active?.voiceover_id);
   async function action(name: string, work: () => Promise<VideoRefinementTask>) {
     if(actionPending.current)return;
     actionPending.current=true;
@@ -210,11 +241,12 @@ function TaskWorkspace({taskId}: {taskId: number}) {
     const nextParams=new URLSearchParams(params);nextParams.delete('analyze');setParams(nextParams,{replace:true});
     void action('analyze',()=>generatePreview(task));
   },[task?.id,params]);
-  function update(patch: Partial<VideoRefinementPlanItem>) {if(patch.script!==undefined)patch.voiceover_id=null;setEditing(true);setDraft(rows=>rows.map(row=>row.item_id===activeId?{...row,...patch}:row));setAcknowledged(false)}
+  function update(patch: Partial<VideoRefinementPlanItem>) {if(patch.script!==undefined||patch.tts_speaker!==undefined)patch.voiceover_id=null;setEditing(true);setDraft(rows=>rows.map(row=>row.item_id===activeId?{...row,...patch}:row));setAcknowledged(false)}
   function seek(ms: number) {const video=player.current;if(video){video.pause();video.currentTime=Math.max(0,Math.min(ms,task?.source_snapshot.source.duration_ms||0))/1000;setPlayTime(video.currentTime*1000)}}
   if(!task)return <div className="refine-empty">{error?<><p role="alert">{error}</p><button className="btn-secondary" onClick={()=>setRetry(value=>value+1)}>重新加载</button><Link to="/video-refinements">返回精修工作台</Link></>:<><Loader2 className="animate-spin"/>正在加载任务</>}</div>;
   const source=task.source_snapshot.source;
   const activeMaterial=task.source_snapshot.material_catalog.find(row=>row.asset_id===active?.material_asset_id);
+  const actualSegments=task.plan?.video_track?.filter(clip=>clip.source_kind==='material'&&active&&clip.item_ids.includes(active.item_id)).map(clip=>({asset_id:clip.source_asset_id,source_range:clip.source_range}))??active?.material_segments;
   const cancelled=task.status==='CANCELLED'||task.status==='COMPLETED';
   const legacy=task.source_snapshot.is_mock;
   const v2=task.source_snapshot.schema_version==='video_refinement_snapshot.v2';
@@ -227,6 +259,14 @@ function TaskWorkspace({taskId}: {taskId: number}) {
   const delta=v2&&!dirty?(task.plan?.summary.duration_delta_ms||0):draft.filter(row=>row.enabled).reduce((sum,row)=>sum+row.duration_delta_ms,0);
   const enabled=draft.filter(row=>row.enabled);
   const risks=enabled.some(row=>row.confidence_level==='LOW'||row.type==='VOICE_REPLACE'||row.type==='SUBTITLE_EDIT'||(row.type==='VISUAL_REPLACE'&&!row.material_asset_id));
+  const previewDuration=!dirty&&(preview?.status==='ready'||preview?.status==='accepted')?preview.validation.duration_seconds:undefined;
+  const measuredDuration=previewDuration&&Number.isFinite(previewDuration)&&previewDuration>0?previewDuration:undefined;
+  const displayedDuration=measuredDuration?Math.round(measuredDuration*1000):source.duration_ms+delta;
+  const displayedDelta=displayedDuration-source.duration_ms;
+  const selectedVoice=activeVoice?.parameters.selection;
+  const sharedSpeaker=task.options?.tts_speaker||task.plan?.analysis?.voice_selection?.speaker;
+  const sharedVoice=!!selectedVoice&&selectedVoice.speaker===sharedSpeaker&&task.plan?.analysis?.voice_selection?.speaker===sharedSpeaker;
+  const activeRisks=Array.from(new Set((active?.risk||'').split(/[;；]/).map(text=>text.trim()).filter(Boolean)));
   return <>
     <div className="refine-task-heading"><Link to="/video-refinements"><ArrowLeft size={15}/>返回精修工作台</Link><div><h2>{source.filename}</h2><span className="refine-status">{statusLabels[task.status]} / r{task.current_revision}</span></div><p>{source.product_name} / SKU 未核实 / <LockKeyhole size={13}/>画幅锁定 {source.aspect_ratio} / 源片 {seconds(source.duration_ms)}</p></div>
     {legacy&&<div className="refine-legacy" role="status"><p>这条历史方案使用了示例数据. 使用系统真实视频和素材创建新任务, 原方案保留为历史记录.</p><button className="btn-primary" disabled={!!busy} onClick={async()=>{setBusy('restart');setError('');try{const next=await videoRefinementApi.create({source_asset_id:task.source_asset_id,user_brief:task.user_brief,expected_result:task.expected_result,focus:task.focus});navigate(`/video-refinements/${next.id}`)}catch(error){setError(errorMessage(error))}finally{setBusy('')}}}>使用真实数据重新开始</button></div>}
@@ -235,39 +275,39 @@ function TaskWorkspace({taskId}: {taskId: number}) {
     {pollError&&<p className="refine-note" role="status">{pollError}</p>}
     <div className="refine-workspace">
       <section className="refine-viewer" aria-label="源片与时间轴">
-        <div className="refine-section-heading"><h3>{source.version.toUpperCase()} 源成片</h3><span>源文件保持原样</span></div>
-        <video ref={player} src={mediaUrl(source.object_url)} controls playsInline preload="metadata" onTimeUpdate={()=>setPlayTime((player.current?.currentTime||0)*1000)} onError={()=>setMediaError(true)} onLoadedMetadata={()=>setMediaError(false)} aria-label="V1 源成片播放器" />
-        {mediaError&&<p className="refine-error" role="alert">源片无法播放, 请检查媒体地址或返回成片库验证文件.</p>}
+        <div className="refine-section-heading"><h3>{source.version.toUpperCase()} 商品成片</h3><span>源文件保持原样</span></div>
+        <video ref={player} src={mediaUrl(source.object_url)} controls playsInline preload="metadata" onTimeUpdate={()=>setPlayTime((player.current?.currentTime||0)*1000)} onError={()=>setMediaError(true)} onLoadedMetadata={()=>setMediaError(false)} aria-label="V1 商品成片播放器" />
+        {mediaError&&<p className="refine-error" role="alert">源成片无法播放, 请检查媒体地址或返回商品成片库验证文件.</p>}
         <div className="refine-playback"><button onClick={()=>seek(playTime-1000/source.fps)} aria-label="前一帧"><ChevronLeft size={18}/></button><output>{timecode(playTime)}</output><button onClick={()=>seek(playTime+1000/source.fps)} aria-label="后一帧"><ChevronRight size={18}/></button><span>{timecode(source.duration_ms)}</span></div>
         <input className="refine-scrubber" aria-label="源片播放位置" type="range" min={0} max={source.duration_ms} step={Math.max(1,Math.round(1000/source.fps))} value={playTime} onChange={e=>seek(Number(e.target.value))}/>
-        <div className="refine-section-heading"><h3>源片时间轴</h3><span>{legacy?'历史示例时间轴':task.plan?.analysis?'AI 镜头分析':'系统保存的来源'}</span></div>
+        <div className="refine-section-heading"><h3>源片时间轴</h3><span>{legacy?'历史示例时间轴':task.plan?.analysis?'镜头分析':'系统保存的来源'}</span></div>
         <div className="refine-shot-track">{timeline.map(shot=><button key={shot.shot_id} style={{flex:shot.end_ms-shot.start_ms}} onClick={()=>seek(shot.start_ms)} title={`${shot.label}, ${timecode(shot.start_ms)} - ${timecode(shot.end_ms)}`}>{shot.label}</button>)}</div>
         {preview&&<section className="refine-preview" aria-label="精修预览"><div className="refine-section-heading"><h3>精修预览 / r{preview.revision}</h3><span>{preview.status==='ready'?'待核对':preview.status==='accepted'?'已保存':preview.status==='failed'?'生成失败':'生成中'}</span></div>
           {(preview.status==='queued'||preview.status==='rendering')&&<p role="status"><Loader2 size={18} className="animate-spin"/>{preview.status==='queued'?'等待生成完整预览':'正在渲染完整预览'}. 完成后自动更新.</p>}
           {preview.status==='failed'&&<p className="refine-error" role="alert">{preview.error_message}</p>}
-          {(preview.status==='ready'||preview.status==='accepted')&&<><video ref={previewPlayer} key={preview.id} src={mediaUrl(preview.output_url)} controls playsInline preload="metadata" aria-label="精修预览播放器" onTimeUpdate={()=>{if(previewStop.current!==null&&previewPlayer.current&&previewPlayer.current.currentTime>=previewStop.current){previewPlayer.current.pause();previewStop.current=null}}}/>{v2&&active&&<button className="btn-secondary" onClick={()=>{const clip=task.plan?.video_track?.find(c=>c.item_ids.includes(active.item_id));const mapped=task.plan?.source_to_output_map?.find(c=>c.source_range.start_ms<=active.range.start_ms&&active.range.start_ms<=c.source_range.end_ms);const range=clip?.output_range||mapped?.output_range;if(previewPlayer.current&&range){previewPlayer.current.currentTime=Math.max(0,range.start_ms-1500)/1000;previewStop.current=Math.min(task.plan!.summary.expected_duration_ms,range.end_ms+1500)/1000;void previewPlayer.current.play().catch(()=>setError('连续预览播放失败, 请使用播放器控件重试'))}}}>连续核对当前修改前后</button>}<p>实测 {seconds((preview.validation.duration_seconds||0)*1000)} / {preview.validation.width} x {preview.validation.height}. 媒体与解码检查已通过.</p><p className="refine-note">请对照源片核对剪切点, 原声衔接, 字幕和商品. 自动媒体检查不代替内容核对.</p>
+          {(preview.status==='ready'||preview.status==='accepted')&&<><video ref={previewPlayer} key={preview.id} src={mediaUrl(preview.output_url)} controls playsInline preload="metadata" aria-label="精修预览播放器" onTimeUpdate={()=>{if(previewStop.current!==null&&previewPlayer.current&&previewPlayer.current.currentTime>=previewStop.current){previewPlayer.current.pause();previewStop.current=null}}}/>{v2&&active&&<button className="btn-secondary" onClick={()=>{const clip=task.plan?.video_track?.find(c=>c.item_ids.includes(active.item_id));const mapped=task.plan?.source_to_output_map?.find(c=>c.source_range.start_ms<=active.range.start_ms&&active.range.start_ms<=c.source_range.end_ms);const range=clip?.output_range||mapped?.output_range;if(previewPlayer.current&&range){previewPlayer.current.currentTime=Math.max(0,range.start_ms-1500)/1000;previewStop.current=Math.min(task.plan!.summary.expected_duration_ms,range.end_ms+1500)/1000;void previewPlayer.current.play().catch(()=>setError('连续预览播放失败, 请使用播放器控件重试'))}}}>连续核对当前修改前后</button>}
             {preview.status==='ready'&&!editing&&<><label className="refine-risk-ack"><input type="checkbox" checked={previewReviewed} onChange={e=>setPreviewReviewed(e.target.checked)}/>我已播放预览并核对音画, 字幕和商品</label><button className="btn-primary" disabled={!!busy||!previewReviewed||dirty} onClick={()=>action('accept',()=>videoRefinementApi.accept(task.id,preview.id,{revision:task.current_revision,plan_hash:task.plan_hash!}))}>{busy==='accept'&&<Loader2 size={16} className="animate-spin"/>}接受预览并另存精修版本</button></>}
           </>}
         </section>}
-        {task.output_asset_id&&<Link className="btn-primary" to={`/final-videos/${task.output_asset_id}`}>查看精修 V{task.output_version} 成片</Link>}
+        {task.output_asset_id&&<Link className="btn-primary" to={`/ecommerce-final-videos/${task.output_asset_id}`}>查看精修 V{task.output_version} 成片</Link>}
       </section>
       <section className="refine-plan" aria-label="精修方案">
-        <div className="refine-section-heading"><h3>精修目标</h3><span>{legacy?'历史示例方案':task.plan?.analysis?.mode==='sampled_frames'?'AI 关键帧分析':'真实 AI 分析'}</span></div><p className="refine-objective">{task.user_brief}</p>{task.expected_result&&<p className="refine-note">预期结果: {task.expected_result}</p>}
+        <div className="refine-section-heading"><h3>精修目标</h3><span>{legacy?'历史示例方案':task.plan?.analysis?.mode==='sampled_frames'?'关键帧分析':'视频分析'}</span></div><p className="refine-objective">{task.user_brief}</p>{task.expected_result&&<p className="refine-note">预期结果: {task.expected_result}</p>}
         {v2&&<><GoalEditor task={task} disabled={!!busy||cancelled||dirty||!!pendingAnalysis} action={action}/><EvaluationProgress task={task}/>{!!task.plan?.material_evaluation?.failed&&!task.plan.material_evaluation.partial_accepted&&!pendingAnalysis&&!task.plan.material_evaluation.complete&&<button className="btn-secondary" disabled={!!busy||cancelled||dirty} onClick={()=>action('requirements',async()=>{const next=await videoRefinementApi.requirements(task.id,{revision:task.current_revision,accept_partial_evaluation:true});return videoRefinementApi.autoPreview(task.id,next.current_revision)})}>接受当前已评估范围并重新规划</button>}<RequirementPanel task={task} disabled={!!busy||cancelled||dirty||!!pendingAnalysis} action={action}/></>}
         {!v2&&!legacy&&!cancelled&&<button className="btn-secondary" disabled={!!busy||dirty} onClick={()=>action('refresh',()=>videoRefinementApi.refreshMaterials(task.id,task.current_revision))}>刷新素材并使用音画独立新规则</button>}
         {task.analysis_state?.status==='failed'&&<div className="refine-error" role="alert">{task.analysis_state.error_message}<button disabled={!!busy||dirty} onClick={()=>action('analyze',()=>generatePreview(task))}>重试后台分析</button></div>}
-        {!task.plan?<div className="refine-no-plan"><h3>目标已保存, 现在生成精修预览</h3><p>AI 自动匹配同商品无字幕素材, 为补充段生成新配音, 完成音画检查后生成视频预览.</p><button className="btn-primary" disabled={!!busy||cancelled||legacy||!!pendingAnalysis} onClick={()=>action('analyze',()=>generatePreview(task))}>{busy==='analyze'?<Loader2 className="animate-spin" size={16}/>:<WandSparkles size={16}/>}{v2?'AI 精修并生成预览':'AI 分析并生成方案'}</button>{busy==='analyze'&&<p role="status">正在读取真实媒体并调用 AI, 请稍候.</p>}</div>:<>
-          {v2&&!cancelled&&!editing&&task.status!=='PLAN_CONFIRMED'&&<div className="refine-inline-actions"><button className="btn-primary" disabled={!!busy||dirty||!!pendingAnalysis} onClick={()=>action('analyze',()=>generatePreview(task))}>{(busy==='analyze'||pendingAnalysis)?<Loader2 size={16} className="animate-spin"/>:<WandSparkles size={16}/>}AI 精修并生成预览</button><span className="refine-note">自动选择无字幕素材并生成补充段配音</span></div>}
+        {!task.plan?<div className="refine-no-plan"><h3>目标已保存, 现在生成精修预览</h3><p>AI 自动匹配同商品无字幕素材, 仅按明确要求生成局部配音, 完成音画检查后生成视频预览.</p><button className="btn-primary" disabled={!!busy||cancelled||legacy||!!pendingAnalysis||workerUnavailable} onClick={()=>action('analyze',()=>generatePreview(task))}>{busy==='analyze'?<Loader2 className="animate-spin" size={16}/>:<WandSparkles size={16}/>}{v2?'AI 精修并生成预览':'AI 分析并生成方案'}</button>{busy==='analyze'&&<p role="status">正在读取真实媒体并调用 AI, 请稍候.</p>}</div>:<>
+          {v2&&!cancelled&&!editing&&task.status!=='PLAN_CONFIRMED'&&<div className="refine-inline-actions"><button className="btn-primary" disabled={!!busy||dirty||!!pendingAnalysis||workerUnavailable} onClick={()=>action('analyze',()=>generatePreview(task))}>{(busy==='analyze'||pendingAnalysis)&&!workerUnavailable?<Loader2 size={16} className="animate-spin"/>:<WandSparkles size={16}/>}AI 精修并生成预览</button><span className="refine-note">自动选择可复用的同商品素材, 按目标自主完成画面与配音</span></div>}
           <div className="refine-section-heading"><h3>{editing?'修改方案':'完整精修方案'}</h3><button className="refine-text-button" disabled={!!busy||cancelled||!!pendingAnalysis} onClick={()=>{if(editing){setDraft(task.plan!.items.map(row=>structuredClone(row)));setAcknowledged(false)}setEditing(value=>!value)}}><Pencil size={14}/>{editing?'放弃修改':'修改方案'}</button></div>
-          <div className="refine-duration"><span>源片 <strong>{seconds(source.duration_ms)}</strong></span><span>预计 <strong>{seconds(source.duration_ms+delta)}</strong></span><span>{delta>0?'+':''}{seconds(delta)}{dirty?' / 未保存':''}</span></div>
-          <p className="refine-note">{delta?'时长变化来自启用的裁切和片段插入, 实际结果需渲染后测量.':'当前方案保持源片时长.'}</p>
+          <div className="refine-duration"><span>源片 <strong>{seconds(source.duration_ms)}</strong></span><span>{measuredDuration?'精修':'预计'} <strong>{seconds(displayedDuration)}</strong></span><span>{displayedDelta>0?'+':''}{seconds(displayedDelta)}{dirty?' / 未保存':''}</span></div>
+          {!dirty&&task.plan.automatic_adjustments?.map((adjustment,index)=><p className="refine-note" role="status" key={index}>{adjustment.message} 素材 {adjustment.asset_id}: {timecode(adjustment.before_range.start_ms)} - {timecode(adjustment.before_range.end_ms)} 调整为 {timecode(adjustment.after_range.start_ms)} - {timecode(adjustment.after_range.end_ms)}.</p>)}
           {v2&&task.plan.execution_blockers.length>0&&<div className="refine-blockers" role="status"><h4>当前方案缺少的执行条件</h4><p className="refine-note">点击 AI 精修并生成预览, 系统会自动核验素材, 准备配音和检查插入边界.</p>{task.plan.execution_blockers.map((row,index)=><p key={index}>{row.message}</p>)}</div>}
           {!draft.length&&<p className="refine-note">当前评估没有需要执行的剪辑动作. 请查看逐条要求的处理结果.</p>}
           <div className="refine-items">{draft.map(item=><article key={item.item_id} className={`${item.item_id===activeId?'is-active':''} ${item.enabled?'':'is-off'}`}>
             <label className="refine-enable"><input type="checkbox" aria-label={`启用${itemLabels[item.type]}`} checked={item.enabled} disabled={!editing||!!busy||cancelled} onChange={()=>{setActiveId(item.item_id);setDraft(rows=>rows.map(row=>row.item_id===item.item_id?{...row,enabled:!row.enabled}:row));setAcknowledged(false)}}/></label>
-            <button className="refine-item-select" onClick={()=>{setActiveId(item.item_id);seek(item.range.start_ms)}}><span>{itemLabels[item.type]}<small>{item.confidence_level==='LOW'?'低置信度, 需要确认':item.status==='HUMAN_EDITED'?'人工已修改':legacy?'历史示例建议':'AI 建议'}</small></span><strong>{item.operation}</strong><span>{item.type==='SEGMENT_INSERT'?`插入于 ${timecode(item.range.start_ms)}`:`${timecode(item.range.start_ms)} - ${timecode(item.range.end_ms)}`}</span></button>
+            <button className="refine-item-select" aria-pressed={item.item_id===activeId} aria-controls="refine-inspector" onClick={()=>{setActiveId(item.item_id);seek(item.range.start_ms)}}><span>{itemLabels[item.type]}<small className={item.confidence_level==='LOW'?'refine-needs-review':undefined}>{item.confidence_level==='LOW'?<><AlertTriangle size={13}/>低置信度, 需要确认</>:item.status==='HUMAN_EDITED'?'人工已修改':legacy?'历史示例建议':'建议'}</small></span><strong>{item.operation}</strong><span>{item.type==='SEGMENT_INSERT'?`原片 ${timecode(item.range.start_ms)} 处插入`:`原片 ${timecode(item.range.start_ms)} - ${timecode(item.range.end_ms)}`}{item.duration_delta_ms!==0&&` / ${item.duration_delta_ms>0?'新增':'减少'} ${seconds(Math.abs(item.duration_delta_ms))}`}</span></button>
           </article>)}</div>
-          {active&&<section className="refine-inspector" aria-label="修改项详情"><h4>{itemLabels[active.type]}详情</h4><p>{active.reason}</p>
+          {active&&<section id="refine-inspector" className="refine-inspector" aria-label="修改项详情"><h4>修改 {draft.findIndex(item=>item.item_id===activeId)+1} · {itemLabels[active.type]}详情</h4><p className="refine-inspector-operation">{active.operation}</p>
             {activeMaterial&&!v2&&<><p className="refine-note">候选素材: {activeMaterial.filename}{activeMaterial.analysis_status==='analysis_failed'?' / 分析失败, 仍可使用':''}</p><video className="refine-material-player" key={activeMaterial.asset_id} src={mediaUrl(activeMaterial.object_url)} controls playsInline preload="metadata" aria-label="候选素材播放器"/></>}
             {editing&&<fieldset disabled={!!busy||cancelled}><div className="refine-time-fields"><label className="field">{active.type==='SEGMENT_INSERT'?'插入位置, 秒':'起始时间, 秒'}<input type="number" min={0} max={source.duration_ms/1000} step="0.001" value={active.range.start_ms/1000} onChange={e=>{const start_ms=Math.round(Number(e.target.value)*1000);update({range:{...active.range,start_ms,...(active.type==='SEGMENT_INSERT'?{end_ms:start_ms}:{})}})}}/></label>{active.type!=='SEGMENT_INSERT'&&<label className="field">结束时间, 秒<input type="number" min={0} max={source.duration_ms/1000} step="0.001" value={active.range.end_ms/1000} onChange={e=>update({range:{...active.range,end_ms:Math.round(Number(e.target.value)*1000)}})}/></label>}</div>
               <label className="field">修改描述<textarea rows={2} maxLength={2000} value={active.operation} onChange={e=>update({operation:e.target.value})}/></label>
@@ -285,14 +325,17 @@ function TaskWorkspace({taskId}: {taskId: number}) {
               {v2&&active.narration_strategy==='tts'&&<><label className="field">字幕处理<select value={active.subtitle_strategy||'regenerate'} onChange={e=>update({subtitle_strategy:e.target.value as VideoRefinementPlanItem['subtitle_strategy']})}><option value="regenerate">按可信配音时间生成字幕</option><option value="none">本段不生成字幕</option></select></label><label className="field">无讲话留白的原因, 可选<input maxLength={500} value={active.narration_padding_reason||''} onChange={e=>update({narration_padding_reason:e.target.value})}/></label></>}
             </fieldset>}
             {v2&&editing&&active.narration_strategy==='tts'&&<VoiceoverEditor task={task} item={active} disabled={!!busy||cancelled} dirty={dirty} action={action} onChange={update}/>}
-            {v2&&<p className="refine-note">{active.narration_strategy==='tts'?'新增或改写台词使用局部 TTS':active.narration_strategy==='cut_source'?'完整裁切确认区间的原音频':'原成片配音保留'} / 素材拍摄原声关闭</p>}
+            {v2&&<p className="refine-note">本片段: {active.narration_strategy==='tts'?'新增配音':active.narration_strategy==='cut_source'?'裁切对应原声':'保留原配音'}{(active.type==='VISUAL_REPLACE'||active.type==='SEGMENT_INSERT'||actualSegments?.length)?' · 素材原声关闭':''}</p>}
             {v2&&active.type==='PACE_RECUT'&&<p className="refine-note">将删除的台词: {(task.plan?.analysis as unknown as {context?: {transcript: RefinementSnapshot['transcript']}})?.context?.transcript.filter(c=>(active.removed_ranges?.length?active.removed_ranges:[active.range]).some(r=>r.start_ms<c.end_ms&&c.start_ms<r.end_ms)).map(c=>c.text).join(' / ')||'暂无可信转写, 请播放并核对边界'}</p>}
-            {(active.script||active.subtitle_text)&&!editing&&<p>文本: {active.script||active.subtitle_text}</p>}
-            <p className="refine-risk"><AlertTriangle size={15}/>{active.risk||'区间与修改内容需人工核对.'}</p>{active.dependencies.length>0&&<p className="refine-note">依赖: {active.dependencies.join(', ')}</p>}
-            {active.evidence.length>0&&<p className="refine-evidence">分析依据: {active.evidence.join(', ')}</p>}
+            {(active.script||active.subtitle_text)&&!editing&&<div className="refine-script"><h4>{active.script?'配音台词':'字幕文本'}</h4><p>{active.script||active.subtitle_text}</p></div>}
+            {!editing&&selectedVoice&&!sharedVoice&&<div className="refine-note"><p>本段音色: {selectedVoice.name} / {selectedVoice.mode==='manual'?'手动指定':'自动选择'}</p><details className="refine-disclosure"><summary>本段选声依据</summary><p>{selectedVoice.reason}</p></details></div>}
+            {activeRisks.filter(text=>text!=='局部配音使用适配或手动选择的中文音色, 请试听核对与原声及音乐的衔接').map(text=><p key={text} className="refine-risk"><AlertTriangle size={15}/>{text}</p>)}
+            {!editing&&actualSegments?.map((segment,index)=>{const material=task.source_snapshot.material_catalog.find(row=>row.asset_id===segment.asset_id);return <div className="refine-material-used" key={index}><p>{material?.filename||`素材 ${segment.asset_id}`}</p><p className="refine-note">取用 {timecode(segment.source_range.start_ms)} - {timecode(segment.source_range.end_ms)} · {seconds(segment.source_range.end_ms-segment.source_range.start_ms)}</p></div>})}
+            <details key={active.item_id} className="refine-disclosure"><summary>修改依据与处理说明</summary><p>{active.reason}</p>{active.dependencies.length>0&&<p>依赖: {active.dependencies.join(', ')}</p>}{active.evidence.length>0&&<p>分析依据: {active.evidence.join(', ')}</p>}{activeRisks.includes('局部配音使用适配或手动选择的中文音色, 请试听核对与原声及音乐的衔接')&&<p>请试听核对新增配音与原声及音乐的衔接.</p>}</details>
+            {!dirty&&task.plan.local_selection?.filter(selection=>selection.item_id===active.item_id).map(selection=><div key={selection.candidate_id} className="refine-note"><p>素材 {selection.asset_id} 选择依据: {selection.reason}</p><p>采样核验范围: {timecode(selection.safe_range.start_ms)} - {timecode(selection.safe_range.end_ms)}. 已采样 {selection.verification.sampled_times_ms.length} 个时间点, 不代表连续观看.</p><p>商品依据: {selection.product_match.evidence}{!selection.product_match.sku_verified?' / SKU 尚需人工核对':''}</p>{selection.verification.risks.map((risk,index)=><p key={index}>{risk}</p>)}</div>)}
           </section>}
-          <details className="refine-findings"><summary>发现但不建议自动修改</summary>{task.plan.findings_not_applied.map(text=><p key={text}>{text}</p>)}</details>
-          <div className="refine-plan-actions">{editing?<button className="btn-primary" disabled={!!busy||!dirty||cancelled||legacy} onClick={()=>action('save',()=>videoRefinementApi.updateDraft(task.id,{revision:task.current_revision,items:draft}))}>{busy==='save'&&<Loader2 className="animate-spin" size={16}/>}保存方案修改</button>:task.status==='COMPLETED'?<p className="refine-confirmed"><Check size={18}/>精修 V{task.output_version} 已保存.</p>:task.status==='PLAN_CONFIRMED'?<><p className="refine-confirmed"><Check size={18}/>r{task.confirmed_revision} 已整体确认. {legacy?'请使用真实数据重新开始.':'可以生成视频预览.'}</p>{!legacy&&<><button className="btn-primary" disabled={!!busy||dirty||!!task.plan.execution_blockers.length||pendingPreview||preview?.status==='ready'} onClick={()=>action('preview',()=>videoRefinementApi.preview(task.id,{revision:task.current_revision,plan_hash:task.plan_hash!}))}>{(busy==='preview'||pendingPreview)&&<Loader2 size={16} className="animate-spin"/>}{preview?.status==='failed'?'重新生成预览':'生成精修预览'}</button>{task.plan.execution_blockers.length>0&&<p className="refine-note">请关闭无法自动执行的修改项或补充素材, 保存并重新确认后生成预览.</p>}</>}</>:<>
+          {task.plan.findings_not_applied.length>0&&<details className="refine-findings"><summary>其他发现 ({task.plan.findings_not_applied.length})</summary>{task.plan.findings_not_applied.map(text=><p key={text}>{text}</p>)}</details>}
+          <div className="refine-plan-actions">{editing?<button className="btn-primary" disabled={!!busy||!dirty||cancelled||legacy} onClick={()=>action('save',()=>videoRefinementApi.updateDraft(task.id,{revision:task.current_revision,items:draft}))}>{busy==='save'&&<Loader2 className="animate-spin" size={16}/>}保存方案修改</button>:task.status==='COMPLETED'?<p className="refine-confirmed"><Check size={18}/>精修 V{task.output_version} 已保存.</p>:task.status==='PLAN_CONFIRMED'?<><p className="refine-confirmed"><Check size={18}/>r{task.confirmed_revision} 已整体确认. {legacy?'请使用真实数据重新开始.':preview?.status==='ready'?'预览已生成, 请核对预览后另存.':pendingPreview?'预览正在生成.':'可以生成视频预览.'}</p>{!legacy&&<><button className="btn-primary" disabled={!!busy||dirty||!!task.plan.execution_blockers.length||pendingPreview||preview?.status==='ready'} onClick={()=>action('preview',()=>videoRefinementApi.preview(task.id,{revision:task.current_revision,plan_hash:task.plan_hash!}))}>{(busy==='preview'||pendingPreview)&&<Loader2 size={16} className="animate-spin"/>}{preview?.status==='failed'?'重新生成预览':'生成精修预览'}</button>{task.plan.execution_blockers.length>0&&<p className="refine-note">请关闭无法自动执行的修改项或补充素材, 保存并重新确认后生成预览.</p>}</>}</>:<>
             {risks&&<label className="refine-risk-ack"><input type="checkbox" checked={acknowledged} disabled={!!busy||cancelled} onChange={e=>setAcknowledged(e.target.checked)}/>我已核对低置信度建议和素材, 配音, 字幕的处理限制</label>}
             <button className="btn-primary" disabled={!!busy||dirty||!enabled.length||cancelled||legacy||(v2&&!!task.plan.execution_blockers.length)||(risks&&!acknowledged)} onClick={()=>action('confirm',()=>videoRefinementApi.confirm(task.id,{revision:task.current_revision,plan_hash:task.plan_hash!,acknowledge_risks:acknowledged}))}>{busy==='confirm'?<Loader2 className="animate-spin" size={16}/>:<Check size={16}/>}确认整套方案</button>
           </>}</div>
@@ -305,5 +348,5 @@ function TaskWorkspace({taskId}: {taskId: number}) {
 
 export default function VideoRefinementWorkbench() {
   const {id} = useParams();
-  return <div className="refinement-ui"><header className="refine-header"><div><h1>视频精修</h1><p>描述修改意见, AI 自动精修并生成预览.</p></div><span>方案工作台</span></header>{id?<TaskWorkspace key={id} taskId={Number(id)}/>:<SourcePicker/>}</div>;
+  return <div className="refinement-ui"><header className="refine-header"><div><h1>视频精修</h1><p>选择商品成片并描述修改意见, 核对预览后另存到商品成片库.</p></div><span>方案工作台</span></header>{id?<TaskWorkspace key={id} taskId={Number(id)}/>:<SourcePicker/>}</div>;
 }

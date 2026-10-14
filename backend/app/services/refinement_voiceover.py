@@ -11,7 +11,7 @@ import wave
 
 from app.config import get_settings
 from app.database import SessionLocal
-from app.models import VideoRefinementTask, VideoRefinementVoiceover
+from app.models import EcommerceVideoRefinementTask, EcommerceVideoRefinementVoiceover
 from app.services.director_workflow import _ffmpeg_executable
 from app.services.refinement_media import file_hash, verified_path
 from app.services.refinement_plan import content_hash
@@ -20,25 +20,52 @@ from app.services.transcription import transcribe_configured_media
 from app.services.tts import synthesize_speech
 
 
-def voiceover_parameters():
+def voiceover_parameters(speaker=None, *, selection=None):
     settings = get_settings()
+    if speaker is not None:
+        from app.services.refinement_speakers import speaker_by_id
+        row = speaker_by_id(speaker)
+        result = {"speaker":row["id"], "speech_rate":(selection or {}).get("speech_rate",0), "loudness_rate":0,
+                  "resource_id":row["resource_id"], "format":"pcm_s16le", "sample_rate":48000,"implementation":"refinement-tts-v3"}
+        if selection:
+            result["selection"] = selection
+        return result
     return {"speaker":settings.doubao_tts_speaker,"speech_rate":0,"loudness_rate":0,
             "resource_id":settings.doubao_tts_resource_id,"format":"pcm_s16le","sample_rate":48000,"implementation":"refinement-tts-v3"}
 
 
 def voiceover_fingerprint(script, parameters):
-    return content_hash({"script":script.strip(),"parameters":parameters})
+    return content_hash({"script":script.strip(),"parameters":{k:v for k,v in parameters.items() if k != "selection"}})
 
 
 def serialize_voiceover(row):
+    audio = (row.timing_json or {}).get("audio")
+    audio = audio if isinstance(audio, dict) else {}
     return {"id":row.id,"revision":row.revision,"item_id":row.item_id,"fingerprint":row.fingerprint,
-            "script":row.script,"parameters":row.parameters_json,"status":row.status,"attempts":row.attempts,
+            "script":row.script,"parameters":row.parameters_json,"status":row.status.removesuffix("_v3"),"attempts":row.attempts,
             "object_url":row.object_url,"storage_provider":row.storage_provider,"content_hash":row.content_hash,
-            "duration_ms":row.duration_ms,"timing":row.timing_json,"error_message":row.error_message}
+            "duration_ms":row.duration_ms,"sample_count":audio.get("sample_count"),
+            "sample_rate":audio.get("sample_rate"),"timing":row.timing_json or {},"error_message":row.error_message}
+
+
+def ensure_sample_metadata(db, voice):
+    audio = (voice.timing_json or {}).get("audio", {})
+    if voice.status != "ready" or (isinstance(audio, dict) and type(audio.get("sample_count")) is int and audio["sample_count"] > 0
+                                  and audio.get("sample_rate") == 48000 and audio.get("channels") == 2 and audio.get("format") == "pcm_s16le"):
+        return
+    task = db.query(EcommerceVideoRefinementTask).filter_by(id=voice.task_id,tenant_id=voice.tenant_id).populate_existing().first()
+    if not task or task.status in {"CANCELLED", "COMPLETED"}:
+        raise ValueError("已取消或已接受任务不能回写配音样本元数据")
+    with wave.open(str(verified_path(serialize_voiceover(voice))), "rb") as stream:
+        if stream.getframerate() != 48000 or stream.getsampwidth() != 2 or stream.getnchannels() != 2:
+            raise ValueError("旧配音不是标准 PCM, 请显式重新生成配音")
+        audio = {"sample_count":stream.getnframes(),"sample_rate":stream.getframerate(),"channels":2,"format":"pcm_s16le"}
+    voice.timing_json = {**(voice.timing_json or {}),"audio":audio}
+    db.commit()
 
 
 def voiceover_catalog(db, task):
-    return {row.id:serialize_voiceover(row) for row in db.query(VideoRefinementVoiceover).filter_by(task_id=task.id,tenant_id=task.tenant_id).all()}
+    return {row.id:serialize_voiceover(row) for row in db.query(EcommerceVideoRefinementVoiceover).filter_by(task_id=task.id,tenant_id=task.tenant_id).all()}
 
 
 def normalize_provider_timing(values, duration_ms):
@@ -112,44 +139,54 @@ def align_voiceover_timing(timing, output, script, duration_ms):
 
 def run_voiceover(job_id):
     with SessionLocal() as db:
-        claimed = db.query(VideoRefinementVoiceover).filter_by(id=job_id,status="queued").update({"status":"generating","attempts":VideoRefinementVoiceover.attempts+1,"started_at":datetime.utcnow()},synchronize_session=False)
+        pending = db.get(EcommerceVideoRefinementVoiceover,job_id)
+        if not pending or pending.status not in {"queued", "queued_v3"}:
+            return
+        queued_status = pending.status
+        generating_status = "generating_v3" if queued_status == "queued_v3" else "generating"
+        claimed = db.query(EcommerceVideoRefinementVoiceover).filter_by(id=job_id,status=queued_status).update({"status":generating_status,"attempts":EcommerceVideoRefinementVoiceover.attempts+1,"started_at":datetime.utcnow()},synchronize_session=False)
         db.commit()
         if not claimed:
             return
-        job = db.get(VideoRefinementVoiceover,job_id)
+        job = db.get(EcommerceVideoRefinementVoiceover,job_id)
         attempt = job.attempts
         uploaded = ""
         storage = None
         try:
-            task = db.get(VideoRefinementTask,job.task_id)
-            if not task or task.status in {"CANCELLED","COMPLETED"}:
+            task = db.get(EcommerceVideoRefinementTask,job.task_id)
+            if not task or task.status in {"CANCELLED","COMPLETED"} or task.current_revision != job.revision:
                 job.status = "superseded"; db.commit(); return
-            with tempfile.TemporaryDirectory(prefix=f"refinement-voice-{job.id}-") as directory:
+            task_id, revision = task.id, job.revision
+            script, parameters = job.script, dict(job.parameters_json)
+            provider = task.source_snapshot.get("storage_provider","aliyun_oss")
+            db.commit()
+            with tempfile.TemporaryDirectory(prefix=f"refinement-voice-{job_id}-") as directory:
                 raw, output = Path(directory)/"raw.mp3", Path(directory)/"voice.wav"
                 timing = {}
-                synthesize_speech(job.script,raw,speaker=job.parameters_json["speaker"],parameters=job.parameters_json,timing_output=timing)
+                synthesize_speech(script,raw,speaker=parameters["speaker"],parameters=parameters,timing_output=timing)
                 process = subprocess.run([_ffmpeg_executable(),"-y","-i",str(raw),"-vn","-ar","48000","-ac","2","-c:a","pcm_s16le",str(output)],capture_output=True,timeout=180)
                 if process.returncode or not output.is_file():
                     raise ValueError("生成配音无法完整解码")
                 with wave.open(str(output),"rb") as stream:
+                    timing["audio"] = {"sample_count":stream.getnframes(),"sample_rate":stream.getframerate(),"channels":stream.getnchannels(),"format":"pcm_s16le"}
                     duration_ms = round(stream.getnframes()*1000/stream.getframerate())
                 if duration_ms <= 0:
                     raise ValueError("配音服务返回空音频")
-                align_voiceover_timing(timing,output,job.script,duration_ms)
-                storage = get_storage_by_name(task.source_snapshot.get("storage_provider","aliyun_oss"))
+                align_voiceover_timing(timing,output,script,duration_ms)
+                storage = get_storage_by_name(provider)
                 digest = file_hash(output)
-                uploaded = asyncio.run(storage.upload_path(output,f"voice-{job.id}.wav",f"refinements/{task.id}/voiceovers"))
+                uploaded = asyncio.run(storage.upload_path(output,f"voice-{job_id}.wav",f"ecommerce-refinements/{task_id}/voiceovers"))
             db.refresh(task)
-            active = db.query(VideoRefinementTask.id).filter(VideoRefinementTask.id==task.id,VideoRefinementTask.status.notin_(["CANCELLED","COMPLETED"])).exists()
-            published = db.query(VideoRefinementVoiceover).filter(VideoRefinementVoiceover.id==job.id,VideoRefinementVoiceover.status=="generating",VideoRefinementVoiceover.attempts==attempt,active).update({"status":"ready","object_url":uploaded,"storage_provider":storage.name,"content_hash":digest,"duration_ms":duration_ms,"timing_json":timing,"error_message":"","completed_at":datetime.utcnow()},synchronize_session=False)
+            active = db.query(EcommerceVideoRefinementTask.id).filter(EcommerceVideoRefinementTask.id==task_id,EcommerceVideoRefinementTask.current_revision==revision,EcommerceVideoRefinementTask.status.notin_(["CANCELLED","COMPLETED"])).exists()
+            published = db.query(EcommerceVideoRefinementVoiceover).filter(EcommerceVideoRefinementVoiceover.id==job_id,EcommerceVideoRefinementVoiceover.status==generating_status,EcommerceVideoRefinementVoiceover.attempts==attempt,active).update({"status":"ready","object_url":uploaded,"storage_provider":storage.name,"content_hash":digest,"duration_ms":duration_ms,"timing_json":timing,"error_message":"","completed_at":datetime.utcnow()},synchronize_session=False)
             if published:
                 uploaded = ""
             else:
-                db.query(VideoRefinementVoiceover).filter_by(id=job.id,status="generating",attempts=attempt).update({"status":"superseded"},synchronize_session=False)
+                db.query(EcommerceVideoRefinementVoiceover).filter_by(id=job_id,status=generating_status,attempts=attempt).update({"status":"superseded"},synchronize_session=False)
             db.commit()
         except Exception as exc:
             db.rollback()
-            db.query(VideoRefinementVoiceover).filter_by(id=job_id,status="generating",attempts=attempt).update({"status":"failed","error_message":str(exc)[:500] if isinstance(exc,ValueError) else "局部配音生成失败, 请检查豆包配置后重试","completed_at":datetime.utcnow()},synchronize_session=False)
+            db.query(EcommerceVideoRefinementVoiceover).filter_by(id=job_id,status=generating_status,attempts=attempt).update({"status":"failed","error_message":str(exc)[:500] if isinstance(exc,ValueError) else "局部配音生成失败, 请检查豆包配置后重试","completed_at":datetime.utcnow()},synchronize_session=False)
             db.commit()
         finally:
             if uploaded and storage:
@@ -162,4 +199,6 @@ def validate_voiceovers(db, task, plan):
         actual = catalog.get(expected["id"])
         if not actual or actual["status"] != "ready" or actual["fingerprint"] != expected["fingerprint"] or actual["content_hash"] != expected["content_hash"] or actual["duration_ms"] != expected["duration_ms"]:
             raise ValueError("配音资产已失效, 请重新生成并绑定")
+        if plan.get("schema_version") == "video_refinement_plan.v3" and any(actual.get(key) != expected.get(key) for key in ("sample_count","sample_rate")):
+            raise ValueError("配音样本元数据已变化, 请重新编译方案")
         verified_path(actual)

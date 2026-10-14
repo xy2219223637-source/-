@@ -2,8 +2,11 @@
 from __future__ import annotations
 
 import hashlib
+import json
+from fractions import Fraction
 from pathlib import Path
 import re
+import shutil
 import subprocess
 
 from app.services.director_workflow import _ffmpeg_executable, _probe_media
@@ -77,11 +80,66 @@ def probe(path: Path) -> dict:
     return metadata
 
 
+def precise_probe(path: Path) -> dict:
+    from app.config import get_settings
+    settings = get_settings()
+    executable = settings.director_ffprobe_path or shutil.which("ffprobe")
+    if not executable:
+        sibling = Path(_ffmpeg_executable()).with_name("ffprobe.exe" if __import__("os").name == "nt" else "ffprobe")
+        executable = str(sibling) if sibling.is_file() else None
+    if not executable:
+        raise ValueError("精确时间协议需要 ffprobe, 不能用显示浮点帧率推测时间基")
+    process = subprocess.run([executable,"-v","error","-show_streams","-show_format","-of","json",str(path)],
+                             capture_output=True,text=True,errors="replace",timeout=60)
+    if process.returncode:
+        raise ValueError("无法读取媒体精确时间基")
+    data = json.loads(process.stdout)
+    video = next((s for s in data.get("streams", []) if s.get("codec_type") == "video"), None)
+    if not video:
+        raise ValueError("媒体缺少视频流")
+    try:
+        rate = Fraction(video["avg_frame_rate"])
+        time_base = Fraction(video["time_base"])
+        if rate <= 0 or time_base <= 0:
+            raise ValueError()
+        if video.get("duration_ts") is not None:
+            duration = int(video["duration_ts"])*time_base
+            timestamp_source = "ffprobe-stream-pts"
+        else:
+            packets = subprocess.run([executable,"-v","error","-select_streams","v:0","-show_packets",
+                "-show_entries","packet=pts,duration","-of","json",str(path)],capture_output=True,text=True,errors="replace",timeout=180)
+            if packets.returncode:
+                raise ValueError()
+            values = json.loads(packets.stdout)["packets"]
+            if not values or any(int(packet.get("duration", 0)) <= 0 for packet in values):
+                raise ValueError()
+            duration = (max(int(packet["pts"])+int(packet["duration"]) for packet in values)-min(int(packet["pts"]) for packet in values))*time_base
+            timestamp_source = "ffprobe-packet-pts"
+        if duration <= 0:
+            raise ValueError()
+    except (KeyError, TypeError, ValueError, ZeroDivisionError) as exc:
+        raise ValueError("媒体缺少可信帧率或视频 PTS 时长") from exc
+    audio = next((s for s in data.get("streams", []) if s.get("codec_type") == "audio"), {})
+    audio_duration = str(int(audio["duration_ts"])*Fraction(audio["time_base"])) if audio.get("duration_ts") is not None and audio.get("time_base") else None
+    audio_offset = (str(int(audio["start_pts"])*Fraction(audio["time_base"])-int(video.get("start_pts",0))*time_base)
+                    if audio.get("start_pts") is not None and audio.get("time_base") else None)
+    return {"frame_rate":str(rate),"nominal_frame_rate":video.get("r_frame_rate"),"time_base":str(time_base),
+            "video_duration":str(duration),"video_duration_ms":round(duration*1000),"audio_duration":audio_duration,"audio_offset":audio_offset,"timestamp_source":timestamp_source,
+            "normalization":"source-pts-to-cfr","input_frame_count":int(video["nb_frames"]) if str(video.get("nb_frames", "")).isdigit() else None}
+
+
 def render_recipe(snapshot: dict, plan: dict) -> list[dict]:
-    if plan.get("schema_version") == "video_refinement_plan.v2":
+    if plan.get("schema_version") not in {"video_refinement_plan.v1", "video_refinement_plan.v2", "video_refinement_plan.v3"}:
+        raise ValueError("不支持的精修方案版本, 禁止使用旧渲染器处理")
+    if plan.get("schema_version") in {"video_refinement_plan.v2", "video_refinement_plan.v3"}:
         if plan["execution_blockers"]:
             raise ValueError("请先解决方案中的具体执行阻塞")
-        return {key: plan[key] for key in ("schema_version", "video_track", "narration_track", "background_track", "subtitle_track", "source_to_output_map")}
+        recipe = {key: plan[key] for key in ("schema_version", "video_track", "narration_track", "background_track", "subtitle_track", "source_to_output_map")}
+        if "timing_version" in plan:
+            recipe["timing_version"] = plan["timing_version"]
+        if plan["schema_version"] == "video_refinement_plan.v3":
+            recipe.update(summary=plan["summary"], renderer_version=plan["renderer_version"], generation_policy=plan.get("generation_policy", {}))
+        return recipe
     if snapshot["is_mock"] or plan["summary"]["is_mock"]:
         raise ValueError("旧版示例方案不能渲染, 请使用真实数据重新分析")
     if plan["execution_blockers"]:
@@ -135,6 +193,9 @@ def render_recipe(snapshot: dict, plan: dict) -> list[dict]:
 
 
 def render_preview(snapshot: dict, plan: dict, output: Path) -> tuple[dict, list[dict]]:
+    if plan.get("schema_version") == "video_refinement_plan.v3":
+        from app.services.refinement_render import render_v3
+        return render_v3(snapshot, plan, output)
     if plan.get("schema_version") == "video_refinement_plan.v2":
         from app.services.refinement_render import render_v2
         return render_v2(snapshot, plan, output)

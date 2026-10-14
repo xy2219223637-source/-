@@ -6,6 +6,7 @@ from pathlib import Path
 import subprocess
 import tempfile
 import unittest
+import wave
 from unittest.mock import AsyncMock, MagicMock, patch
 from types import SimpleNamespace
 
@@ -180,6 +181,75 @@ class RefinementIndependentMediaTest(unittest.TestCase):
         self.assertEqual((self.root/"audio-1.pcm").stat().st_size,15264*48*4)
         self.assertAlmostEqual(self.frequency(output,16.8),660,delta=5)
         self.assertAlmostEqual(self.frequency(output,17.4),440,delta=5)
+
+    def test_task_21_equivalent_generates_278_inserted_frames_and_full_audio(self):
+        from app.services.refinement_automation import prepare_materials
+        for key, spec in (("source", "color=red:s=240x320:r=30:d=22.78"), ("material", "color=green:s=240x320:r=30:d=6")):
+            duration = "22.78" if key == "source" else "6"
+            subprocess.run([_ffmpeg_executable(),"-y","-f","lavfi","-i",spec,"-f","lavfi","-i",f"sine=frequency=440:duration={duration}",
+                "-c:v","libx264","-preset","ultrafast","-pix_fmt","yuv420p","-c:a","aac","-shortest",str(self.paths[key])],capture_output=True,check=True,timeout=60)
+        subprocess.run([_ffmpeg_executable(),"-y","-f","lavfi","-i","sine=frequency=660:duration=9.24",
+            "-ar","48000","-ac","2",str(self.paths["voice"])],capture_output=True,check=True,timeout=60)
+        self.snap["source"].update(duration_ms=22780,content_hash=file_hash(self.paths["source"]))
+        material = self.snap["material_catalog"][0]
+        material.update(asset_id=254,duration_ms=6000,content_hash=file_hash(self.paths["material"]))
+        self.snap["material_catalog"].append({**material,"asset_id":205})
+        edit = item("SEGMENT_INSERT",range={"start_ms":2000,"end_ms":2000},narration_strategy="tts",script="新增台词",voiceover_id=3,subtitle_strategy="none",
+            material_segments=[{"asset_id":254,"source_range":{"start_ms":0,"end_ms":2533}},
+                               {"asset_id":254,"source_range":{"start_ms":2567,"end_ms":5300}},
+                               {"asset_id":205,"source_range":{"start_ms":0,"end_ms":4033}}])
+        client = MagicMock(chat_json=AsyncMock(return_value={"usable":True,"burned_subtitles":False}))
+        with patch("app.services.refinement_evaluation.sampled_frames",return_value=[]):
+            adjustments = asyncio.run(prepare_materials(client,self.snap,[edit],[],{},lengths={"edit":9267},frame_budgets={"edit":278}))
+        generated = voice(duration=9240);generated["content_hash"] = file_hash(self.paths["voice"])
+        plan = compile_plan(self.snap,[edit],"新增讲解","",manual=False,voiceovers={3:generated})
+        self.assertFalse(plan["execution_blockers"])
+        self.assertEqual(adjustments[0]["after_range"]["end_ms"],4000)
+        measured,_ = render_preview(self.snap,plan,self.root/"task-21-equivalent.mp4")
+        self.assertTrue(measured["decode_checked"])
+        self.assertEqual(measured["decoded_frames"],961)
+        self.assertEqual((self.root/"audio-1.pcm").stat().st_size,9240*48*4)
+        with wave.open(str(self.root/"narration.wav")) as stream:
+            stream.setpos(2000*48 + 9230*48)
+            tail = np.frombuffer(stream.readframes(10*48),dtype=np.int16)
+        self.assertGreater(np.max(np.abs(tail)),100)
+
+    def test_a_single_extra_decoded_tts_sample_is_never_silently_trimmed(self):
+        with wave.open(str(self.paths["voice"]),"rb") as stream:
+            params, pcm = stream.getparams(), stream.readframes(stream.getnframes())
+        with wave.open(str(self.paths["voice"]),"wb") as stream:
+            stream.setparams(params)
+            stream.writeframes(pcm + pcm[-4:])
+        generated = voice();generated["content_hash"] = file_hash(self.paths["voice"])
+        edit = item("SEGMENT_INSERT",range={"start_ms":2000,"end_ms":2000},narration_strategy="tts",script="新增台词",voiceover_id=3,subtitle_strategy="none",
+                    material_segments=[{"asset_id":2,"source_range":{"start_ms":0,"end_ms":1000}}])
+        plan = compile_plan(self.snap,[edit],"新增台词","",manual=False,voiceovers={3:generated})
+        self.assertFalse(plan["execution_blockers"])
+        with self.assertRaisesRegex(ValueError,"配音样本长于区间"):
+            render_preview(self.snap,plan,self.root/"one-sample-too-long.mp4")
+
+    def test_real_frame_budgets_at_other_output_rates_with_mixed_material_fps(self):
+        from app.services.refinement_timing import ms_at_frame, required_frames
+        subprocess.run([_ffmpeg_executable(),"-y","-f","lavfi","-i","color=green:s=240x320:r=25:d=10",
+            "-c:v","libx264","-preset","ultrafast","-pix_fmt","yuv420p",str(self.paths["material"])],capture_output=True,check=True,timeout=60)
+        subprocess.run([_ffmpeg_executable(),"-y","-f","lavfi","-i","sine=frequency=660:duration=9.24",
+            "-ar","48000","-ac","2",str(self.paths["voice"])],capture_output=True,check=True,timeout=60)
+        self.snap["material_catalog"][0].update(duration_ms=10000,content_hash=file_hash(self.paths["material"]))
+        generated = voice(duration=9240);generated["content_hash"] = file_hash(self.paths["voice"])
+        for fps in (24,25,60):
+            with self.subTest(fps=fps):
+                subprocess.run([_ffmpeg_executable(),"-y","-f","lavfi","-i",f"color=red:s=240x320:r={fps}:d=4",
+                    "-f","lavfi","-i","sine=frequency=440:duration=4","-c:v","libx264","-preset","ultrafast","-pix_fmt","yuv420p","-c:a","aac","-shortest",str(self.paths["source"])],capture_output=True,check=True,timeout=60)
+                self.snap["source"].update(fps=fps,content_hash=file_hash(self.paths["source"]))
+                frames = required_frames(9240,fps)
+                edit = item("SEGMENT_INSERT",range={"start_ms":2000,"end_ms":2000},narration_strategy="tts",script="新增台词",voiceover_id=3,subtitle_strategy="none",
+                    material_segments=[{"asset_id":2,"source_range":{"start_ms":0,"end_ms":ms_at_frame(frames,fps)}}])
+                plan = compile_plan(self.snap,[edit],"新增讲解","",manual=False,voiceovers={3:generated})
+                self.assertFalse(plan["execution_blockers"])
+                directory = self.root / str(fps);directory.mkdir()
+                measured,_ = render_preview(self.snap,plan,directory/"preview.mp4")
+                self.assertEqual(measured["decoded_frames"],4*fps+frames)
+                self.assertEqual((directory/"audio-1.pcm").stat().st_size,9240*48*4)
 
 
 if __name__=="__main__":

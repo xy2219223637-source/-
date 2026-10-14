@@ -1,0 +1,55 @@
+services:
+  backend:
+    image: enrui-ai-commerce-agent-backend:${DEPLOY_IMAGE_TAG:?Set the test image tag}
+    build:
+      context: ${TEST_REPOSITORY_DIR:?Set the test repository}/backend
+      dockerfile: ${TEST_BACKEND_DOCKERFILE:-Dockerfile}
+    env_file: ${APP_ENV_FILE:?Set the test application env file}
+    environment:
+      DEPLOYMENT_ENVIRONMENT: test
+      TEST_RESOURCE_MANIFEST: /run/test-resources.json
+      FEISHU_LOG_DIR: /app/logs
+    entrypoint: [python, /run/test-deployment/runtime.py]
+    command: [serve]
+    working_dir: /app
+    volumes:
+      - ${TEST_DEPLOY_RUNTIME_DIR:?Set the fixed test runtime}:/run/test-deployment:ro
+      - ${TEST_SHARED_DIR:?Set the test shared directory}/test-resources.json:/run/test-resources.json:ro
+      - feishu_logs:/app/logs
+    networks: [default, test-data]
+    restart: unless-stopped
+    ports: ["127.0.0.1:8100:8000"]
+    cpus: "${BACKEND_CPU_LIMIT:-1.0}"
+    mem_limit: "${BACKEND_MEMORY_LIMIT:-1G}"
+    healthcheck:
+      test: [CMD, curl, -fsS, http://127.0.0.1:8000/api/health]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+    logging:
+      options: {max-size: 20m, max-file: "3"}
+  frontend:
+    image: enrui-ai-commerce-agent-frontend:${DEPLOY_IMAGE_TAG:?Set the test image tag}
+    build:
+      context: ${TEST_REPOSITORY_DIR:?Set the test repository}
+      dockerfile: frontend/Dockerfile
+    depends_on:
+      backend:
+        condition: service_healthy
+    networks: [default]
+    restart: unless-stopped
+    ports: ["127.0.0.1:8180:80"]
+    cpus: "${FRONTEND_CPU_LIMIT:-0.25}"
+    mem_limit: "${FRONTEND_MEMORY_LIMIT:-256M}"
+    logging:
+      options: {max-size: 10m, max-file: "3"}
+networks:
+  default:
+    name: enrui-test_default
+  test-data:
+    external: true
+    name: enrui-test-data
+volumes:
+  feishu_logs:
+    name: enrui-test_feishu_logs

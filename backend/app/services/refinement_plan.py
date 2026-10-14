@@ -81,8 +81,69 @@ def _compile_v1(snapshot: dict, items: list[RefinementItem], brief: str, expecte
 
 def compile_plan(snapshot: dict, items: list[RefinementItem], brief: str, expected_result: str, *, manual: bool,
                  requirements: list[dict] | None = None, options: dict | None = None, voiceovers: dict | None = None) -> dict:
+    options = options or {}
+    protocol = options.get("timing_protocol", "v2")
+    if protocol not in {"v2", "v3"}:
+        raise ValueError("不支持的精修时间协议, 禁止降级处理")
+    if snapshot.get("schema_version") not in {None, "video_refinement_snapshot.v1", "video_refinement_snapshot.v2"}:
+        raise ValueError("不支持的精修快照版本")
     if snapshot.get("schema_version") != "video_refinement_snapshot.v2":
+        if protocol == "v3":
+            raise ValueError("精确时间协议需要真实媒体快照")
         return _compile_v1(snapshot, items, brief, expected_result, manual=manual)
-    from app.services.refinement_timeline import compile_timeline
-    return compile_timeline(snapshot, items, brief, expected_result, manual=manual,
-                            requirements=requirements or [], options=options or {}, voiceovers=voiceovers or {})
+    from app.services.refinement_requirements import duration_options
+    options = duration_options(brief, expected_result, options, snapshot["source"]["duration_ms"], requirements=requirements)
+    records, blockers = {}, []
+    if options.get("authorization_version"):
+        from app.services.refinement_authorization import apply_authorizations
+        items = [item.model_copy(deep=True) for item in items]
+        records, blockers = apply_authorizations(items, requirements or [], snapshot["source"]["duration_ms"],
+                                                brief=brief, expected=expected_result, manual=manual,
+                                                overrides=options.get("manual_permissions") if manual else None, options=options)
+    if protocol == "v3":
+        from app.services.refinement_precise import compile_precise
+        result = compile_precise(snapshot, items, brief, expected_result, manual=manual,
+                                 requirements=requirements or [], options=options, voiceovers=voiceovers or {})
+    else:
+        from app.services.refinement_timeline import compile_timeline
+        result = compile_timeline(snapshot, items, brief, expected_result, manual=manual,
+                                  requirements=requirements or [], options=options, voiceovers=voiceovers or {})
+    if records:
+        from app.services.refinement_requirements import verify_requirements
+        result["edit_authorizations"] = records
+        result["execution_blockers"].extend(blockers)
+        result["requirements_resolution"] = verify_requirements(requirements or [], result["items"], result["execution_blockers"], options=options)
+    if options.get("localization"):
+        from app.services.refinement_selection import checked_range
+        from app.services.refinement_requirements import verify_requirements
+        catalog = {asset["asset_id"]:asset for asset in snapshot["material_catalog"]}
+        evidence = []
+        for item in [RefinementItem.model_validate(row) for row in result["items"]]:
+            if not item.enabled:
+                continue
+            for segment in item.material_segments:
+                candidate = snapshot.get("local_candidates", {}).get(segment.candidate_id)
+                try:
+                    if not candidate or candidate["asset_id"] != segment.asset_id or candidate["content_hash"] != catalog[segment.asset_id]["content_hash"]:
+                        raise ValueError("局部选段缺少当前素材的核验依据")
+                    window = checked_range(segment.source_range.model_dump(), candidate["safe_range"])
+                    if candidate["content_kind"] == "action":
+                        checked_range(candidate["preferred_range"], window)
+                    evidence.append({"item_id":item.item_id, **deepcopy(candidate), "source_range":window})
+                    for clip in result["video_track"]:
+                        if item.item_id in clip["item_ids"] and clip["source_asset_id"] == segment.asset_id:
+                            actual = clip["source_range"]
+                            if actual["start_ms"] < window["end_ms"] and window["start_ms"] < actual["end_ms"]:
+                                checked_range(actual, candidate["safe_range"])
+                                if candidate["content_kind"] == "action":
+                                    checked_range(candidate["preferred_range"], actual)
+                except (ValueError, KeyError):
+                    result["execution_blockers"].append({"item_id":item.item_id,"code":"CONTENT_REVIEW_REQUIRED","category":"content", "message":"选段缺少可信局部核验或超出动作安全边界, 请重新定位素材"})
+        result["local_selection"] = evidence
+        result["requirements_resolution"] = verify_requirements(requirements or [], result["items"], result["execution_blockers"], options=options)
+    from app.services.refinement_requirements import verify_goal_constraints
+    from app.services.refinement_authorization import autonomous_editing
+    if not autonomous_editing(options):
+        verify_goal_constraints(brief, expected_result, requirements or [], result["items"], result["execution_blockers"])
+    result["generation_policy"] = {key:options[key] for key in ("authorization_version", "timing_protocol", "localization", "content_reselection", "display_tail_ms", "policy_version", "tts_speaker") if key in options}
+    return result

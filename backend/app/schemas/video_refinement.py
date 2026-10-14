@@ -8,6 +8,13 @@ Focus = Literal["hook", "pace", "product_visibility", "voice", "subtitle"]
 ItemType = Literal["VISUAL_REPLACE", "PACE_RECUT", "SEGMENT_INSERT", "VOICE_REPLACE", "SUBTITLE_EDIT"]
 
 
+def validate_tts_speaker(value):
+    if value is not None:
+        from app.services.refinement_speakers import speaker_by_id
+        speaker_by_id(value)
+    return value
+
+
 class RefinementInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
     source_asset_id: int = Field(gt=0)
@@ -17,6 +24,9 @@ class RefinementInput(BaseModel):
 
     duration_preference: Literal["preserve", "shorten", "ai_recommend"] = "ai_recommend"
     target_duration_ms: int | None = Field(default=None, gt=0, strict=True)
+    tts_speaker: str | None = Field(default=None, max_length=120)
+
+    _speaker = field_validator("tts_speaker")(validate_tts_speaker)
 
     @field_validator("user_brief")
     @classmethod
@@ -37,6 +47,7 @@ class MaterialSegment(BaseModel):
     model_config = ConfigDict(extra="forbid")
     asset_id: int = Field(gt=0)
     source_range: TimeRange
+    candidate_id: str | None = Field(default=None, max_length=64)
 
     @model_validator(mode="after")
     def nonempty(self):
@@ -49,6 +60,7 @@ class Requirement(BaseModel):
     model_config = ConfigDict(extra="forbid")
     requirement_id: str
     text: str = Field(min_length=1, max_length=2000)
+    request_quote: str = Field(default="", max_length=2000)
     status: Literal["EXECUTABLE", "ALREADY_SATISFIED", "NEEDS_CLARIFICATION", "CONFLICT", "UNSUPPORTED", "AWAITING_MATERIAL"]
     reason: str = Field(default="", max_length=2000)
     question: str = Field(default="", max_length=2000)
@@ -88,10 +100,16 @@ class RefinementItem(BaseModel):
     removed_ranges: list[TimeRange] = Field(default_factory=list, max_length=30)
     affected_cue_ids: list[str] = Field(default_factory=list, max_length=100)
     voiceover_id: int | None = Field(default=None, gt=0)
+    tts_speaker: str | None = Field(default=None, max_length=120)
     subtitle_strategy: Literal["keep_visible", "remap", "regenerate", "none", "human_required"] = "keep_visible"
     background_strategy: Literal["keep_mixed", "keep_independent", "music_only", "drop_replaced_interval", "none"] = "keep_mixed"
     boundary_reviewed: bool = False
     narration_padding_reason: str = Field(default="", max_length=500)
+
+    @field_validator("tts_speaker")
+    @classmethod
+    def require_chinese_speaker(cls, value):
+        return validate_tts_speaker(value)
 
     @field_validator("operation", "reason", "item_id")
     @classmethod
@@ -132,6 +150,9 @@ class RequirementsInput(RevisionInput):
     accept_partial_evaluation: bool | None = None
     duration_preference: Literal["preserve", "shorten", "ai_recommend"] | None = None
     target_duration_ms: int | None = Field(default=None, gt=0, strict=True)
+    tts_speaker: str | None = Field(default=None, max_length=120)
+
+    _speaker = field_validator("tts_speaker")(validate_tts_speaker)
 
     @field_validator("user_brief")
     @classmethod

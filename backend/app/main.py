@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import logging
 import time
 from datetime import datetime, timedelta
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from starlette.concurrency import run_in_threadpool
 
 from app.api import admin, auth, auto_edit, brands, creative, dashboard, director, ecommerce_products, ecommerce_video_library, ecommerce_video_taxonomy, knowledge, products, quality, skills, templates, operations, production, storage, video_library, video_taxonomy, video_refinement, videos
 from app.config import get_settings
@@ -12,7 +14,7 @@ from app.database import SessionLocal, engine, init_db
 from app.models import AuditLog, CreativeBatchJob, CreativeGeneration
 from app.services.production_queue import start_worker, stop_worker
 from app.services.video_analysis_queue import start_video_analysis_worker, stop_video_analysis_worker
-from app.services.refinement_queue import start_refinement_worker, stop_refinement_worker
+from app.services.refinement_queue import start_refinement_worker, stop_refinement_worker, refinement_worker_state
 from app.services.redis_client import get_redis
 from app.services.feishu_logging import RequestTraceMiddleware, trace_fields
 from app.api import qianchuan, qianchuan_plans, video_repair
@@ -41,6 +43,15 @@ app.add_middleware(
 )
 
 
+def write_request_audit(request_id, method, path, status_code, duration_ms):
+    db = SessionLocal()
+    try:
+        db.add(AuditLog(request_id=request_id, method=method, path=path, status_code=status_code, duration_ms=duration_ms))
+        db.commit()
+    finally:
+        db.close()
+
+
 @app.middleware("http")
 async def audit_requests(request, call_next):
     request_id = trace_fields()["request_id"]
@@ -49,12 +60,8 @@ async def audit_requests(request, call_next):
     duration_ms = int((time.perf_counter() - started) * 1000)
     response.headers["x-request-id"] = request_id
     if request.url.path.startswith("/api"):
-        db = SessionLocal()
-        try:
-            db.add(AuditLog(request_id=request_id, method=request.method, path=request.url.path, status_code=response.status_code, duration_ms=duration_ms))
-            db.commit()
-        finally:
-            db.close()
+        # 等待数据库连接时不能阻塞事件循环，否则其他请求无法完成并归还连接。
+        await run_in_threadpool(write_request_audit, request_id, request.method, request.url.path, response.status_code, duration_ms)
     return response
 
 app.add_middleware(RequestTraceMiddleware)
@@ -95,10 +102,17 @@ def on_startup() -> None:
         recover_startup_tasks()
     if settings.run_background_workers:
         start_worker()
-        start_video_analysis_worker()
-        start_refinement_worker()
         start_qianchuan_worker()
         start_video_repair_worker()
+    if settings.run_background_workers or settings.ecommerce_video_analysis_worker_enabled:
+        start_video_analysis_worker(
+            include_legacy=settings.run_background_workers,
+            include_ecommerce=settings.ecommerce_video_analysis_worker_enabled,
+        )
+    if settings.refinement_worker_enabled:
+        start_refinement_worker()
+    else:
+        logging.getLogger(__name__).warning("Refinement worker disabled; refinement generation requests will return 503")
 
 
 def recover_startup_tasks() -> None:
@@ -159,5 +173,6 @@ def health() -> dict:
         "database": engine.dialect.name,
         "redis": redis_status,
         "storage": settings.storage_provider,
+        "refinement_worker": refinement_worker_state(),
         "qianchuan": get_qianchuan_service().configuration(),
     }

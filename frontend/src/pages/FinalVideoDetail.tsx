@@ -64,13 +64,6 @@ export default function FinalVideoDetail(){
       <VideoDetailHeading title={product?.name||'成片详情'} asset={video} fallback="/final-videos" backLabel="返回成片库" sourceCount={summary?.source_count}/>
       <div className="flex flex-wrap items-center justify-end gap-3 pb-4">
         <div className="flex flex-wrap gap-2">
-          <Link
-            className="btn-secondary"
-            to={`/video-refinements?source_asset_id=${video.id}`}
-          >
-            在精修工作台打开
-          </Link>
-
           <a
             className="btn-secondary"
             href={mediaUrl(video.object_url)}

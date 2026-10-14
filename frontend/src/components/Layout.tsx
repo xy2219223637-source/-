@@ -28,8 +28,9 @@ import {
   Wrench,
 } from 'lucide-react';
 import IcpFiling from './IcpFiling';
-import dirovoLogo from '../assets/dirovo-logo.svg';
+import companyLogo from '../assets/company-logo.png';
 import { authApi } from '../api/client';
+import { COMPANY_NAME } from '../lib/siteIdentity';
 
 const dashboardLink = { to: '/', label: '工作台', icon: LayoutDashboard, end: true };
 
@@ -70,7 +71,8 @@ const navGroups = [
       { to: '/products', label: '商品管理', icon: PackagePlus },
       { to: '/ecommerce-products', label: '电商商品管理', icon: PackagePlus },
       { to: '/ecommerce-video-assets', label: '商品素材库', icon: Film },
-      { to: '/ecommerce-final-videos', label: '商品成品库', icon: Library },
+      { to: '/ecommerce-final-videos', label: '商品成片库', icon: Library },
+      { to: '/video-refinements', label: '视频精修', icon: WandSparkles },
       { to: '/knowledge', label: '知识库', icon: BookOpen },
       { to: '/brand-visuals', label: '品牌视觉', icon: Palette },
     ],
@@ -89,7 +91,6 @@ const navGroups = [
       { to: '/manual-video-compose', label: '视频编排', icon: Layers3 },
       { to: '/finished-video-remix', label: '成品混剪', icon: Video },
       { to: '/final-videos', label: '成片库', icon: Library },
-      { to: '/video-refinements', label: '视频精修', icon: WandSparkles },
       { to: '/video-repair', label: '审核失败修改', icon: Wrench },
       { to: '/director-inspiration', label: '编导灵感', icon: Clapperboard },
       { to: '/shooting-tasks', label: '拍摄任务', icon: ClipboardList },
@@ -110,7 +111,7 @@ const routePermissions: Record<string, string> = {
   '/creative-projects': 'creative_projects.access', '/finished-video-assets': 'finished_assets.access',
   '/manual-video-compose': 'manual_compose.access', '/finished-video-remix': 'finished_remix.access',
   '/final-videos': 'final_videos.access',
-  '/video-refinements': 'final_videos.access',
+  '/video-refinements': 'ecommerce_assets.access',
   '/video-repair': 'video_repair.access',
   '/director-inspiration': 'director.access',
   '/shooting-tasks': 'shooting_tasks.access', '/task-center': 'task_center.access',
@@ -183,7 +184,9 @@ export default function Layout() {
         className={`${mobileNavOpen ? 'fixed inset-y-0 left-0 z-50 flex' : 'hidden'} lg:static lg:flex w-60 shrink-0 border-r border-[var(--border)] bg-[var(--panel)] flex-col`}
       >
         <div className="flex min-h-24 items-center justify-between gap-2 border-b border-[var(--border)] px-5 py-4">
-          <img src={dirovoLogo} alt="Dirovo 蒂洛薇" className="h-auto w-[148px] max-w-full" />
+          <div className="min-w-0 flex-1">
+            <img src={companyLogo} alt={`${COMPANY_NAME} Logo`} width={2000} height={468} className="h-auto w-full object-contain" />
+          </div>
           <button
             className="lg:hidden w-8 h-8 grid place-items-center shrink-0"
             onClick={closeMobileNav}
@@ -291,13 +294,13 @@ export default function Layout() {
       <main className="flex-1 min-w-0 overflow-auto">
         <div className="lg:hidden sticky top-0 z-30 h-14 border-b border-[var(--border)] bg-[var(--panel)] flex items-center px-4 gap-3">
           <button
-            className="w-9 h-9 grid place-items-center"
+            className="w-9 h-9 shrink-0 grid place-items-center"
             onClick={() => setMobileNavOpen(true)}
             aria-label="打开导航"
           >
             <Menu size={20} />
           </button>
-          <div className="font-display text-xl">Dirovo</div>
+          <div className="min-w-0 flex-1 text-sm font-medium leading-5 break-words text-balance">{COMPANY_NAME}</div>
         </div>
         <div className={isDirectorWorkspace || isRefinementWorkbench ? 'max-w-[1800px] mx-auto px-5 py-5' : 'max-w-6xl mx-auto px-8 py-8'}>
           <Outlet />

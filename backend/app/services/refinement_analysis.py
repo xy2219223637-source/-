@@ -14,7 +14,6 @@ from sqlalchemy.orm import Session
 from pydantic import ValidationError
 
 from app.config import get_settings
-from app.models import EditingPlanVersion, VideoAssetAnalysis, VideoLineageSegment, VideoRefinementVersion
 from app.schemas.video_refinement import RefinementItem
 from app.services.llm import LLMClient
 from app.services.refinement_plan import compile_plan
@@ -22,7 +21,7 @@ from app.services.storage import get_storage_by_name
 
 
 def _analysis(db: Session, asset, rows=None) -> dict:
-    from app.services.video_analysis_cache import load_cached_analyses
+    from app.services.ecommerce_video_analysis_cache import load_cached_analyses
     return deepcopy((rows if rows is not None else load_cached_analyses(db, asset.tenant_id, [asset])).get(asset.id, {}))
 
 
@@ -64,27 +63,25 @@ def _material_media(snapshot: dict) -> list[dict]:
 
 
 def build_snapshot(db: Session, source, product, materials, *, analyzed_only=True) -> dict:
-    from app.services.video_analysis_cache import load_cached_analyses
+    from app.services.ecommerce_video_analysis_cache import load_cached_analyses
     analyses = load_cached_analyses(db, source.tenant_id, [source, *materials])
     duration = round(source.duration_seconds * 1000)
     divisor = gcd(source.width, source.height)
     analysis = _analysis(db, source, analyses)
-    lineage = db.query(VideoLineageSegment).filter_by(tenant_id=source.tenant_id, target_asset_id=source.id).order_by(VideoLineageSegment.segment_index).all()
-    parent = db.query(VideoRefinementVersion).filter_by(tenant_id=source.tenant_id, output_asset_id=source.id).first()
-    timeline = [{"shot_id": f"lineage-{row.id}", "start_ms": round(row.target_start * 1000), "end_ms": round(row.target_end * 1000), "label": f"来源素材 {row.source_asset_id}", "is_mock": False} for row in lineage]
-    if not timeline:
-        for index, item in enumerate(analysis.get("data", {}).get("highlights") or []):
-            start, end = max(0, round(float(item.get("start", 0)) * 1000)), min(duration, round(float(item.get("end", 0)) * 1000))
-            if start < end:
-                timeline.append({"shot_id": f"analysis-{analysis['analysis_id']}-{index}", "start_ms": start, "end_ms": end, "label": str(item.get("description") or "已分析片段"), "is_mock": False})
+    timeline = []
+    for index, item in enumerate(analysis.get("data", {}).get("highlights") or []):
+        start, end = max(0, round(float(item.get("start", 0)) * 1000)), min(duration, round(float(item.get("end", 0)) * 1000))
+        if start < end:
+            timeline.append({"shot_id": f"analysis-{analysis['analysis_id']}-{index}", "start_ms": start, "end_ms": end, "label": str(item.get("description") or "已分析片段"), "is_mock": False})
     transcript = []
     for index, item in enumerate(analysis.get("data", {}).get("transcript", {}).get("segments") or []):
         start, end = max(0, round(float(item.get("start", 0)) * 1000)), min(duration, round(float(item.get("end", 0)) * 1000))
         if start < end and item.get("text"):
             transcript.append({"cue_id": f"asr-{index}", "start_ms": start, "end_ms": end, "text": item["text"], "is_mock": False})
-    engineering_plan = db.get(EditingPlanVersion, lineage[0].plan_version_id) if lineage and source.source != "video_refinement_output" else None
     available, excluded = [], []
     for material in materials:
+        if material.id == source.id:
+            continue
         observation = _analysis(db, material, analyses)
         reason = ("已禁用" if material.excluded else "不可复用" if material.reusable_status == "blocked"
                   else "缺少文件地址或哈希" if not material.content_hash or not material.object_url
@@ -99,15 +96,15 @@ def build_snapshot(db: Session, source, product, materials, *, analyzed_only=Tru
             "burned_subtitles":material.burned_subtitles,"has_background_music":material.has_background_music,
             "is_mock_mapping":False,"analysis_status":material.status,"reusable_status":material.reusable_status,"analysis":observation})
     return {
-        "schema_version": "video_refinement_snapshot.v2", "is_mock": False, "fixture": "system.v2",
-        "source": {"asset_id": source.id, "version": f"v{parent.version if parent else 1}", "filename": source.filename,
+        "schema_version": "video_refinement_snapshot.v2", "is_mock": False, "fixture": "system.v2", "asset_domain": "ecommerce",
+        "source": {"asset_id": source.id, "version": "v1", "filename": source.filename,
             "object_url": source.object_url, "storage_provider": source.storage_provider, "content_hash": source.content_hash,
             "product_id": product.id, "product_name": product.name, "sku": None,
             "duration_ms": duration, "width": source.width, "height": source.height,
             "aspect_ratio": f"{source.width // divisor}:{source.height // divisor}", "fps": source.fps,
             "has_audio": source.has_audio, "burned_subtitles": source.burned_subtitles, "has_background_music": source.has_background_music},
         "product_facts": {key: getattr(product, key) for key in ("name", "brand_name", "description", "ingredients", "usage_method", "specifications")},
-        "source_analysis": analysis, "engineering_plan": deepcopy(engineering_plan.plan_json) if engineering_plan and engineering_plan.tenant_id == source.tenant_id else None,
+        "source_analysis": analysis, "engineering_plan": None,
         "timeline": timeline or [{"shot_id": "source-video", "start_ms": 0, "end_ms": duration, "label": "完整源片, 等待 AI 镜头分析", "is_mock": False}],
         "transcript": transcript, "subtitles": [],
         "words": [{"start_ms": round(w["start"]*1000), "end_ms": round(w["end"]*1000), "text": w["text"]} for w in analysis.get("data",{}).get("transcript",{}).get("words",[])],
@@ -121,7 +118,7 @@ def build_snapshot(db: Session, source, product, materials, *, analyzed_only=Tru
         "capabilities": {
             "visual": {"state": "EXECUTABLE", "reason": "使用同商品已完成分析的素材替换画面或插入完整片段, 支持真实预览"},
             "pace": {"state": "EXECUTABLE", "reason": "按确认区间删除或缩短片段, 同步裁切原声, 支持真实预览"},
-            "voice": {"state": "EXECUTABLE", "reason": "新增或改写的完整台词可生成默认女声局部配音; 替换混合音轨会移除该区间音乐和环境声"},
+            "voice": {"state": "EXECUTABLE", "reason": "新增或改写台词自动按原视频适配中文音色, 也可手动选择; 替换混合音轨会移除该区间音乐和环境声"},
             "subtitles": {"state": "HUMAN_REQUIRED", "reason": "当前源片没有独立字幕轨; 烧录字幕需要干净源, 不直接叠加新字幕"},
             "aspect_ratio_locked": True, "sku_verified": False,
         },
@@ -170,7 +167,7 @@ async def _analyze_v1(snapshot: dict, focus: list[str], brief: str, expected: st
         result = await client.chat_json([{"role": "user", "content": [{"type": "text", "text": prompt}, {"type": "video_url", "video_url": {"url": signed}}, *candidates]}], model=settings.llm_vision_model, temperature=.2, max_tokens=6000)
     except Exception:
         # Some configured providers support vision images but not video_url.
-        from app.api.video_library import _extract_frames
+        from app.api.ecommerce_video_library import _extract_frames
         with tempfile.TemporaryDirectory(prefix="refinement-analysis-") as directory:
             frames = await asyncio.to_thread(_extract_frames, path, source["duration_ms"] / 1000, Path(directory))
             if not frames:

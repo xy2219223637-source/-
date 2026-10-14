@@ -1,0 +1,4 @@
+services:
+  backend:
+    volumes:
+      - ${PRIVATE_VIDEO_S3_HOST_FILE:?Set the reviewed private video file}:/run/secrets/dlr-hz.env:ro

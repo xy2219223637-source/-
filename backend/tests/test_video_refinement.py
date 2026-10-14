@@ -11,19 +11,23 @@ from unittest.mock import AsyncMock, patch
 
 from fastapi import FastAPI, Header
 from fastapi.testclient import TestClient
-from sqlalchemy import create_engine, inspect, text
+from sqlalchemy import create_engine, event, inspect, text
 from sqlalchemy.orm import sessionmaker
 
 from app.api.video_refinement import router
 from app.auth import AuthContext, current_auth
 from app.database import Base, get_db, migrate_refinement_workspace_schema
-from app.models import Product, VideoAsset, VideoLineageSegment, VideoRefinementPlan, VideoRefinementPreview, VideoRefinementSnapshot, VideoRefinementTask, VideoRefinementVersion
+from app.models import EcommerceProduct, EcommerceVideoAsset, EcommerceVideoLineageSegment, EcommerceVideoRefinementPlan, EcommerceVideoRefinementPreview, EcommerceVideoRefinementSnapshot, EcommerceVideoRefinementTask, EcommerceVideoRefinementVersion
+from app.models import Product, VideoAsset, VideoRefinementPlan, VideoRefinementSnapshot, VideoRefinementTask
 from app.services.refinement_plan import compile_plan
 from refinement_fixtures import analyze_mock
 
 
 class VideoRefinementTest(unittest.TestCase):
     def setUp(self):
+        self.worker_patch = patch("app.services.refinement_queue.refinement_worker_state",return_value={"status":"running","message":""})
+        self.worker_patch.start()
+        self.addCleanup(self.worker_patch.stop)
         async def test_ai(snapshot, focus, brief, expected):
             fixture = deepcopy(snapshot)
             fixture["timeline"] = [{"shot_id": f"mock-shot-{index+1:03d}", "start_ms": start, "end_ms": end} for index, (start, end) in enumerate([(0,5239),(5239,17768),(17768,22780)])]
@@ -50,11 +54,11 @@ class VideoRefinementTest(unittest.TestCase):
         Base.metadata.create_all(self.engine)
         self.sessions = sessionmaker(bind=self.engine, autoflush=False)
         self.db = self.sessions()
-        self.product = Product(tenant_id="t1", name="国光湿巾")
-        self.other = Product(tenant_id="t2", name="其他商品")
+        self.product = EcommerceProduct(tenant_id="t1", name="国光湿巾")
+        self.other = EcommerceProduct(tenant_id="t2", name="其他商品")
         self.db.add_all([self.product, self.other])
         self.db.commit()
-        self.source = self.asset("国光湿巾_成片_001.mp4", kind="final_output")
+        self.source = self.asset("国光湿巾_商品成片_001.mp4", kind="final_output")
         self.material = self.asset("同商品素材.mov")
         self.app = FastAPI()
         self.app.include_router(router, prefix="/api")
@@ -77,7 +81,7 @@ class VideoRefinementTest(unittest.TestCase):
         self.temp.cleanup()
 
     def asset(self, filename, kind="material", tenant="t1", **kwargs):
-        row = VideoAsset(tenant_id=tenant, product_id=self.product.id if tenant == "t1" else self.other.id,
+        row = EcommerceVideoAsset(tenant_id=tenant, product_id=self.product.id if tenant == "t1" else self.other.id,
             asset_id=filename, filename=filename, asset_kind=kind, library_type="finished",
             object_url=f"/{filename}", content_hash="a" * 64, width=720, height=1280,
             duration_seconds=22.78, fps=30, has_audio=True, burned_subtitles=True,
@@ -103,6 +107,24 @@ class VideoRefinementTest(unittest.TestCase):
     def confirm(self, task, **kwargs):
         return self.client.post(f"/api/video-refinements/{task['id']}/plans/confirm", json={
             "revision": task["current_revision"], "plan_hash": task["plan_hash"], "acknowledge_risks": True, **kwargs})
+
+    def legacy_task(self):
+        product = Product(tenant_id="t1", name="旧商品")
+        self.db.add(product); self.db.flush()
+        asset = VideoAsset(tenant_id="t1", product_id=product.id, asset_id="legacy-source",
+                           filename="旧成片.mp4", asset_kind="final_output", library_type="finished",
+                           object_url="/legacy.mp4", content_hash="c" * 64)
+        self.db.add(asset); self.db.flush()
+        task = VideoRefinementTask(tenant_id="t1", source_asset_id=asset.id, product_id=product.id,
+                                   source_hash=asset.content_hash, source_snapshot={}, user_brief="旧商品精修意见", created_by="owner")
+        self.db.add(task); self.db.flush()
+        snapshot = VideoRefinementSnapshot(task_id=task.id, schema_version="legacy", is_mock=False,
+                                           snapshot_json={}, content_hash="d" * 64)
+        self.db.add(snapshot); self.db.flush()
+        self.db.add(VideoRefinementPlan(task_id=task.id, revision=0, source_snapshot_id=snapshot.id,
+                                       plan_json={}, plan_hash="e" * 64))
+        self.db.commit()
+        return task.id
 
     def test_legacy_review_schema_and_related_data_remain_untouched(self):
         # Reproduce an installation with the earlier review-driven repair tables.
@@ -134,6 +156,7 @@ class VideoRefinementTest(unittest.TestCase):
 
     def test_compatible_phase1_schema_preserves_tasks_snapshots_and_plans(self):
         task = self.analyze(self.create(["pace"]))
+        legacy_id = self.legacy_task()
         for suffix in ("tasks", "snapshots", "plans"):
             with self.engine.begin() as connection:
                 connection.execute(text(f"ALTER TABLE video_refinement_workspace_{suffix} RENAME TO video_refinement_{suffix}"))
@@ -144,20 +167,23 @@ class VideoRefinementTest(unittest.TestCase):
         self.assertEqual(response.status_code, 200, response.text)
         self.assertEqual(response.json(), task)
         self.assertEqual(self.confirm(task).status_code, 200)
-        self.assertEqual(self.db.query(VideoRefinementSnapshot).count(), 1)
-        self.assertEqual(self.db.query(VideoRefinementPlan).count(), 1)
+        self.assertEqual(self.db.query(EcommerceVideoRefinementSnapshot).count(), 1)
+        self.assertEqual(self.db.query(EcommerceVideoRefinementPlan).count(), 1)
+        with self.engine.connect() as connection:
+            self.assertEqual(connection.execute(text("SELECT user_brief FROM video_refinement_workspace_tasks WHERE id = :id"), {"id": legacy_id}).scalar(), "旧商品精修意见")
         names = inspect(self.engine).get_table_names()
         self.assertNotIn("video_refinement_tasks", names)
-        self.assertEqual(inspect(self.engine).get_foreign_keys(VideoRefinementPlan.__tablename__)[0]["referred_table"], VideoRefinementTask.__tablename__)
+        self.assertEqual(inspect(self.engine).get_foreign_keys(EcommerceVideoRefinementPlan.__tablename__)[0]["referred_table"], EcommerceVideoRefinementTask.__tablename__)
 
     def test_conflicting_workspace_tables_stop_migration_without_overwriting_data(self):
         task = self.create()
+        legacy_id = self.legacy_task()
         with self.engine.begin() as connection:
             connection.execute(text("CREATE TABLE video_refinement_tasks AS SELECT * FROM video_refinement_workspace_tasks"))
         with self.assertRaisesRegex(RuntimeError, "新旧表同时存在"):
             migrate_refinement_workspace_schema(self.engine)
         with self.engine.connect() as connection:
-            self.assertEqual(connection.execute(text("SELECT id FROM video_refinement_tasks")).scalar(), task["id"])
+            self.assertEqual(connection.execute(text("SELECT id FROM video_refinement_tasks")).scalar(), legacy_id)
         self.assertEqual(self.client.get(f"/api/video-refinements/{task['id']}").json(), task)
 
     def test_source_picker_and_frozen_mock_fixture(self):
@@ -180,12 +206,13 @@ class VideoRefinementTest(unittest.TestCase):
         self.assertEqual(task["current_revision"], 0)
         self.assertIsNone(task["plan"])
         self.assertTrue(task["preview_supported"])
-        self.assertEqual(self.db.query(VideoRefinementSnapshot).count(), 1)
+        self.assertEqual(self.db.query(EcommerceVideoRefinementSnapshot).count(), 1)
 
-    def test_empty_brief_non_final_and_unverified_media_are_rejected(self):
-        for payload in [{"source_asset_id": self.source.id, "user_brief": "   "},
-                        {"source_asset_id": self.material.id, "user_brief": "修改画面"}]:
-            self.assertIn(self.client.post("/api/video-refinements", json=payload).status_code, [404, 422])
+    def test_empty_brief_material_and_unverified_media_are_rejected(self):
+        material = self.asset("商品素材.mp4")
+        for payload, status in [({"source_asset_id": self.source.id, "user_brief": "   "}, 422),
+                                ({"source_asset_id": material.id, "user_brief": "修改画面"}, 404)]:
+            self.assertEqual(self.client.post("/api/video-refinements", json=payload).status_code, status)
         self.source.fps = 0
         self.db.commit()
         response = self.client.post("/api/video-refinements", json={"source_asset_id": self.source.id, "user_brief": "修改画面"})
@@ -212,7 +239,7 @@ class VideoRefinementTest(unittest.TestCase):
         self.assertEqual(updated["current_revision"], 2)
         self.assertEqual(updated["plan"]["summary"]["expected_duration_ms"], 22780)
         self.assertNotEqual(updated["plan_hash"], original_hash)
-        first = self.db.query(VideoRefinementPlan).filter_by(task_id=task["id"], revision=1).one()
+        first = self.db.query(EcommerceVideoRefinementPlan).filter_by(task_id=task["id"], revision=1).one()
         self.assertEqual(first.plan_hash, original_hash)
         self.assertTrue(first.plan_json["items"][0]["enabled"])
         self.assertEqual(self.confirm(updated).status_code, 422)
@@ -243,7 +270,7 @@ class VideoRefinementTest(unittest.TestCase):
         self.assertEqual(self.confirm(task).status_code, 409)
         current = self.client.get(f"/api/video-refinements/{task['id']}").json()
         self.assertEqual(current["plan_hash"], next_task["plan_hash"])
-        self.assertEqual(self.db.query(VideoRefinementPlan).count(), 2)
+        self.assertEqual(self.db.query(EcommerceVideoRefinementPlan).count(), 2)
 
     def test_duplicate_analysis_returns_published_plan_without_calling_ai_again(self):
         created = self.create(["pace"])
@@ -254,7 +281,7 @@ class VideoRefinementTest(unittest.TestCase):
         self.assertEqual(duplicate.json()["plan_hash"], first["plan_hash"])
         self.assertEqual(duplicate.json()["current_revision"], 1)
         model.assert_not_awaited()
-        self.assertEqual(self.db.query(VideoRefinementPlan).count(), 1)
+        self.assertEqual(self.db.query(EcommerceVideoRefinementPlan).count(), 1)
 
     def test_overlapping_analysis_requests_return_one_published_revision(self):
         task = self.create(["pace"])
@@ -272,7 +299,7 @@ class VideoRefinementTest(unittest.TestCase):
             responses = list(executor.map(submit, range(2)))
         self.assertEqual([row.status_code for row in responses], [200,200], [row.text for row in responses])
         self.assertEqual(responses[0].json()["plan_hash"], responses[1].json()["plan_hash"])
-        self.assertEqual(self.db.query(VideoRefinementPlan).count(), 1)
+        self.assertEqual(self.db.query(EcommerceVideoRefinementPlan).count(), 1)
 
     def test_cancelled_task_cannot_be_restored_by_old_analysis_request(self):
         created = self.create(["pace"])
@@ -281,7 +308,7 @@ class VideoRefinementTest(unittest.TestCase):
         response = self.client.post(f"/api/video-refinements/{created['id']}/analyze", json={"revision":0})
         self.assertEqual(response.status_code,409)
         self.assertEqual(self.client.get(f"/api/video-refinements/{created['id']}").json()["status"],"CANCELLED")
-        self.assertEqual(self.db.query(VideoRefinementPlan).count(),1)
+        self.assertEqual(self.db.query(EcommerceVideoRefinementPlan).count(),1)
 
     def test_adding_material_does_not_invalidate_existing_plan(self):
         task = self.analyze(self.create(["pace"]))
@@ -340,7 +367,7 @@ class VideoRefinementTest(unittest.TestCase):
         with patch("app.api.video_refinement._get_task", side_effect=synchronized_read), ThreadPoolExecutor(max_workers=2) as executor:
             results = list(executor.map(submit, ["第一个页面的修改", "第二个页面的修改"]))
         self.assertEqual(sorted(results), [200, 409])
-        self.assertEqual(self.db.query(VideoRefinementPlan).count(), 2)
+        self.assertEqual(self.db.query(EcommerceVideoRefinementPlan).count(), 2)
 
     def test_confirmation_is_idempotent_and_new_draft_invalidates_it(self):
         task = self.analyze(self.create(["pace"]))
@@ -354,13 +381,13 @@ class VideoRefinementTest(unittest.TestCase):
         self.assertIsNone(changed["confirmed_revision"])
         self.assertEqual(changed["status"], "CONFIGURING")
         self.assertEqual(self.confirm(task).status_code, 409)
-        self.assertEqual(self.db.query(VideoAsset).count(), 2)
+        self.assertEqual(self.db.query(EcommerceVideoAsset).count(), 2)
         self.db.refresh(self.source)
         self.assertEqual(self.source.content_hash, "a"*64)
 
     def test_source_hash_or_metadata_change_blocks_confirmation(self):
         task = self.analyze(self.create(["pace"]))
-        for field, value in [("content_hash", "b"*64), ("width", 1080)]:
+        for field, value in [("content_hash", "b"*64), ("width", 1080), ("asset_kind", "material")]:
             original = getattr(self.source, field)
             setattr(self.source, field, value)
             self.db.commit()
@@ -393,7 +420,7 @@ class VideoRefinementTest(unittest.TestCase):
         invalids.append(deepcopy(original)*2)
         for items in invalids:
             self.assertEqual(self.save(task, items).status_code, 422, items)
-        self.assertEqual(self.db.query(VideoRefinementPlan).count(), 1)
+        self.assertEqual(self.db.query(EcommerceVideoRefinementPlan).count(), 1)
 
     def test_cross_tenant_task_access_and_cancellation(self):
         task = self.analyze(self.create(["pace"]))
@@ -406,6 +433,35 @@ class VideoRefinementTest(unittest.TestCase):
         self.assertEqual(self.client.post(path+"/cancel", json={"revision": 1}).status_code, 200)
         self.assertEqual(self.save(task, task["plan"]["items"]).status_code, 409)
         self.assertEqual(self.confirm(task).status_code, 409)
+
+    def test_list_returns_summaries_with_one_query_and_preserves_detail(self):
+        first = self.create()
+        second = self.create()
+        foreign = EcommerceVideoRefinementTask(
+            tenant_id="t2", source_asset_id=self.source.id, product_id=self.product.id,
+            source_hash="a" * 64, source_snapshot={"filename": "foreign.mp4"},
+            user_brief="foreign", created_by="owner",
+        )
+        self.db.add(foreign)
+        self.db.commit()
+        statements = []
+        def record_query(conn, cursor, statement, parameters, context, executemany):
+            statements.append(statement)
+        event.listen(self.engine, "before_cursor_execute", record_query)
+        try:
+            with patch("app.api.video_refinement._serialize", side_effect=AssertionError("detail loaded")):
+                response = self.client.get("/api/video-refinements")
+        finally:
+            event.remove(self.engine, "before_cursor_execute", record_query)
+        self.assertEqual(response.status_code, 200, response.text)
+        rows = response.json()
+        self.assertEqual([row["id"] for row in rows], [second["id"], first["id"]])
+        self.assertEqual(len(statements), 1)
+        self.assertEqual(set(rows[0]), {"id", "source_filename", "user_brief", "status", "current_revision", "created_at", "updated_at"})
+        self.assertEqual(rows[0]["source_filename"], second["source_snapshot"]["source"]["filename"])
+        for key in ("user_brief", "status", "current_revision", "created_at", "updated_at"):
+            self.assertEqual(rows[0][key], second[key])
+        self.assertEqual(self.client.get(f"/api/video-refinements/{second['id']}").json(), second)
 
     def test_failed_analysis_materials_are_candidates_without_fabricated_metadata(self):
         failed = self.asset("failed-analysis.mov")
@@ -437,7 +493,7 @@ class VideoRefinementTest(unittest.TestCase):
         items[0]["operation"] = "修改后旧预览失效"
         self.assertEqual(self.save(task,items).status_code,200)
         self.db.expire_all()
-        self.assertEqual(self.db.get(VideoRefinementPreview,preview_id).status,"superseded")
+        self.assertEqual(self.db.get(EcommerceVideoRefinementPreview,preview_id).status,"superseded")
         self.assertEqual(self.client.post(path+f"/{preview_id}/accept",json=payload).status_code,409)
 
     def test_accept_preview_verifies_file_bytes_and_creates_only_one_child_version(self):
@@ -447,7 +503,7 @@ class VideoRefinementTest(unittest.TestCase):
         payload = {"revision":1,"plan_hash":task["plan_hash"]}
         with patch("app.services.refinement_queue.enqueue_preview"):
             preview_id = self.client.post(path,json=payload).json()["previews"][0]["id"]
-        preview = self.db.get(VideoRefinementPreview,preview_id)
+        preview = self.db.get(EcommerceVideoRefinementPreview,preview_id)
         preview.status = "ready"
         preview.output_url = "/immutable-preview.mp4"
         preview.output_hash = "b"*64
@@ -458,20 +514,20 @@ class VideoRefinementTest(unittest.TestCase):
         accept = path+f"/{preview_id}/accept"
         with patch("app.api.video_refinement.verified_path",side_effect=ValueError("文件内容已变化")):
             self.assertEqual(self.client.post(accept,json=payload).status_code,409)
-        self.assertEqual(self.db.query(VideoRefinementVersion).count(),0)
+        self.assertEqual(self.db.query(EcommerceVideoRefinementVersion).count(),0)
         with patch("app.api.video_refinement.verified_path",return_value=Path(self.temp.name)/"preview.mp4"):
             first = self.client.post(accept,json=payload)
             self.assertEqual(first.status_code,200,first.text)
             second = self.client.post(accept,json=payload)
         self.assertEqual(first.json()["output_asset_id"],second.json()["output_asset_id"])
         self.assertEqual(first.json()["status"],"COMPLETED")
-        version = self.db.query(VideoRefinementVersion).one()
+        version = self.db.query(EcommerceVideoRefinementVersion).one()
         self.assertEqual(version.parent_asset_id,self.source.id)
         self.assertEqual(version.version,2)
-        lineage = self.db.query(VideoLineageSegment).filter_by(target_asset_id=version.output_asset_id).one()
+        lineage = self.db.query(EcommerceVideoLineageSegment).filter_by(target_asset_id=version.output_asset_id).one()
         self.assertEqual(lineage.source_asset_id,self.source.id)
         self.assertAlmostEqual(lineage.target_end,21.98)
-        self.assertEqual(self.db.get(VideoAsset,version.output_asset_id).source,"video_refinement_output")
+        self.assertEqual(self.db.get(EcommerceVideoAsset,version.output_asset_id).source,"video_refinement_output")
         self.db.refresh(self.source)
         self.assertEqual(self.source.content_hash,"a"*64)
 

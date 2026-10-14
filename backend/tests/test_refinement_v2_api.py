@@ -6,7 +6,7 @@ import unittest
 from unittest.mock import AsyncMock, MagicMock, patch
 from types import SimpleNamespace
 
-from app.models import VideoAssetAnalysis, VideoRefinementRequest, VideoRefinementAnalysisJob, VideoRefinementPlan, VideoRefinementVoiceover
+from app.models import EcommerceVideoAssetAnalysis, EcommerceVideoRefinementRequest, EcommerceVideoRefinementAnalysisJob, EcommerceVideoRefinementPlan, EcommerceVideoRefinementVoiceover
 from app.services.refinement_plan import compile_plan, content_hash
 from app.schemas.video_refinement import RefinementItem
 from app.services.refinement_queue import run_analysis
@@ -25,29 +25,197 @@ class RefinementV2ApiTest(unittest.TestCase):
         self.ai_patch.stop()
         self.source.burned_subtitles=False
         self.material.burned_subtitles=False
-        self.db.add(VideoAssetAnalysis(tenant_id="t1",asset_id=self.material.id,model="vision",status="completed",
+        self.db.add(EcommerceVideoAssetAnalysis(tenant_id="t1",asset_id=self.material.id,model="vision",status="completed",
             analysis_json={"source_hash":self.material.content_hash,"summary":"同商品画面","highlights":[{"start":0,"end":2,"description":"商品展示"}]}))
         self.db.commit()
 
-    def create(self):
-        response=self.client.post("/api/video-refinements",json={"source_asset_id":self.source.id,"user_brief":"仅替换画面, 保留原配音","duration_preference":"preserve"})
+    def create(self, *, user_brief="仅替换画面, 保留原配音", duration_preference="preserve"):
+        response=self.client.post("/api/video-refinements",json={"source_asset_id":self.source.id,"user_brief":user_brief,"duration_preference":duration_preference})
         self.assertEqual(response.status_code,201,response.text)
         return response.json()
+
+    def test_unavailable_worker_does_not_create_or_retry_analysis(self):
+        task = self.create()
+        for status in ("disabled", "stopped"):
+            with self.subTest(status=status), patch("app.services.refinement_queue.refinement_worker_state",return_value={"status":status,"message":"后台精修服务不可用, 无需重复提交."}):
+                for endpoint in ("analyze", "auto-preview"):
+                    response = self.client.post(f"/api/video-refinements/{task['id']}/{endpoint}",json={"revision":0})
+                    self.assertEqual(response.status_code,503,response.text)
+                self.assertEqual(self.db.query(EcommerceVideoRefinementAnalysisJob).count(),0)
+        response = self.client.post(f"/api/video-refinements/{task['id']}/analyze",json={"revision":0})
+        self.assertEqual(response.status_code,202,response.text)
+        job = self.db.query(EcommerceVideoRefinementAnalysisJob).one()
+        job.status = "failed";self.db.commit()
+        with patch("app.services.refinement_queue.refinement_worker_state",return_value={"status":"stopped","message":"后台精修服务未运行"}):
+            response = self.client.post(f"/api/video-refinements/{task['id']}/analyze",json={"revision":0})
+            self.assertEqual(response.status_code,503,response.text)
+        self.db.refresh(job)
+        self.assertEqual(job.status,"failed")
+
+    def test_existing_queue_reports_worker_and_wait_without_changing_job(self):
+        from datetime import datetime, timedelta
+        task = self.create()
+        self.client.post(f"/api/video-refinements/{task['id']}/analyze",json={"revision":0})
+        job = self.db.query(EcommerceVideoRefinementAnalysisJob).one()
+        job.created_at = datetime.utcnow()-timedelta(minutes=8);self.db.commit()
+        state = {"status":"disabled","message":"后台精修服务已关闭"}
+        with patch("app.services.refinement_queue.refinement_worker_state",return_value=state):
+            response = self.client.get(f"/api/video-refinements/{task['id']}")
+        self.assertEqual(response.json()["worker_state"],state)
+        self.assertEqual(response.json()["analysis_state"]["status"],"queued")
+        self.assertIsNone(response.json()["analysis_state"]["started_at"])
+        self.assertGreaterEqual(response.json()["analysis_state"]["queue_wait_seconds"],480)
+        self.db.refresh(job)
+        self.assertEqual(job.status,"queued_v3")
+        self.assertEqual(job.attempts,0)
+
+    def test_unavailable_worker_rejects_preview_and_voiceover_creation(self):
+        from app.models import EcommerceVideoRefinementPreview
+        task = self.ready_plan(self.create(user_brief="替换商品展示画面和口播"))
+        payload = {"revision":0,"plan_hash":task["plan_hash"],"acknowledge_risks":True}
+        response = self.client.post(f"/api/video-refinements/{task['id']}/plans/confirm",json=payload)
+        self.assertEqual(response.status_code,200,response.text)
+        with patch("app.services.refinement_queue.refinement_worker_state",return_value={"status":"disabled","message":"后台精修服务已关闭"}):
+            response = self.client.post(f"/api/video-refinements/{task['id']}/previews",json={"revision":0,"plan_hash":task["plan_hash"]})
+            self.assertEqual(response.status_code,503,response.text)
+        self.assertEqual(self.db.query(EcommerceVideoRefinementPreview).count(),0)
+        record = self.db.query(EcommerceVideoRefinementPlan).one()
+        plan = deepcopy(record.plan_json)
+        plan["items"][0].update(narration_strategy="tts",script="已授权台词")
+        record.plan_json = plan;record.plan_hash = content_hash(plan);self.db.commit()
+        with patch("app.services.refinement_queue.refinement_worker_state",return_value={"status":"stopped","message":"后台精修服务未运行"}):
+            response = self.client.post(f"/api/video-refinements/{task['id']}/voiceovers",json={"revision":0,"plan_hash":record.plan_hash,"item_id":"visual"})
+            self.assertEqual(response.status_code,503,response.text)
+        self.assertEqual(self.db.query(EcommerceVideoRefinementVoiceover).count(),0)
 
     def ready_plan(self,task):
         edit=RefinementItem(item_id="visual",type="VISUAL_REPLACE",range={"start_ms":1000,"end_ms":2000},operation="替换展示",reason="商品更清楚",material_segments=[{"asset_id":self.material.id,"source_range":{"start_ms":6000,"end_ms":7000}}])
         plan=compile_plan(task["source_snapshot"],[edit],task["user_brief"],"",manual=False)
-        self.db.add(VideoRefinementPlan(task_id=task["id"],revision=0,source_snapshot_id=self.db.query(__import__('app.models',fromlist=['VideoRefinementSnapshot']).VideoRefinementSnapshot).filter_by(task_id=task["id"]).one().id,plan_json=plan,plan_hash=content_hash(plan),origin="human"))
+        self.db.add(EcommerceVideoRefinementPlan(task_id=task["id"],revision=0,source_snapshot_id=self.db.query(__import__('app.models',fromlist=['EcommerceVideoRefinementSnapshot']).EcommerceVideoRefinementSnapshot).filter_by(task_id=task["id"]).one().id,plan_json=plan,plan_hash=content_hash(plan),origin="human"))
         self.db.commit()
         return self.client.get(f"/api/video-refinements/{task['id']}").json()
 
+    def test_precise_draft_stays_v3_when_generation_gate_is_disabled(self):
+        task = self.ready_plan(self.create())
+        record = self.db.query(EcommerceVideoRefinementPlan).filter_by(task_id=task["id"]).one()
+        context = deepcopy(task["source_snapshot"])
+        from fractions import Fraction
+        duration = context["source"]["duration_ms"]
+        context["source"].update(frame_rate="30",video_duration_ms=duration,video_duration=str(Fraction(duration,1000)),audio_duration=str(Fraction(duration,1000)),audio_offset="0")
+        plan = compile_plan(context,[RefinementItem.model_validate(row) for row in task["plan"]["items"]],task["user_brief"],"",manual=False,
+                            options={"timing_protocol":"v3","authorization_version":"refinement-authorization-v1"})
+        plan["analysis"] = {"context":context}
+        record.plan_json = plan;record.plan_hash = content_hash(plan);self.db.commit()
+        response = self.client.patch(f"/api/video-refinements/{task['id']}/draft",json={"revision":0,"items":plan["items"]})
+        self.assertEqual(response.status_code,200,response.text)
+        self.assertEqual(response.json()["plan"]["schema_version"],"video_refinement_plan.v3")
+        self.assertFalse(response.json()["plan"]["edit_authorizations"]["visual"]["allow_narration"])
+        current=response.json()
+        self.client.post(f"/api/video-refinements/{task['id']}/analyze",json={"revision":current["current_revision"]})
+        job=self.db.query(EcommerceVideoRefinementAnalysisJob).filter_by(task_id=task["id"],revision=current["current_revision"]).one()
+        self.assertEqual(job.options_json["timing_protocol"],"v3")
+
+    def test_generation_policy_is_server_owned_and_tenant_scoped(self):
+        from app.config import get_settings
+        settings = get_settings().model_copy(update={"refinement_precise_timing_enabled":True,"refinement_localization_enabled":True,"refinement_rollout_tenants":"t2"})
+        task = self.create()
+        with patch("app.services.refinement_policy.get_settings",return_value=settings):
+            response = self.client.post(f"/api/video-refinements/{task['id']}/analyze",json={"revision":0})
+        self.assertEqual(response.status_code,202,response.text)
+        job = self.db.query(EcommerceVideoRefinementAnalysisJob).filter_by(task_id=task["id"]).one()
+        self.assertEqual(job.options_json["timing_protocol"],"v2")
+        self.assertFalse(job.options_json["localization"])
+        self.assertEqual(self.client.post(f"/api/video-refinements/{task['id']}/analyze",json={"revision":0,"timing_protocol":"v3"}).status_code,422)
+
+    def test_versioned_jobs_are_invisible_to_legacy_claims_and_retry_never_downgrades(self):
+        from app.config import get_settings
+        settings=get_settings().model_copy(update={"refinement_precise_timing_enabled":True,"refinement_rollout_tenants":"t1"})
+        task=self.create()
+        with patch("app.services.refinement_policy.get_settings",return_value=settings):
+            response=self.client.post(f"/api/video-refinements/{task['id']}/analyze",json={"revision":0})
+        self.assertEqual(response.status_code,202,response.text)
+        self.assertEqual(response.json()["analysis_state"]["status"],"queued")
+        job=self.db.query(EcommerceVideoRefinementAnalysisJob).filter_by(task_id=task["id"]).one()
+        self.assertEqual(job.status,"queued_v3")
+        self.assertEqual(self.db.query(EcommerceVideoRefinementAnalysisJob).filter_by(status="queued").count(),0)
+        job.status="failed";self.db.commit()
+        self.client.post(f"/api/video-refinements/{task['id']}/analyze",json={"revision":0})
+        self.db.refresh(job)
+        self.assertEqual(job.options_json["timing_protocol"],"v3")
+        self.assertEqual(job.status,"queued_v3")
+
+    def test_v3_blockers_cannot_be_bypassed_by_risk_acknowledgement(self):
+        task = self.ready_plan(self.create())
+        record = self.db.query(EcommerceVideoRefinementPlan).filter_by(task_id=task["id"]).one()
+        value = deepcopy(record.plan_json)
+        value.update(schema_version="video_refinement_plan.v3",execution_blockers=[{"item_id":"visual","code":"CONTENT_REVIEW_REQUIRED","message":"需局部核验"}])
+        record.plan_json=value;record.plan_hash=content_hash(value);self.db.commit()
+        response = self.client.post(f"/api/video-refinements/{task['id']}/plans/confirm",json={"revision":0,"plan_hash":record.plan_hash,"acknowledge_risks":True})
+        self.assertEqual(response.status_code,422,response.text)
+
+    def test_v3_acceptance_uses_real_source_end_and_not_container_end(self):
+        from app.models import EcommerceVideoLineageSegment, EcommerceVideoRefinementPreview, EcommerceVideoRefinementVersion
+        from app.services.refinement_media import render_recipe
+        from app.services.refinement_timing import frame_at_ms
+        from pathlib import Path
+        task = self.ready_plan(self.create())
+        record = self.db.query(EcommerceVideoRefinementPlan).filter_by(task_id=task["id"]).one()
+        value = deepcopy(record.plan_json)
+        value.update(schema_version="video_refinement_plan.v3",renderer_version="v3-render-1")
+        value["summary"].update(frame_rate="30",total_frames=683)
+        for clip in value["video_track"]:
+            clip["output_frames"]={"start_frame":frame_at_ms(clip["output_range"]["start_ms"],30),"end_frame":frame_at_ms(clip["output_range"]["end_ms"],30)}
+        value["video_track"][1]["source_range"]["end_ms"]=6999
+        record.plan_json=value;record.plan_hash=content_hash(value);self.db.commit()
+        payload={"revision":0,"plan_hash":record.plan_hash,"acknowledge_risks":True}
+        self.assertEqual(self.client.post(f"/api/video-refinements/{task['id']}/plans/confirm",json=payload).status_code,200)
+        preview = EcommerceVideoRefinementPreview(tenant_id="t1",task_id=task["id"],plan_id=record.id,revision=0,plan_hash=record.plan_hash,status="ready",
+            output_url="/preview.mp4",output_hash="b"*64,storage_provider="aliyun_oss",recipe_json=render_recipe(task["source_snapshot"],value),
+            validation_json={"passed":True,"duration_seconds":22.81,"width":720,"height":1280,"fps":30,"has_audio":True,"burned_subtitles":False,"has_background_music":False})
+        self.db.add(preview);self.db.commit()
+        payload.pop("acknowledge_risks")
+        with patch("app.api.video_refinement.verified_path",return_value=Path(self.temp.name)/"preview.mp4"):
+            response=self.client.post(f"/api/video-refinements/{task['id']}/previews/{preview.id}/accept",json=payload)
+        self.assertEqual(response.status_code,200,response.text)
+        version=self.db.query(EcommerceVideoRefinementVersion).one()
+        segments=self.db.query(EcommerceVideoLineageSegment).filter_by(target_asset_id=version.output_asset_id).order_by(EcommerceVideoLineageSegment.segment_index).all()
+        self.assertEqual(segments[1].source_end,6.999)
+        self.assertAlmostEqual(segments[-1].target_end,683/30)
+        self.assertNotEqual(segments[-1].target_end,22.81)
+
+    def test_voiceover_publication_is_superseded_after_revision_change(self):
+        from app.services.refinement_voiceover import run_voiceover
+        from pathlib import Path
+        import wave
+        task = self.create()
+        job = EcommerceVideoRefinementVoiceover(tenant_id="t1",task_id=task["id"],revision=0,item_id="voice",fingerprint="f"*64,
+                                      script="已授权台词",parameters_json={"speaker":"default"})
+        self.db.add(job);self.db.commit()
+        def synthesize(script,raw,**kwargs):
+            raw.write_bytes(b"provider")
+            response=self.client.patch(f"/api/video-refinements/{task['id']}/requirements",json={"revision":0,"user_brief":"新的目标"})
+            self.assertEqual(response.status_code,200,response.text)
+        def decode(command,**kwargs):
+            with wave.open(str(Path(command[-1])),"wb") as stream:
+                stream.setnchannels(2);stream.setsampwidth(2);stream.setframerate(48000);stream.writeframes(b"\0"*480*4)
+            return SimpleNamespace(returncode=0)
+        storage=SimpleNamespace(name="test",upload_path=AsyncMock(return_value="/voice.wav"),delete=AsyncMock())
+        with patch("app.services.refinement_voiceover.SessionLocal",self.sessions),patch("app.services.refinement_voiceover.synthesize_speech",side_effect=synthesize), \
+             patch("app.services.refinement_voiceover.subprocess.run",side_effect=decode),patch("app.services.refinement_voiceover.align_voiceover_timing"), \
+             patch("app.services.refinement_voiceover.get_storage_by_name",return_value=storage):
+            run_voiceover(job.id)
+        self.db.refresh(job)
+        self.assertEqual(job.status,"superseded")
+        self.assertFalse(job.object_url)
+        storage.delete.assert_awaited_once_with("/voice.wav")
+
     def test_more_than_500_materials_are_frozen_browsable_and_tenant_scoped(self):
-        from app.models import VideoAsset
-        self.db.add_all([VideoAsset(tenant_id="t1",product_id=self.product.id,asset_id=f"bulk-{i}",filename=f"bulk-{i}.mp4",object_url=f"/bulk-{i}",content_hash="b"*64,duration_seconds=5,width=240,height=320,fps=30) for i in range(505)])
+        from app.models import EcommerceVideoAsset
+        self.db.add_all([EcommerceVideoAsset(tenant_id="t1",product_id=self.product.id,asset_id=f"bulk-{i}",filename=f"bulk-{i}.mp4",object_url=f"/bulk-{i}",content_hash="b"*64,duration_seconds=5,width=240,height=320,fps=30) for i in range(505)])
         self.db.commit()
-        self.db.add_all([VideoAssetAnalysis(tenant_id="t1",asset_id=a.id,model="vision",status="completed",
+        self.db.add_all([EcommerceVideoAssetAnalysis(tenant_id="t1",asset_id=a.id,model="vision",status="completed",
             analysis_json={"source_hash":a.content_hash,"highlights":[{"start":0,"end":1,"description":"商品展示"}]})
-            for a in self.db.query(VideoAsset).filter(VideoAsset.asset_id.like("bulk-%")).all()])
+            for a in self.db.query(EcommerceVideoAsset).filter(EcommerceVideoAsset.asset_id.like("bulk-%")).all()])
         self.db.commit()
         self.asset("foreign",tenant="t2")
         task=self.create()
@@ -66,7 +234,7 @@ class RefinementV2ApiTest(unittest.TestCase):
 
     def test_trusted_analysis_preserves_later_highlights_and_wrong_hash_is_not_reused(self):
         highlights=[{"start":i,"end":i+1,"description":f"片段{i}"} for i in range(10)]
-        self.db.add(VideoAssetAnalysis(tenant_id="t1",asset_id=self.material.id,model="vision",status="completed",analysis_json={"source_hash":self.material.content_hash,"highlights":highlights}))
+        self.db.add(EcommerceVideoAssetAnalysis(tenant_id="t1",asset_id=self.material.id,model="vision",status="completed",analysis_json={"source_hash":self.material.content_hash,"highlights":highlights}))
         self.db.commit()
         task=self.create()
         self.assertEqual(len(task["source_snapshot"]["material_catalog"][0]["analysis"]["data"]["highlights"]),10)
@@ -93,7 +261,7 @@ class RefinementV2ApiTest(unittest.TestCase):
         task=self.ready_plan(self.create())
         old_hash=task["snapshot_hash"]
         added = self.asset("new-material")
-        self.db.add(VideoAssetAnalysis(tenant_id="t1",asset_id=added.id,model="vision",status="completed",
+        self.db.add(EcommerceVideoAssetAnalysis(tenant_id="t1",asset_id=added.id,model="vision",status="completed",
             analysis_json={"source_hash":added.content_hash,"highlights":[{"start":0,"end":1,"description":"新增画面"}]}))
         self.db.commit()
         refreshed=self.client.post(f"/api/video-refinements/{task['id']}/materials/refresh",json={"revision":0})
@@ -103,7 +271,7 @@ class RefinementV2ApiTest(unittest.TestCase):
         self.assertIsNone(current["plan"])
         self.assertNotEqual(current["snapshot_hash"],old_hash)
         self.assertEqual(current["source_snapshot"]["refresh_changes"]["added"],1)
-        original=self.db.query(VideoRefinementRequest).filter_by(task_id=task["id"],revision=0).one()
+        original=self.db.query(EcommerceVideoRefinementRequest).filter_by(task_id=task["id"],revision=0).one()
         self.assertEqual(original.snapshot_hash,old_hash)
         self.assertEqual(len(original.snapshot_json["material_catalog"]),1)
         self.assertEqual(self.client.post(f"/api/video-refinements/{task['id']}/plans/confirm",json={"revision":0,"plan_hash":task["plan_hash"],"acknowledge_risks":True}).status_code,409)
@@ -167,13 +335,13 @@ class RefinementV2ApiTest(unittest.TestCase):
             futures = [pool.submit(worker) for _ in range(2)]
             for future in futures: future.result(timeout=10)
         self.assertEqual(calls,[job_id])
-        self.assertEqual(self.db.query(VideoRefinementPlan).filter_by(task_id=task["id"]).count(),1)
+        self.assertEqual(self.db.query(EcommerceVideoRefinementPlan).filter_by(task_id=task["id"]).count(),1)
         current = self.client.get(f"/api/video-refinements/{task['id']}").json()
         self.assertEqual(current["analysis_state"]["status"],"ready")
 
     def test_risk_acknowledgement_cannot_bypass_specific_requirements(self):
         task=self.ready_plan(self.create())
-        plan=self.db.query(VideoRefinementPlan).filter_by(task_id=task["id"]).one()
+        plan=self.db.query(EcommerceVideoRefinementPlan).filter_by(task_id=task["id"]).one()
         value=deepcopy(plan.plan_json);value["execution_blockers"]=[{"item_id":"","code":"REQUIREMENT_UNRESOLVED","message":"目标时长冲突"}]
         plan.plan_json=value;plan.plan_hash=content_hash(value);self.db.commit()
         response=self.client.post(f"/api/video-refinements/{task['id']}/plans/confirm",json={"revision":0,"plan_hash":plan.plan_hash,"acknowledge_risks":True})
@@ -182,17 +350,17 @@ class RefinementV2ApiTest(unittest.TestCase):
 
     def test_historical_library_analysis_is_bound_to_completed_upload_and_reused(self):
         from datetime import datetime, timedelta
-        from app.models import VideoUploadSession
+        from app.models import EcommerceVideoUploadSession
         from app.services.storage import _provider_object_url
         now = datetime.utcnow()
-        self.db.query(VideoAssetAnalysis).filter_by(asset_id=self.material.id).delete()
+        self.db.query(EcommerceVideoAssetAnalysis).filter_by(asset_id=self.material.id).delete()
         self.material.object_url = _provider_object_url("aliyun_oss", "video-library/source/unique-object.mp4")
         self.material.content_hash = "aliyun_oss:" + "a" * 32
-        self.db.add(VideoUploadSession(id="uploaded",tenant_id="t1",product_id=self.product.id,video_asset_id=self.material.id,
+        self.db.add(EcommerceVideoUploadSession(id="uploaded",tenant_id="t1",product_id=self.product.id,video_asset_id=self.material.id,
             filename=self.material.filename,size_bytes=100,object_key="video-library/source/unique-object.mp4",
             storage_provider="aliyun_oss",multipart_upload_id="multipart",part_size=100,part_count=1,
             status="completed",completed_at=now-timedelta(minutes=10)))
-        row = VideoAssetAnalysis(tenant_id="t1",asset_id=self.material.id,model="vision",prompt_version="video-library-v3-whisper-timestamps",
+        row = EcommerceVideoAssetAnalysis(tenant_id="t1",asset_id=self.material.id,model="vision",prompt_version="video-library-v3-whisper-timestamps",
             status="completed",created_at=now-timedelta(minutes=5),completed_at=now-timedelta(minutes=1),input_video_seconds=self.material.duration_seconds,
             analysis_json={"schema_version":"1.0","asset_id":self.material.asset_id,"summary":"已分析商品展示",
                            "highlights":[{"start":0,"end":2,"description":"使用过程"}]})
@@ -210,10 +378,10 @@ class RefinementV2ApiTest(unittest.TestCase):
         self.assertEqual(changed["source_snapshot"]["material_catalog"], [])
 
     def test_newer_incompatible_analysis_does_not_hide_completed_observation(self):
-        self.db.add(VideoAssetAnalysis(tenant_id="t1",asset_id=self.material.id,model="vision",status="completed",
+        self.db.add(EcommerceVideoAssetAnalysis(tenant_id="t1",asset_id=self.material.id,model="vision",status="completed",
             analysis_json={"source_hash":self.material.content_hash,"highlights":[{"start":0,"end":1,"description":"可用"}]}))
         self.db.commit()
-        self.db.add(VideoAssetAnalysis(tenant_id="t1",asset_id=self.material.id,model="mock",status="completed",
+        self.db.add(EcommerceVideoAssetAnalysis(tenant_id="t1",asset_id=self.material.id,model="mock",status="completed",
             analysis_json={"source_hash":self.material.content_hash,"highlights":[]}))
         self.db.commit()
         task = self.create()
@@ -223,7 +391,7 @@ class RefinementV2ApiTest(unittest.TestCase):
         old_task = self.create()
         old_task["source_snapshot"]["material_catalog"][0]["analysis"] = {}
         self.assertEqual(old_task["source_snapshot"]["material_catalog"][0]["analysis"], {})
-        self.db.add(VideoAssetAnalysis(tenant_id="t1",asset_id=self.material.id,model="vision",status="completed",
+        self.db.add(EcommerceVideoAssetAnalysis(tenant_id="t1",asset_id=self.material.id,model="vision",status="completed",
             analysis_json={"source_hash":self.material.content_hash,"summary":"真实商品展示",
                            "highlights":[{"start":0,"end":1,"description":"使用过程"}]}))
         self.db.commit()
@@ -249,13 +417,13 @@ class RefinementV2ApiTest(unittest.TestCase):
     def test_partial_coverage_decision_survives_replanning_but_not_goal_or_library_changes(self):
         task = self.create()
         response = self.client.post(f"/api/video-refinements/{task['id']}/analyze",json={"revision":0}).json()
-        job = self.db.get(VideoRefinementAnalysisJob,response["analysis_state"]["id"])
+        job = self.db.get(EcommerceVideoRefinementAnalysisJob,response["analysis_state"]["id"])
         job.batches_json = {"successful-observation":{"score":50}}
         self.db.commit()
         accepted = self.client.patch(f"/api/video-refinements/{task['id']}/requirements",json={"revision":0,"accept_partial_evaluation":True}).json()
         self.assertTrue(accepted["options"]["accept_partial_evaluation"])
         self.client.post(f"/api/video-refinements/{task['id']}/analyze",json={"revision":1})
-        current = self.db.query(VideoRefinementAnalysisJob).filter_by(task_id=task["id"],revision=1).one()
+        current = self.db.query(EcommerceVideoRefinementAnalysisJob).filter_by(task_id=task["id"],revision=1).one()
         self.assertEqual(current.batches_json,job.batches_json)
         changed = self.client.patch(f"/api/video-refinements/{task['id']}/requirements",json={"revision":1,"user_brief":"新目标"}).json()
         self.assertNotIn("accept_partial_evaluation",changed["options"])
@@ -264,8 +432,8 @@ class RefinementV2ApiTest(unittest.TestCase):
         self.assertNotIn("accept_partial_evaluation",refreshed["options"])
 
     def test_voiceover_requests_are_idempotent_and_stale_drafts_are_rejected(self):
-        task=self.create()
-        edit=RefinementItem(item_id="insert",type="SEGMENT_INSERT",range={"start_ms":0,"end_ms":0},operation="新增段落",reason="新增内容",script="真实台词",narration_strategy="tts",boundary_reviewed=True,material_segments=[{"asset_id":self.material.id,"source_range":{"start_ms":0,"end_ms":4000}}])
+        task=self.create(user_brief="新增商品讲解口播",duration_preference="ai_recommend")
+        edit=RefinementItem(item_id="insert",type="SEGMENT_INSERT",range={"start_ms":0,"end_ms":0},operation="新增段落",reason="新增内容",script="真实台词",narration_strategy="tts",tts_speaker="zh_male_m191_uranus_bigtts",boundary_reviewed=True,material_segments=[{"asset_id":self.material.id,"source_range":{"start_ms":0,"end_ms":4000}}])
         response=self.client.patch(f"/api/video-refinements/{task['id']}/draft",json={"revision":0,"items":[edit.model_dump()]})
         self.assertEqual(response.status_code,200,response.text)
         task=response.json();request={"revision":task["current_revision"],"plan_hash":task["plan_hash"],"item_id":"insert"}
@@ -273,10 +441,29 @@ class RefinementV2ApiTest(unittest.TestCase):
         second=self.client.post(f"/api/video-refinements/{task['id']}/voiceovers",json=request)
         self.assertEqual(first.status_code,202,first.text)
         self.assertEqual(first.json()["voiceovers"][0]["id"],second.json()["voiceovers"][0]["id"])
-        self.assertEqual(self.db.query(VideoRefinementVoiceover).count(),1)
+        self.assertEqual(self.db.query(EcommerceVideoRefinementVoiceover).count(),1)
         self.assertEqual(self.client.get(f"/api/video-refinements/{task['id']}/voiceovers",headers={"x-test-tenant":"t2"}).status_code,404)
         request["revision"]=0
         self.assertEqual(self.client.post(f"/api/video-refinements/{task['id']}/voiceovers",json=request).status_code,409)
+
+    def test_old_plan_cannot_bypass_current_audio_constraints(self):
+        for brief, answer in (("仅替换画面, 保留原配音", ""), ("增加镜头, 不要重新配音", ""), ("增加镜头", "不要生成配音")):
+            with self.subTest(brief=brief,answer=answer):
+                task=self.ready_plan(self.create(user_brief=brief))
+                record=self.db.query(EcommerceVideoRefinementPlan).filter_by(task_id=task["id"]).one()
+                plan=deepcopy(record.plan_json)
+                plan["items"][0].update(narration_strategy="tts",script="旧草稿台词",tts_speaker="zh_male_m191_uranus_bigtts")
+                plan["edit_authorizations"]={"visual":{"allow_narration":True}}
+                if answer:
+                    plan["requirements_resolution"]=[{"requirement_id":"req","text":"镜头展示","status":"EXECUTABLE","reason":"旧方案","item_ids":["visual"],"decision":"answered","answer":answer}]
+                self.assertFalse(plan["execution_blockers"])
+                record.plan_json=plan;record.plan_hash=content_hash(plan);self.db.commit()
+                with patch("app.services.refinement_speakers.select_source_voice",new_callable=AsyncMock) as matcher:
+                    response=self.client.post(f"/api/video-refinements/{task['id']}/voiceovers",json={"revision":0,"plan_hash":record.plan_hash,"item_id":"visual"})
+                self.assertEqual(response.status_code,422,response.text)
+                self.assertIn("违反明确限制",response.json()["detail"])
+                matcher.assert_not_awaited()
+        self.assertEqual(self.db.query(EcommerceVideoRefinementVoiceover).count(),0)
 
     def test_automatic_preview_is_idempotent_and_scoped_to_current_tenant_and_revision(self):
         task = self.create()
@@ -285,8 +472,9 @@ class RefinementV2ApiTest(unittest.TestCase):
         second = self.client.post(url,json={"revision":0})
         self.assertEqual(first.status_code,202,first.text)
         self.assertEqual(first.json()["analysis_state"]["id"],second.json()["analysis_state"]["id"])
-        job = self.db.query(VideoRefinementAnalysisJob).one()
+        job = self.db.query(EcommerceVideoRefinementAnalysisJob).one()
         self.assertTrue(job.options_json["auto_preview"])
+        self.assertNotIn("supplement_narration",job.options_json)
         self.assertEqual(self.client.post(url,json={"revision":1}).status_code,409)
         self.assertEqual(self.client.post(url,json={"revision":0},headers={"x-test-tenant":"t2"}).status_code,404)
         old_fingerprint = job.fingerprint
@@ -295,11 +483,11 @@ class RefinementV2ApiTest(unittest.TestCase):
         job.options_json = {"duration_preference":"preserve"};job.fingerprint = "manual";self.db.commit()
         self.client.post(url,json={"revision":0})
         self.db.refresh(job)
-        self.assertEqual(job.status,"queued")
+        self.assertEqual(job.status,"queued_v3")
         self.assertEqual(job.fingerprint,old_fingerprint)
 
     def test_automatic_plan_is_confirmed_and_preview_queued_atomically(self):
-        from app.models import VideoRefinementPreview
+        from app.models import EcommerceVideoRefinementPreview
         task = self.create()
         queued = self.client.post(f"/api/video-refinements/{task['id']}/auto-preview",json={"revision":0}).json()
         async def analyze(context,focus,brief,expected,**kwargs):
@@ -325,15 +513,15 @@ class RefinementV2ApiTest(unittest.TestCase):
         self.assertEqual(current["previews"][0]["status"],"queued")
         again = self.client.post(f"/api/video-refinements/{task['id']}/auto-preview",json={"revision":1})
         self.assertEqual(again.status_code,202,again.text)
-        self.assertEqual(self.db.query(VideoRefinementPreview).count(),1)
+        self.assertEqual(self.db.query(EcommerceVideoRefinementPreview).count(),1)
 
     def test_automatic_narration_cannot_publish_after_the_user_changes_the_goal(self):
-        from app.models import VideoRefinementPreview
+        from app.models import EcommerceVideoRefinementPreview
         task = self.create()
         queued = self.client.post(f"/api/video-refinements/{task['id']}/auto-preview",json={"revision":0}).json()
         async def analyze(context,focus,brief,expected,**kwargs):
             return compile_plan(context,[],brief,expected,manual=False)
-        def prepare(db,current,plan,progress):
+        def prepare(db,current,plan,progress,*,checkpoint=None):
             changed = self.client.patch(f"/api/video-refinements/{task['id']}/requirements",json={"revision":0,"user_brief":"新的修改目标"})
             self.assertEqual(changed.status_code,200,changed.text)
             progress("voiceover")
@@ -345,12 +533,12 @@ class RefinementV2ApiTest(unittest.TestCase):
         self.assertEqual(current["user_brief"],"新的修改目标")
         self.assertIsNone(current["plan"])
         self.assertEqual(current["analysis_state"]["status"],"superseded")
-        self.assertEqual(self.db.query(VideoRefinementPreview).count(),0)
+        self.assertEqual(self.db.query(EcommerceVideoRefinementPreview).count(),0)
 
     def test_automatic_narration_binds_measured_audio_and_reuses_the_same_asset(self):
-        from app.models import VideoRefinementTask
+        from app.models import EcommerceVideoRefinementTask
         from app.services.refinement_automation import prepare_narration
-        task_data = self.create();task = self.db.get(VideoRefinementTask,task_data["id"])
+        task_data = self.create(user_brief="新增商品讲解口播",duration_preference="ai_recommend");task = self.db.get(EcommerceVideoRefinementTask,task_data["id"])
         context = deepcopy(task_data["source_snapshot"])
         context["material_evaluation"] = {"complete":True,"records":[{"asset_id":self.material.id,"status":"evaluated","score":100,
             "batches":[{"segments":[{"start_ms":0,"end_ms":5000}]}]}]}
@@ -358,17 +546,19 @@ class RefinementV2ApiTest(unittest.TestCase):
             operation="补充画面",reason="展示商品",script="真实补充台词",narration_strategy="tts",subtitle_strategy="regenerate",
             material_segments=[{"asset_id":self.material.id,"source_range":{"start_ms":0,"end_ms":2000}}],requirement_ids=["req"])
         plan = compile_plan(context,[edit],task.user_brief,"",manual=False,
-            requirements=[{"requirement_id":"req","text":"商品展示","status":"EXECUTABLE","reason":"商品画面需要补充","item_ids":[]}])
+            requirements=[{"requirement_id":"req","text":"新增商品讲解口播","request_quote":"新增商品讲解口播","status":"EXECUTABLE","reason":"商品画面需要补充","item_ids":[]}])
         plan["analysis"] = {"context":context};plan["automation_options"] = {"auto_preview":True,"accept_partial_evaluation":True}
         def generate(voice_id):
-            row = self.db.get(VideoRefinementVoiceover,voice_id)
+            row = self.db.get(EcommerceVideoRefinementVoiceover,voice_id)
             row.status="ready";row.duration_ms=1234;row.content_hash="c"*64;row.object_url="/voice.wav"
             row.timing_json={"segments":[{"start":0,"end":1.234,"text":row.script}]};self.db.commit()
         client = MagicMock();client.chat_json = AsyncMock(return_value={"usable":True,"burned_subtitles":False})
-        with patch("app.services.refinement_voiceover.run_voiceover",side_effect=generate),patch("app.services.refinement_automation.LLMClient",return_value=client),patch("app.services.refinement_evaluation.sampled_frames",return_value=[]):
+        selected = {"speaker":"zh_male_m191_uranus_bigtts","name":"云舟 2.0","mode":"auto","speech_rate":0,"reason":"参考原片声音风格"}
+        with patch("app.services.refinement_speakers.select_source_voice",new_callable=AsyncMock,return_value=selected),patch("app.services.refinement_voiceover.run_voiceover",side_effect=generate),patch("app.services.refinement_automation.LLMClient",return_value=client),patch("app.services.refinement_evaluation.sampled_frames",return_value=[]):
             first = prepare_narration(self.db,task,plan,lambda stage:None)
             second = prepare_narration(self.db,task,plan,lambda stage:None)
-        self.assertEqual(self.db.query(VideoRefinementVoiceover).count(),1)
+        self.assertEqual(self.db.query(EcommerceVideoRefinementVoiceover).count(),1)
+        self.assertEqual(first["analysis"]["voice_selection"]["speaker"],selected["speaker"])
         self.assertEqual(first["items"][0]["voiceover_id"],second["items"][0]["voiceover_id"])
         audio = next(clip for clip in first["narration_track"] if clip["source_kind"]=="tts")
         self.assertEqual(audio["source_range"],{"start_ms":0,"end_ms":1234})

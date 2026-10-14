@@ -66,6 +66,7 @@ def wait_for_video_analysis_queue(timeout: int = 1) -> None:
             pass
 
 
-def task_lock(task_id: str):
+def task_lock(task_id: str, *, timeout: int = 14400, thread_local: bool = True):
     client = get_redis()
-    return client.lock(redis_key(f"production-task-lock:{task_id}"), timeout=14400, blocking_timeout=0) if client is not None else None
+    return client.lock(redis_key(f"production-task-lock:{task_id}"), timeout=timeout,
+                       blocking_timeout=0, thread_local=thread_local) if client is not None else None

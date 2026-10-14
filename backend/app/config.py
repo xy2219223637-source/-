@@ -61,6 +61,11 @@ class Settings(BaseSettings):
     director_vision_batch_size: int = 4
     director_ffmpeg_path: str = ""
     director_ffprobe_path: str = ""
+    refinement_precise_timing_enabled: bool = False
+    refinement_localization_enabled: bool = False
+    refinement_content_reselection_enabled: bool = False
+    refinement_display_tail_enabled: bool = False
+    refinement_rollout_tenants: str = ""
     director_keyframe_min_count: int = 3
     director_keyframe_max_count: int = 5
     director_asr_provider: str = "auto"
@@ -87,6 +92,7 @@ class Settings(BaseSettings):
     doubao_tts_speaker: str = "zh_female_shuangkuaisisi_uranus_bigtts"
     doubao_tts_speaker_male: str = "zh_male_m191_uranus_bigtts"
     auto_edit_audio_mode: str = "smart_mix"
+    video_analysis_worker_enabled: bool = True
     whisper_enabled: bool = True
     whisper_model: str = "small"
     whisper_device: str = "auto"
@@ -150,6 +156,18 @@ class Settings(BaseSettings):
     run_database_init: bool = True
     run_startup_recovery: bool = True
     run_background_workers: bool = True
+    run_ecommerce_video_analysis_worker: bool | None = None
+    run_refinement_worker: bool | None = None
+
+    @property
+    def ecommerce_video_analysis_worker_enabled(self) -> bool:
+        return (self.run_background_workers if self.run_ecommerce_video_analysis_worker is None
+                else self.run_ecommerce_video_analysis_worker)
+
+    @property
+    def refinement_worker_enabled(self) -> bool:
+        # An explicit override isolates refinement without enabling other queues.
+        return self.run_background_workers if self.run_refinement_worker is None else self.run_refinement_worker
 
     redis_url: str = ""
     redis_key_prefix: str = "enrui-ai-commerce-agent:"
