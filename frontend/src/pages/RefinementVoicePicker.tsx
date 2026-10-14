@@ -4,10 +4,13 @@ import type {RefinementSpeakerCatalog, RefinementVoiceSelection} from '../types/
 
 export function VoiceMatchSummary({selection,manualSpeaker}: {selection?: RefinementVoiceSelection; manualSpeaker?: string | null}) {
   return <section className="refine-voice-summary" aria-label="新增配音策略">
-    <h4>{manualSpeaker?'新增配音使用指定音色':'新增配音自动适配'}</h4>
-    <p className="refine-note">{manualSpeaker?'当前任务已指定中文音色, 可在修改意见与时长目标中更改.':'仅在需要新增或改写台词时选声. 从276种中文相关音色中匹配原片声区、语速与内容风格.'} 未修改区间保留原配音.</p>
-    {!manualSpeaker&&selection&&<><p>已适配: <strong>{selection.name}</strong>{selection.basis==='content_only'?' / 按视频内容选声':' / 参考原声与视频内容'}</p><p className="refine-note">{selection.reason}</p></>}
-    <p className="refine-note">不做声音复刻. 无可靠原声时按内容选声, 生成后仍需试听核对.</p>
+    <div className="refine-voice-heading"><h4>新增配音</h4><span className="refine-note">{manualSpeaker?'手动指定':'自动选择'}</span></div>
+    <p><strong>{manualSpeaker?(selection?.speaker===manualSpeaker?selection.name:'已指定中文音色'):selection?.name||'按视频内容自动选择'}</strong></p>
+    <p className="refine-note">仅调整新增或改写台词, 其余部分保留原配音.</p>
+    <details className="refine-disclosure"><summary>配音说明</summary>
+      {manualSpeaker?<p>可在“修改意见与时长目标”中更改指定音色.</p>:selection&&<><p>{selection.basis==='content_only'?'按视频内容选声':'参考原声与视频内容'}</p><p>{selection.reason}</p></>}
+      <p>不做声音复刻. 无可靠原声时按内容选声, 生成后仍需试听核对.</p>
+    </details>
   </section>;
 }
 

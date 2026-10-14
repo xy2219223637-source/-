@@ -104,7 +104,21 @@ describe('中文配音音色选择',()=>{
 
   it('缺少可靠原声时明确显示按内容选声, 不宣称声音复刻',()=>{
     render(<VoiceMatchSummary selection={{speaker:MALE,name:'云舟 2.0',speech_rate:0,mode:'auto',reason:'仅参考商品画面',basis:'content_only'}}/>);
+    expect(screen.getByText('云舟 2.0')).toBeTruthy();
+    const details=screen.getByText('配音说明').closest('details');
+    expect(details).toHaveProperty('open',false);
+    fireEvent.click(screen.getByText('配音说明'));
+    expect(details).toHaveProperty('open',true);
     expect(screen.getByText(/按视频内容选声/)).toBeTruthy();
     expect(screen.getByText(/不做声音复刻/)).toBeTruthy();
+    expect(screen.queryByText(/从276种/)).toBeNull();
+  });
+
+  it('手动指定的新音色不误显示上次自动推荐名称',()=>{
+    render(<VoiceMatchSummary manualSpeaker={FEMALE} selection={task.plan!.analysis!.voice_selection}/>);
+    expect(screen.getByText('已指定中文音色')).toBeTruthy();
+    expect(screen.getByText('手动指定')).toBeTruthy();
+    expect(screen.queryByText('云舟 2.0')).toBeNull();
+    expect(screen.getByText('仅调整新增或改写台词, 其余部分保留原配音.')).toBeTruthy();
   });
 });

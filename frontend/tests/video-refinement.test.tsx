@@ -68,6 +68,10 @@ describe('视频精修工作台',()=>{
     mount('/video-refinements/1');
     const accept=await screen.findByRole('button',{name:'接受预览并另存精修版本'});
     expect(accept).toHaveProperty('disabled',true);
+    expect(screen.queryByText(/媒体与解码检查已通过/)).toBeNull();
+    expect(screen.queryByText(/自动媒体检查不代替内容核对/)).toBeNull();
+    expect(screen.queryByText(/实际结果需渲染后测量/)).toBeNull();
+    expect(screen.getByText(/预览已生成, 请核对预览后另存/)).toBeTruthy();
     expect(screen.getByLabelText('精修预览播放器')).toHaveProperty('src',expect.stringContaining('/real-preview.mp4'));
     fireEvent.click(screen.getByLabelText('我已播放预览并核对音画, 字幕和商品'));
     fireEvent.click(accept);
@@ -290,6 +294,53 @@ function v2Task(): VideoRefinementTask {
 }
 
 describe('视频精修 v2',()=>{
+  it('片段关键信息默认显示, 重复选声和技术依据折叠且不隐藏具体风险',async()=>{
+    const value=v2Task();
+    const selection={speaker:'shared',name:'贴心女声 2.0',speech_rate:0,mode:'auto' as const,reason:'适配商品讲解',basis:'content_only' as const};
+    value.plan!.analysis={model:'test',mode:'full_video',timeline:[],source_hash:value.source_hash,voice_selection:selection};
+    value.plan!.items[0]={...value.plan!.items[0],type:'SEGMENT_INSERT',range:{start_ms:1000,end_ms:1000},duration_delta_ms:1500,narration_strategy:'tts',script:'新增商品讲解',voiceover_id:7,evidence:['material-205'],material_segments:[{asset_id:205,source_range:{start_ms:500,end_ms:2000}}],confidence_level:'LOW',risk:'选段含讲话口型, 请核对与台词是否一致; 选段含讲话口型, 请核对与台词是否一致; 局部配音使用适配或手动选择的中文音色, 请试听核对与原声及音乐的衔接'};
+    value.source_snapshot.material_catalog=[{asset_id:205,product_id:1,filename:'湿巾使用演示.mp4',object_url:'/material.mp4',content_hash:'m',duration_ms:4000,is_mock_mapping:false}];
+    value.voiceovers=[{id:7,item_id:value.plan!.items[0].item_id,revision:1,script:'新增商品讲解',fingerprint:'f',status:'ready',duration_ms:1500,object_url:'/voice.wav',error_message:'',parameters:{speaker:'shared',selection},timing:{}}];
+    vi.mocked(videoRefinementApi.get).mockResolvedValue(value);
+    mount('/video-refinements/1');
+    const inspector=await screen.findByRole('region',{name:'修改项详情'});
+    expect(screen.getByRole('heading',{name:'修改 1 · 片段插入详情'})).toBeTruthy();
+    expect(screen.getByText('本片段: 新增配音 · 素材原声关闭')).toBeTruthy();
+    expect(screen.getByText('原片 00:01.000 处插入 / 新增 1.50 秒')).toBeTruthy();
+    expect(screen.getByText('湿巾使用演示.mp4')).toBeTruthy();
+    expect(screen.getByText('取用 00:00.500 - 00:02.000 · 1.50 秒')).toBeTruthy();
+    expect(screen.queryByRole('region',{name:'新增配音策略'})).toBeNull();
+    expect(screen.queryByText('配音说明')).toBeNull();
+    expect(screen.queryByText('贴心女声 2.0')).toBeNull();
+    expect(screen.queryByText('适配商品讲解')).toBeNull();
+    expect(screen.getAllByText('选段含讲话口型, 请核对与台词是否一致')).toHaveLength(1);
+    expect(screen.queryByText(/局部配音使用适配或手动选择/)).toBeNull();
+    const details=screen.getByText('修改依据与处理说明').closest('details');
+    expect(details).toHaveProperty('open',false);
+    expect(inspector.querySelector('.refine-evidence')).toBeNull();
+    fireEvent.click(screen.getByText('修改依据与处理说明'));
+    expect(details).toHaveProperty('open',true);
+    expect(screen.getByText('分析依据: material-205')).toBeTruthy();
+    expect(videoRefinementApi.confirm).not.toHaveBeenCalled();
+    expect(screen.getByRole('button',{name:'确认整套方案'})).toHaveProperty('disabled',true);
+  });
+
+  it('已有预览使用实测时长, 本地草稿改动后恢复预计时长',async()=>{
+    const value=v2Task();
+    value.previews=[{id:4,revision:1,plan_hash:value.plan_hash!,status:'ready',output_url:'/preview.mp4',error_message:'',validation:{duration_seconds:24.1}}];
+    vi.mocked(videoRefinementApi.get).mockResolvedValue(value);
+    mount('/video-refinements/1');
+    await screen.findByRole('button',{name:'修改方案'});
+    expect(screen.getByText('24.10 秒')).toBeTruthy();
+    expect(screen.queryByText('预计')).toBeNull();
+    fireEvent.click(screen.getByRole('button',{name:'修改方案'}));
+    fireEvent.change(screen.getByLabelText('修改描述'),{target:{value:'修改后的商品画面'}});
+    expect(screen.queryByText('24.10 秒')).toBeNull();
+    expect(screen.getByText('预计')).toBeTruthy();
+    expect(screen.queryByRole('button',{name:'接受预览并另存精修版本'})).toBeNull();
+    expect(videoRefinementApi.accept).not.toHaveBeenCalled();
+  });
+
   it('v3 展示局部选段证据和采样限制, 不将核验结果宣称为 SKU 已确认',async()=>{
     const value=v2Task();value.plan!.schema_version='video_refinement_plan.v3';
     value.plan!.items[0].material_segments=[{asset_id:205,source_range:{start_ms:5500,end_ms:6500},candidate_id:'local-1'}];
@@ -314,7 +365,8 @@ describe('视频精修 v2',()=>{
     vi.mocked(videoRefinementApi.get).mockResolvedValue(value);
     mount('/video-refinements/1');
     expect(await screen.findByText(/已自动缩短最后一个商品展示片段一帧/)).toBeTruthy();
-    expect(screen.getByText('实际使用素材 205: 00:00.000 - 00:04.000 / 4.00 秒')).toBeTruthy();
+    expect(screen.getByText('素材 205')).toBeTruthy();
+    expect(screen.getByText('取用 00:00.000 - 00:04.000 · 4.00 秒')).toBeTruthy();
     expect(screen.queryByRole('alert')).toBeNull();
     expect(screen.queryByText('当前方案缺少的执行条件')).toBeNull();
     expect(screen.queryByLabelText('对此要求的回答')).toBeNull();
