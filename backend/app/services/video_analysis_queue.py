@@ -9,6 +9,7 @@ from typing import Callable, Optional
 
 from sqlalchemy.orm import Session
 
+from app.config import get_settings
 from app.database import SessionLocal
 from app.models import VideoAsset, VideoAssetAnalysis, EcommerceVideoAsset, EcommerceVideoAssetAnalysis
 from app.services.redis_client import (
@@ -270,6 +271,10 @@ def start_video_analysis_worker(*, include_legacy: bool = True, include_ecommerc
         return
     if not include_legacy and not include_ecommerce:
         return
+    if not get_settings().video_analysis_worker_enabled:
+        logger.info("Video analysis worker disabled for this instance")
+        return
+
     db = SessionLocal()
     try:
         # Shared databases may still contain tasks owned by another live instance.

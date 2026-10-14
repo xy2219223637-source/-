@@ -92,6 +92,7 @@ class Settings(BaseSettings):
     doubao_tts_speaker: str = "zh_female_shuangkuaisisi_uranus_bigtts"
     doubao_tts_speaker_male: str = "zh_male_m191_uranus_bigtts"
     auto_edit_audio_mode: str = "smart_mix"
+    video_analysis_worker_enabled: bool = True
     whisper_enabled: bool = True
     whisper_model: str = "small"
     whisper_device: str = "auto"
