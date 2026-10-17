@@ -1,0 +1,65 @@
+# Dedicated, offline-model billing MVP stack. Never overlay the shared video runtime.
+name: billing-mvp-test
+services:
+  billing-db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: billing_mvp_test
+      POSTGRES_USER: billing_test
+      POSTGRES_PASSWORD: ${BILLING_TEST_DB_PASSWORD:?Set a test-only hex password}
+    volumes:
+      - billing_test_pg:/var/lib/postgresql/data
+    healthcheck:
+      test: [CMD-SHELL, "pg_isready -U billing_test -d billing_mvp_test"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+  billing-redis:
+    image: redis:7-alpine
+    command: [redis-server, --save, "", --appendonly, "no"]
+    healthcheck:
+      test: [CMD, redis-cli, ping]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+  backend:
+    image: billing-mvp-backend:local
+    build:
+      context: ../backend
+    command: [uvicorn, "app.main:app", --host, 0.0.0.0, --port, "8000"]
+    environment:
+      DATABASE_URL: postgresql+psycopg://billing_test:${BILLING_TEST_DB_PASSWORD:?Set a test-only hex password}@billing-db:5432/billing_mvp_test
+      REQUIRE_POSTGRES: "true"
+      REQUIRE_ONLINE_SERVICES: "false"
+      AUTH_SECRET: ${BILLING_TEST_AUTH_SECRET:?Set a random test-only secret of at least 32 characters}
+      REDIS_URL: redis://billing-redis:6379/0
+      REDIS_KEY_PREFIX: "billing-mvp-test:"
+      STORAGE_PROVIDER: local
+      LLM_MOCK_MODE: "true"
+      LLM_API_KEY: ""
+      BILLING_ENABLED: "true"
+      BILLING_MOCK_ENABLED: "true"
+      BILLING_TEST_ISOLATION: "true"
+      RUN_DATABASE_INIT: "false"
+      RUN_STARTUP_RECOVERY: "false"
+      RUN_BACKGROUND_WORKERS: "false"
+      RUN_ECOMMERCE_VIDEO_ANALYSIS_WORKER: "false"
+      RUN_REFINEMENT_WORKER: "false"
+    depends_on:
+      billing-db:
+        condition: service_healthy
+      billing-redis:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:${BILLING_TEST_BACKEND_PORT:-18000}:8000"
+  frontend:
+    image: billing-mvp-frontend:local
+    build:
+      context: ..
+      dockerfile: frontend/Dockerfile
+    depends_on:
+      - backend
+    ports:
+      - "127.0.0.1:${BILLING_TEST_FRONTEND_PORT:-18080}:80"
+volumes:
+  billing_test_pg:

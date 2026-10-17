@@ -8,16 +8,18 @@ import RouteTitle from '../src/components/RouteTitle';
 import Layout from '../src/components/Layout';
 import Login from '../src/pages/Login';
 import App from '../src/App';
-import { authApi } from '../src/api/client';
+import { api, authApi } from '../src/api/client';
 import { COMPANY_NAME } from '../src/lib/siteIdentity';
 import { getRouteTitle, routeTitles } from '../src/lib/routeTitles';
 
 vi.mock('../src/api/client', () => ({
+  api: { get: vi.fn().mockRejectedValue({ response: { status: 404 } }) },
   authApi: { me: vi.fn().mockResolvedValue({ role: 'owner', is_platform_admin: false, permissions: ['*'] }) },
   dashboardApi: { stats: vi.fn().mockRejectedValue(new Error('Test data unavailable')) },
 }));
 
 beforeEach(() => {
+  vi.mocked(api.get).mockRejectedValue({ response: { status: 404 } });
   vi.mocked(authApi.me).mockResolvedValue({ role: 'owner', is_platform_admin: false, permissions: ['*'] } as Awaited<ReturnType<typeof authApi.me>>);
   localStorage.clear();
   document.title = 'Previous page';

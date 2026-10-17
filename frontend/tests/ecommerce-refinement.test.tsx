@@ -4,10 +4,11 @@ import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import Layout from '../src/components/Layout';
 import EcommerceVideoDetail from '../src/pages/EcommerceVideoDetail';
 import EcommerceVideoLibrary from '../src/pages/EcommerceVideoLibrary';
-import { authApi, ecommerceProductApi, ecommerceVideoLibraryApi, ecommerceVideoTaxonomyApi } from '../src/api/client';
+import { api, authApi, ecommerceProductApi, ecommerceVideoLibraryApi, ecommerceVideoTaxonomyApi } from '../src/api/client';
 import type { VideoLibraryAsset } from '../src/types';
 
 vi.mock('../src/api/client', () => ({
+  api: { get: vi.fn().mockRejectedValue({ response: { status: 404 } }) },
   mediaUrl: (value: string) => value,
   authApi: { me: vi.fn() },
   ecommerceProductApi: { get: vi.fn().mockResolvedValue({ id: 1, name: '电商商品' }), list: vi.fn().mockResolvedValue([{ id: 1, name: '电商商品' }]) },
@@ -31,6 +32,7 @@ const finalAsset = {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  vi.mocked(api.get).mockRejectedValue({ response: { status: 404 } });
   localStorage.setItem('access_token', 'test-token');
   vi.mocked(ecommerceProductApi.get).mockResolvedValue({ id: 1, name: '电商商品' } as Awaited<ReturnType<typeof ecommerceProductApi.get>>);
   vi.mocked(ecommerceProductApi.list).mockResolvedValue([{ id: 1, name: '电商商品' } as Awaited<ReturnType<typeof ecommerceProductApi.get>>]);

@@ -1960,3 +1960,8 @@ from app.models.ecommerce_refinement import (  # noqa: E402, F401
     EcommerceVideoRefinementVersion,
     EcommerceVideoRefinementVoiceover,
 )
+
+from app.models.billing import (  # noqa: E402, F401
+    CreditAccount, CreditLedger, MemberQuota, BillingPriceRule, BillingOrder,
+    BillingIdempotency, BillingAuditEvent, BillingSchemaVersion,
+)

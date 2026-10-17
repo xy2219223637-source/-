@@ -18,7 +18,8 @@ from app.services.refinement_queue import start_refinement_worker, stop_refineme
 from app.services.redis_client import get_redis
 from app.services.feishu_logging import RequestTraceMiddleware, trace_fields
 from app.api import qianchuan, qianchuan_plans, video_repair
-from app.api import video_lineage
+from app.api import video_lineage, billing
+from app.services.billing.isolation import BillingIsolationMiddleware
 from app.services.qianchuan.service import get_qianchuan_service, install_log_filters
 from app.services.qianchuan.worker import start_qianchuan_worker, stop_qianchuan_worker
 from app.services.video_repair.worker_v4 import start_video_repair_worker, stop_video_repair_worker
@@ -61,10 +62,17 @@ async def audit_requests(request, call_next):
     response.headers["x-request-id"] = request_id
     if request.url.path.startswith("/api"):
         # 等待数据库连接时不能阻塞事件循环，否则其他请求无法完成并归还连接。
-        await run_in_threadpool(write_request_audit, request_id, request.method, request.url.path, response.status_code, duration_ms)
+        try:
+            await run_in_threadpool(write_request_audit, request_id, request.method, request.url.path, response.status_code, duration_ms)
+        except Exception:
+            # Financial domain audit is committed with the business operation.
+            # A secondary access-log failure must not turn a committed write into a false 500.
+            logging.getLogger(__name__).error("Request audit unavailable", extra={"request_id": request_id})
     return response
 
 app.add_middleware(RequestTraceMiddleware)
+app.add_middleware(BillingIsolationMiddleware, settings=settings)
+app.include_router(billing.router, prefix="/api")
 
 app.include_router(products.router, prefix="/api")
 app.include_router(ecommerce_products.router, prefix="/api")
@@ -96,6 +104,19 @@ app.include_router(video_repair.router, prefix="/api")
 
 @app.on_event("startup")
 def on_startup() -> None:
+    if settings.billing_test_isolation and not settings.billing_enabled:
+        raise RuntimeError("Billing test isolation requires billing enabled")
+    if settings.billing_mock_enabled and not (settings.billing_enabled and settings.billing_test_isolation):
+        raise RuntimeError("Billing Mock requires billing enabled and test isolation")
+    if settings.billing_enabled:
+        if settings.auth_secret == "change-this-secret-in-production":
+            raise RuntimeError("Billing requires a non-default authentication secret")
+        from app.services.billing.migration import verify
+        with engine.connect() as connection:
+            verify(connection)
+    if settings.billing_test_isolation:
+        # Never start old provider jobs or recover tasks in this dedicated test environment.
+        return
     if settings.run_database_init:
         init_db()
     if settings.run_startup_recovery:

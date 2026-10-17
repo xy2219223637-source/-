@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { loginUrl } from '../lib/loginReturn';
-import { NavLink, Outlet, useLocation } from 'react-router-dom';
+import { NavLink, Outlet, useLocation, Navigate } from 'react-router-dom';
 import {
   LayoutDashboard,
   PackagePlus,
@@ -29,7 +29,7 @@ import {
 } from 'lucide-react';
 import IcpFiling from './IcpFiling';
 import companyLogo from '../assets/company-logo.png';
-import { authApi } from '../api/client';
+import { api, authApi } from '../api/client';
 import { COMPANY_NAME } from '../lib/siteIdentity';
 
 const dashboardLink = { to: '/', label: '工作台', icon: LayoutDashboard, end: true };
@@ -156,11 +156,14 @@ export default function Layout() {
   const [role, setRole] = useState('');
   const [isPlatformAdmin, setIsPlatformAdmin] = useState(false);
   const [permissions, setPermissions] = useState<string[]>([]);
+  const [billingEnabled, setBillingEnabled] = useState(false);
+  const [billingIsolated, setBillingIsolated] = useState(false);
   const isDirectorWorkspace = /^\/director-inspiration\/\d+\/workspace/.test(location.pathname);
   const isRefinementWorkbench = location.pathname.startsWith('/video-refinements');
 
   useEffect(() => {
     authApi.me().then((result) => { setRole(result.role); setIsPlatformAdmin(result.is_platform_admin); setPermissions(result.permissions || []); }).catch(() => setRole(''));
+    api.get('/me/billing/config').then(({data}) => { setBillingEnabled(true); setBillingIsolated(data.test_isolation); }).catch(() => setBillingEnabled(false));
   }, []);
 
   if (!localStorage.getItem('access_token')) {
@@ -169,7 +172,9 @@ export default function Layout() {
   }
 
   const closeMobileNav = () => setMobileNavOpen(false);
-  const allowed = (code?: string) => role === 'owner' || permissions.includes('*') || !code || permissions.includes(code);
+  const allowed = (code?: string) => !billingIsolated && (role === 'owner' || permissions.includes('*') || !code || permissions.includes(code));
+
+  if (billingIsolated && location.pathname === '/') return <Navigate to="/my-billing" replace />;
 
   return (
     <div className="min-h-screen flex bg-[var(--bg)] text-[var(--text)]">
@@ -207,7 +212,7 @@ export default function Layout() {
             <dashboardLink.icon size={18} />
             {dashboardLink.label}
           </NavLink>}
-          {navGroups.map((group) => (
+          {navGroups.filter(group => group.items.some(item => allowed(routePermissions[item.to]))).map((group) => (
             <div key={group.label} className="pt-3">
               <div className="px-3 pb-1.5 text-[10px] font-medium tracking-[0.12em] text-[var(--muted)] opacity-70">
                 {group.label}
@@ -229,11 +234,13 @@ export default function Layout() {
               </div>
             </div>
           ))}
-          {(role === 'owner' || role === 'admin' || permissions.some(code=>code.startsWith('tenant_')) || isPlatformAdmin) && <div className="pt-3">
+          {(billingEnabled || role === 'owner' || role === 'admin' || permissions.some(code=>code.startsWith('tenant_')) || isPlatformAdmin) && <div className="pt-3">
             <div className="px-3 pb-1.5 text-[10px] font-medium tracking-[0.12em] text-[var(--muted)] opacity-70">系统管理</div>
             <div className="space-y-1">
-              {(role === 'owner' || role === 'admin' || permissions.some(code=>code.startsWith('tenant_'))) && <NavLink to="/tenant-admin" onClick={closeMobileNav} className={navClassName}><UsersRound size={18}/>企业管理后台</NavLink>}
-              {isPlatformAdmin && <NavLink to="/platform-admin" onClick={closeMobileNav} className={navClassName}><Building2 size={18}/>平台管理后台</NavLink>}
+              {(role === 'owner' || role === 'admin' || permissions.some(code=>code.startsWith('tenant_')) || (billingEnabled && permissions.includes('billing.view'))) && <NavLink to={role === 'owner' || role === 'admin' || permissions.some(code=>code.startsWith('tenant_')) ? '/tenant-admin' : '/tenant-admin/billing'} onClick={closeMobileNav} className={navClassName}><UsersRound size={18}/>企业管理后台</NavLink>}
+              {billingEnabled && <NavLink to="/my-billing" onClick={closeMobileNav} className={navClassName}><Activity size={18}/>我的消费额度</NavLink>}
+              {isPlatformAdmin && <NavLink to="/platform-admin" end onClick={closeMobileNav} className={navClassName}><Building2 size={18}/>平台管理后台</NavLink>}
+              {isPlatformAdmin && billingEnabled && <NavLink to="/platform-admin/model-pricing" onClick={closeMobileNav} className={navClassName}><Activity size={18}/>平台模型费用管理</NavLink>}
             </div>
           </div>}
           <div className="pt-4 mt-4 border-t border-[var(--border)]">

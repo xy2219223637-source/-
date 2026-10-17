@@ -45,8 +45,10 @@ const VideoRepairCreate = lazy(() => import('./pages/VideoRepairCreate'));
 const VideoRepairWorkspace = lazy(() => import('./pages/VideoRepairWorkspace'));
 const ManualComposeProjects = lazy(() => import('./pages/ManualComposeProjects'));
 const ManualComposeWorkspace = lazy(() => import('./pages/ManualComposeWorkspace'));
+const PlatformModelPricing = lazy(() => import('./pages/PlatformModelPricing'));
 const PlatformAdmin = lazy(() => import('./pages/PlatformAdmin'));
 const TenantAdmin = lazy(() => import('./pages/TenantAdmin'));
+const MyBilling = lazy(() => import('./pages/MyBilling'));
 const TenantRoles = lazy(() => import('./pages/TenantRoles'));
 const QianchuanOAuthResult = lazy(() => import('./pages/QianchuanOAuthResult'));
 
@@ -106,8 +108,11 @@ export default function App() {
             <Route path="qianchuan/oauth/result" element={<QianchuanOAuthResult />} />
             <Route path="manual-video-compose" element={<ManualComposeProjects />} />
             <Route path="manual-video-compose/:id" element={<ManualComposeWorkspace />} />
+            <Route path="platform-admin/model-pricing" element={<PlatformModelPricing />} />
             <Route path="platform-admin" element={<PlatformAdmin />} />
             <Route path="tenant-admin" element={<TenantAdmin />} />
+            <Route path="tenant-admin/billing" element={<MyBilling enterprise />} />
+            <Route path="my-billing" element={<MyBilling />} />
             <Route path="tenant-admin/roles" element={<TenantRoles />} />
             <Route path="tenant-admin/taxonomy" element={<VideoTaxonomyPage />} />
             <Route path="tenant-admin/ecommerce-taxonomy" element={<EcommerceVideoTaxonomy />} />

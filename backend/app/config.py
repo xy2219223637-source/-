@@ -3,6 +3,7 @@ from __future__ import annotations
 from functools import lru_cache
 from pathlib import Path
 from typing import Optional
+from pydantic import Field
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -99,6 +100,13 @@ class Settings(BaseSettings):
     whisper_compute_type: str = "int8"
     auth_secret: str = "change-this-secret-in-production"
     access_token_hours: int = 24
+
+    billing_enabled: bool = False
+    billing_mock_enabled: bool = False
+    billing_test_isolation: bool = False
+    billing_grant_max_credits: str = "100000"
+    billing_grant_rate_limit: int = Field(default=10, ge=1, le=1000)
+    billing_reservation_seconds: int = Field(default=1800, ge=1, le=86400)
 
     # Unset means enabled when credentials are present; False is an explicit off switch.
     feishu_enabled: Optional[bool] = None

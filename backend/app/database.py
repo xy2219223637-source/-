@@ -193,16 +193,8 @@ def init_db() -> None:
                 connection.execute(text(f"ALTER TABLE tenant_members ADD COLUMN {name} INTEGER NULL"))
                 if f"ix_tenant_members_{name}" not in _index_names(connection, "tenant_members"):
                     connection.execute(text(f"CREATE INDEX IF NOT EXISTS ix_tenant_members_{name} ON tenant_members ({name})"))
-        # Preserve the original user's identity and tenant ownership while switching
-        # the login identifier to a phone number. This migration is idempotent.
-        if user_columns:
-            connection.execute(text("""UPDATE users SET phone = '15271933010', is_platform_admin = TRUE
-                WHERE lower(email) = '345983950@qq.com' AND (phone IS NULL OR phone = '15271933010')
-                AND (phone IS NULL OR is_platform_admin = FALSE)
-                AND NOT EXISTS (SELECT 1 FROM users other WHERE other.phone = '15271933010' AND other.id <> users.id)"""))
-            connection.execute(text("""UPDATE tenant_members SET role = 'owner', status = 'active'
-                WHERE user_id IN (SELECT id FROM users WHERE lower(email) = '345983950@qq.com')
-                AND (role <> 'owner' OR status <> 'active')"""))
+        # Identity bootstrap is explicit. Startup must never restore a historical
+        # account's platform/owner privileges or reactivate disabled membership.
         json_default = _json_column_sql(connection)
         columns = _table_columns(connection, "video_assets")
         if columns:

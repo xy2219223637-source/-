@@ -1,5 +1,7 @@
 # 独立部署与后台任务
 
+积分纯 Mock MVP 使用独立的 [`billing-test.compose.yml`](billing-test.compose.yml) 和[运行手册](../docs/billing_mvp_runbook.md)。该配置不使用下述真实模型测试运行器，不连接共享视频任务库，也不启动视频后台任务。
+
 - 使用仓库根目录 `deploy.sh` 作为统一入口, 选择 `production`, `artinjecter` 或 `test`.
 - 使用 `deploy/deploy-production.sh` 维护生产与 artinjecter 的构建, 兼容性检查和独立更新.
 - 使用 `deploy/shared-runtime/task_isolation_runtime.py` 保存当前已验证的共享数据库任务隔离实现及 `migrate/check/serve` 命令.

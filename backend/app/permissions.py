@@ -21,7 +21,8 @@ USER_PERMISSION_GROUPS = [
         {"code": "video_repair.access", "label": "审核失败修改"},
         {"code": "director.access", "label": "编导灵感"}, {"code": "shooting_tasks.access", "label": "拍摄任务"}]},
     {"key": "operations", "label": "运营管理", "children": [
-        {"code": "task_center.access", "label": "任务与费用"}]},
+        {"code": "task_center.access", "label": "任务与费用"},
+        {"code": "billing.mock.use", "label": "积分测试功能"}]},
 ]
 
 ADMIN_PERMISSION_GROUPS = [
@@ -29,6 +30,8 @@ ADMIN_PERMISSION_GROUPS = [
         {"code": "tenant_users.manage", "label": "用户管理"},
         {"code": "tenant_teams.manage", "label": "团队与分组管理"},
         {"code": "tenant_roles.manage", "label": "角色管理"},
+        {"code": "billing.view", "label": "企业积分与消费查询"},
+        {"code": "billing.quota.manage", "label": "成员月度额度管理"},
     ]},
 ]
 

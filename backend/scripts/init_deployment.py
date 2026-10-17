@@ -23,7 +23,11 @@ def main() -> int:
         connection.execute(text("SELECT 1"))
 
     init_db()
-    expected = set(Base.metadata.tables)
+    expected = {table.name for table in Base.metadata.tables.values() if not table.info.get("explicit_migration_required")}
+    if get_settings().billing_enabled:
+        from app.services.billing.migration import verify
+        with engine.connect() as connection:
+            verify(connection)
     actual = set(inspect(engine).get_table_names())
     missing = sorted(expected - actual)
     if missing:
