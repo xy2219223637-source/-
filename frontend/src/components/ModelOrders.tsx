@@ -37,23 +37,34 @@ export default function ModelOrders({ enterprise, refreshKey }: { enterprise: bo
   const [detail, setDetail] = useState<ModelOrder | null>(null);
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
+  const [detailLoading, setDetailLoading] = useState(false);
   const generation = useRef(0);
+  const detailRequest = useRef(0);
   useEffect(() => {
     const current = ++generation.current;
-    setLoading(true); setError(''); setDetail(null); setData({ items: [], total: 0, page, page_size: 20 });
+    detailRequest.current++;
+    setLoading(true); setError(''); setDetail(null); setDetailLoading(false); setData({ items: [], total: 0, page, page_size: 20 });
     void modelOrdersApi.list(enterprise, page).then(value => { if (generation.current === current) setData(value); })
       .catch(e => { if (generation.current === current) setError(errorMessage(e)); })
       .finally(() => { if (generation.current === current) setLoading(false); });
-    return () => { generation.current++; };
+    return () => { generation.current++; detailRequest.current++; };
   }, [enterprise, page, refreshKey]);
 
   async function showDetail(id: string) {
     const current = generation.current;
-    setError(''); setDetail(null);
+    const currentDetail = ++detailRequest.current;
+    const stillSelected = () => generation.current === current && detailRequest.current === currentDetail;
+    setError(''); setDetail(null); setDetailLoading(true);
     try {
       const value = await modelOrdersApi.detail(enterprise, id);
-      if (generation.current === current) setDetail(value);
-    } catch (e) { if (generation.current === current) setError(errorMessage(e)); }
+      if (stillSelected()) setDetail(value);
+    } catch (e) { if (stillSelected()) setError(errorMessage(e)); }
+    finally { if (stillSelected()) setDetailLoading(false); }
+  }
+
+  function closeDetail() {
+    detailRequest.current++;
+    setDetail(null); setDetailLoading(false);
   }
   return <section className="panel p-5 space-y-4" aria-label="模型消费记录">
     <h2 className="font-semibold">{enterprise ? '企业模型消费记录' : '我的模型消费记录'}</h2>
@@ -69,7 +80,8 @@ export default function ModelOrders({ enterprise, refreshKey }: { enterprise: bo
       </tr>)}</tbody></table></div>
     {!loading && !error && data.total === 0 && <p>暂无模型消费记录</p>}
     <div className="flex gap-3"><button disabled={loading || page <= 1} onClick={() => setPage(page - 1)} aria-label="模型记录上一页">上一页</button><span>第 {page} 页，共 {data.total} 条模型记录</span><button disabled={loading || page * 20 >= data.total} onClick={() => setPage(page + 1)} aria-label="模型记录下一页">下一页</button></div>
-    {detail && <div className="border-t border-[var(--border)] pt-4 space-y-2"><div className="flex justify-between"><h3 className="font-semibold">订单计算依据</h3><button onClick={() => setDetail(null)}>关闭详情</button></div>
+    {detailLoading && <div className="flex justify-between"><span role="status">正在加载订单详情…</span><button onClick={closeDetail}>关闭详情</button></div>}
+    {detail && <div className="border-t border-[var(--border)] pt-4 space-y-2"><div className="flex justify-between"><h3 className="font-semibold">订单计算依据</h3><button onClick={closeDetail}>关闭详情</button></div>
       <p className="break-all">订单：{detail.id}</p><p>模型：{detail.provider} / {detail.model_id}</p><p>状态：{status(detail)}</p>
       <p>原始请求标识：{detail.provider_request_id || '未知'}</p>
       {detail.pricing_snapshot.metrics.map(rate => <p key={rate.metric}>{rate.metric}：每 {rate.unit_size} Token / {rate.credits_per_unit} 积分</p>)}
