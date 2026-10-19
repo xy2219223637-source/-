@@ -1,0 +1,1665 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "模型费用 MVP 目标 API 契约草案",
+    "version": "0.1.0-draft",
+    "description": "拟议契约；7 个目标操作、4 个停用操作。非费率版本。厂商示例参数不构成默认价格。 强制先 MOCK 数据与计费全链路通过，再进入 REAL；模型订单标明执行模式。"
+  },
+  "servers": [
+    {
+      "url": "/api"
+    }
+  ],
+  "security": [
+    {
+      "bearerAuth": []
+    }
+  ],
+  "paths": {
+    "/platform-admin/billing/price-rules": {
+      "get": {
+        "operationId": "listModelPrices",
+        "summary": "平台管理员：列出脱敏模型及当前费率，直接替换旧版本列表",
+        "parameters": [
+          {
+            "name": "page",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "default": 1
+            }
+          },
+          {
+            "name": "page_size",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100,
+              "default": 20
+            }
+          },
+          {
+            "name": "model_type",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "TEXT",
+                "VISION",
+                "IMAGE",
+                "EMBEDDING",
+                "TTS",
+                "ASR",
+                "VIDEO"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ModelPage"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "UNAUTHENTICATED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "FORBIDDEN",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "BILLING_DISABLED 或 RESOURCE_NOT_FOUND",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "VALIDATION_ERROR",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "SERVICE_UNAVAILABLE",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "operationId": "retiredCreatePrice",
+        "deprecated": true,
+        "summary": "停用旧 mock/版本操作；不得产生写入或厂商调用",
+        "parameters": [],
+        "responses": {
+          "401": {
+            "description": "UNAUTHENTICATED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "FORBIDDEN",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "BILLING_DISABLED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "410": {
+            "description": "LEGACY_ENDPOINT_RETIRED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/platform-admin/billing/price-rules/{model_key}": {
+      "get": {
+        "operationId": "getModelPrice",
+        "summary": "平台管理员：模型明细",
+        "parameters": [
+          {
+            "name": "model_key",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/ModelKey"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Model"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "UNAUTHENTICATED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "FORBIDDEN",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "BILLING_DISABLED 或 RESOURCE_NOT_FOUND",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "VALIDATION_ERROR",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "SERVICE_UNAVAILABLE",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "operationId": "putModelPrice",
+        "summary": "平台管理员：幂等完整保存当前费率，无版本启用流程",
+        "parameters": [
+          {
+            "name": "model_key",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/ModelKey"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "minLength": 36,
+              "maxLength": 36
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Pricing"
+                }
+              }
+            },
+            "headers": {
+              "Idempotency-Replayed": {
+                "description": "首次 false；同键同体重放 true",
+                "schema": {
+                  "type": "boolean"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "UNAUTHENTICATED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "FORBIDDEN",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "BILLING_DISABLED 或 RESOURCE_NOT_FOUND",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "VALIDATION_ERROR",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "SERVICE_UNAVAILABLE",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "IDEMPOTENCY_CONFLICT 或 REQUEST_IN_PROGRESS",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "REQUEST_TOO_LARGE",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PricingInput"
+              },
+              "examples": {
+                "real": {
+                  "value": {
+                    "usage_mode": "REAL_TOKENS",
+                    "metrics": [
+                      {
+                        "metric": "input_tokens",
+                        "unit_size": 1000,
+                        "credits_per_unit": "1.0000"
+                      },
+                      {
+                        "metric": "output_tokens",
+                        "unit_size": 1000,
+                        "credits_per_unit": "3.0000"
+                      }
+                    ],
+                    "conversion": null
+                  }
+                },
+                "folded": {
+                  "value": {
+                    "usage_mode": "FOLDED_TOKENS",
+                    "metrics": [
+                      {
+                        "metric": "converted_tokens",
+                        "unit_size": 1000,
+                        "credits_per_unit": "2.0000"
+                      }
+                    ],
+                    "conversion": {
+                      "source_metric": "image_count",
+                      "source_unit_size": 1,
+                      "tokens_per_unit": 1000
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/me/billing/model-orders": {
+      "get": {
+        "operationId": "listOwnModelOrders",
+        "summary": "当前有效成员仅本人本租户：分页模型订单",
+        "parameters": [
+          {
+            "name": "page",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "default": 1
+            }
+          },
+          {
+            "name": "page_size",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100,
+              "default": 20
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ModelOrderPage"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "UNAUTHENTICATED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "FORBIDDEN",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "BILLING_DISABLED 或 RESOURCE_NOT_FOUND",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "VALIDATION_ERROR",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "SERVICE_UNAVAILABLE",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/me/billing/model-orders/{order_id}": {
+      "get": {
+        "operationId": "getOwnModelOrder",
+        "summary": "当前有效成员仅本人本租户：模型订单详情",
+        "parameters": [
+          {
+            "name": "order_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/OrderId"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ModelOrder"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "UNAUTHENTICATED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "FORBIDDEN",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "BILLING_DISABLED 或 RESOURCE_NOT_FOUND",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "VALIDATION_ERROR",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "SERVICE_UNAVAILABLE",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/tenant-admin/billing/model-orders": {
+      "get": {
+        "operationId": "listTenantModelOrders",
+        "summary": "billing.view 权限仅本租户：分页模型订单",
+        "parameters": [
+          {
+            "name": "page",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "default": 1
+            }
+          },
+          {
+            "name": "page_size",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100,
+              "default": 20
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ModelOrderPage"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "UNAUTHENTICATED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "FORBIDDEN",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "BILLING_DISABLED 或 RESOURCE_NOT_FOUND",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "VALIDATION_ERROR",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "SERVICE_UNAVAILABLE",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/tenant-admin/billing/model-orders/{order_id}": {
+      "get": {
+        "operationId": "getTenantModelOrder",
+        "summary": "billing.view 权限仅本租户：模型订单详情",
+        "parameters": [
+          {
+            "name": "order_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/OrderId"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ModelOrder"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "UNAUTHENTICATED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "FORBIDDEN",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "BILLING_DISABLED 或 RESOURCE_NOT_FOUND",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "VALIDATION_ERROR",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "SERVICE_UNAVAILABLE",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/platform-admin/billing/price-rules/summary": {
+      "get": {
+        "operationId": "retiredPriceSummary",
+        "deprecated": true,
+        "summary": "停用旧 mock/版本操作；不得产生写入或厂商调用",
+        "parameters": [],
+        "responses": {
+          "401": {
+            "description": "UNAUTHENTICATED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "FORBIDDEN",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "BILLING_DISABLED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "410": {
+            "description": "LEGACY_ENDPOINT_RETIRED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/platform-admin/billing/price-rules/{price_id}/activate": {
+      "post": {
+        "operationId": "retiredActivatePrice",
+        "deprecated": true,
+        "summary": "停用旧 mock/版本操作；不得产生写入或厂商调用",
+        "parameters": [
+          {
+            "name": "price_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "401": {
+            "description": "UNAUTHENTICATED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "FORBIDDEN",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "BILLING_DISABLED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "410": {
+            "description": "LEGACY_ENDPOINT_RETIRED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/ai/mock/{kind}": {
+      "post": {
+        "operationId": "retiredMockCall",
+        "deprecated": true,
+        "summary": "停用旧 mock/版本操作；不得产生写入或厂商调用",
+        "parameters": [
+          {
+            "name": "kind",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "401": {
+            "description": "UNAUTHENTICATED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "FORBIDDEN",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "BILLING_DISABLED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "410": {
+            "description": "LEGACY_ENDPOINT_RETIRED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "bearerAuth": {
+        "type": "http",
+        "scheme": "bearer"
+      }
+    },
+    "schemas": {
+      "ModelKey": {
+        "type": "string",
+        "pattern": "^[0-9a-f]{32}$"
+      },
+      "OrderId": {
+        "type": "string",
+        "pattern": "^[0-9a-f]{32}$"
+      },
+      "PositiveCredits": {
+        "type": "string",
+        "pattern": "^(?:0|[1-9][0-9]*)(?:\\.[0-9]{1,4})?$",
+        "maxLength": 24,
+        "description": "必须大于零，转换至 1/10000 积分后不溢出 int64；不能用数值类型或科学计数法。"
+      },
+      "Credits": {
+        "type": "string",
+        "pattern": "^(?:0|[1-9][0-9]*)\\.[0-9]{4}$",
+        "maxLength": 24
+      },
+      "TokenDecimal": {
+        "type": "string",
+        "pattern": "^(?:0|[1-9][0-9]*)(?:\\.[0-9]{1,6})?$",
+        "maxLength": 17,
+        "description": "折算 Token 精确值，最大 1000000000；不用二进制浮点。"
+      },
+      "RawMetric": {
+        "type": "string",
+        "enum": [
+          "image_count",
+          "audio_milliseconds",
+          "character_count"
+        ]
+      },
+      "MetricRate": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "metric": {
+            "type": "string",
+            "enum": [
+              "input_tokens",
+              "output_tokens",
+              "converted_tokens"
+            ]
+          },
+          "unit_size": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 1000000000
+          },
+          "credits_per_unit": {
+            "$ref": "#/components/schemas/PositiveCredits"
+          }
+        },
+        "required": [
+          "metric",
+          "unit_size",
+          "credits_per_unit"
+        ]
+      },
+      "Conversion": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "source_metric": {
+            "$ref": "#/components/schemas/RawMetric"
+          },
+          "source_unit_size": {
+            "type": "integer",
+            "enum": [
+              1,
+              10,
+              100,
+              1000,
+              10000,
+              100000,
+              1000000
+            ]
+          },
+          "tokens_per_unit": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 1000000000
+          }
+        },
+        "required": [
+          "source_metric",
+          "source_unit_size",
+          "tokens_per_unit"
+        ]
+      },
+      "PricingInput": {
+        "oneOf": [
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "usage_mode": {
+                "const": "REAL_TOKENS",
+                "type": "string"
+              },
+              "metrics": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "metric": {
+                      "type": "string",
+                      "enum": [
+                        "input_tokens",
+                        "output_tokens"
+                      ]
+                    },
+                    "unit_size": {
+                      "type": "integer",
+                      "minimum": 1,
+                      "maximum": 1000000000
+                    },
+                    "credits_per_unit": {
+                      "$ref": "#/components/schemas/PositiveCredits"
+                    }
+                  },
+                  "required": [
+                    "metric",
+                    "unit_size",
+                    "credits_per_unit"
+                  ]
+                },
+                "minItems": 1,
+                "maxItems": 2
+              },
+              "conversion": {
+                "type": "null"
+              }
+            },
+            "required": [
+              "usage_mode",
+              "metrics",
+              "conversion"
+            ]
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "usage_mode": {
+                "const": "FOLDED_TOKENS",
+                "type": "string"
+              },
+              "metrics": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "metric": {
+                      "const": "converted_tokens",
+                      "type": "string"
+                    },
+                    "unit_size": {
+                      "type": "integer",
+                      "minimum": 1,
+                      "maximum": 1000000000
+                    },
+                    "credits_per_unit": {
+                      "$ref": "#/components/schemas/PositiveCredits"
+                    }
+                  },
+                  "required": [
+                    "metric",
+                    "unit_size",
+                    "credits_per_unit"
+                  ]
+                },
+                "minItems": 1,
+                "maxItems": 1
+              },
+              "conversion": {
+                "$ref": "#/components/schemas/Conversion"
+              }
+            },
+            "required": [
+              "usage_mode",
+              "metrics",
+              "conversion"
+            ]
+          }
+        ],
+        "description": "完整替换；重复 metric 拒绝；字段方向和折算来源必须与服务端模型声明一致。"
+      },
+      "Pricing": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "model_key": {
+            "$ref": "#/components/schemas/ModelKey"
+          },
+          "configuration": {
+            "$ref": "#/components/schemas/PricingInput"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "model_key",
+          "configuration",
+          "updated_at"
+        ]
+      },
+      "Model": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "model_key": {
+            "$ref": "#/components/schemas/ModelKey"
+          },
+          "provider": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 64
+          },
+          "model_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "provider_model_name": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 200
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "model_types": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "TEXT",
+                "VISION",
+                "IMAGE",
+                "EMBEDDING",
+                "TTS",
+                "ASR",
+                "VIDEO"
+              ]
+            },
+            "minItems": 1,
+            "maxItems": 7,
+            "uniqueItems": true
+          },
+          "connection_status": {
+            "type": "string",
+            "enum": [
+              "NOT_IMPLEMENTED",
+              "NOT_CONFIGURED",
+              "NOT_TESTED",
+              "PASSED",
+              "FAILED"
+            ]
+          },
+          "configured": {
+            "type": "boolean"
+          },
+          "supported_usage_modes": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "REAL_TOKENS",
+                "FOLDED_TOKENS"
+              ]
+            },
+            "minItems": 0,
+            "maxItems": 2,
+            "uniqueItems": true
+          },
+          "supported_raw_metrics": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RawMetric"
+            },
+            "minItems": 0,
+            "maxItems": 3,
+            "uniqueItems": true
+          },
+          "pricing": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Pricing"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "model_key",
+          "provider",
+          "model_id",
+          "provider_model_name",
+          "model_types",
+          "connection_status",
+          "configured",
+          "supported_usage_modes",
+          "supported_raw_metrics",
+          "pricing"
+        ]
+      },
+      "Usage": {
+        "oneOf": [
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "source": {
+                "const": "REAL_TOKENS",
+                "type": "string"
+              },
+              "input_tokens": {
+                "anyOf": [
+                  {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 1000000000
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "output_tokens": {
+                "anyOf": [
+                  {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 1000000000
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "converted_tokens": {
+                "type": "null"
+              },
+              "raw_metric": {
+                "type": "null"
+              },
+              "raw_quantity": {
+                "type": "null"
+              }
+            },
+            "required": [
+              "source",
+              "input_tokens",
+              "output_tokens",
+              "converted_tokens",
+              "raw_metric",
+              "raw_quantity"
+            ],
+            "anyOf": [
+              {
+                "properties": {
+                  "input_tokens": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 1000000000
+                  }
+                }
+              },
+              {
+                "properties": {
+                  "output_tokens": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 1000000000
+                  }
+                }
+              }
+            ]
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "source": {
+                "const": "FOLDED_TOKENS",
+                "type": "string"
+              },
+              "input_tokens": {
+                "type": "null"
+              },
+              "output_tokens": {
+                "type": "null"
+              },
+              "converted_tokens": {
+                "$ref": "#/components/schemas/TokenDecimal"
+              },
+              "raw_metric": {
+                "$ref": "#/components/schemas/RawMetric"
+              },
+              "raw_quantity": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 1000000000
+              }
+            },
+            "required": [
+              "source",
+              "input_tokens",
+              "output_tokens",
+              "converted_tokens",
+              "raw_metric",
+              "raw_quantity"
+            ]
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "source": {
+                "const": "UNKNOWN",
+                "type": "string"
+              },
+              "input_tokens": {
+                "type": "null"
+              },
+              "output_tokens": {
+                "type": "null"
+              },
+              "converted_tokens": {
+                "type": "null"
+              },
+              "raw_metric": {
+                "type": "null"
+              },
+              "raw_quantity": {
+                "type": "null"
+              }
+            },
+            "required": [
+              "source",
+              "input_tokens",
+              "output_tokens",
+              "converted_tokens",
+              "raw_metric",
+              "raw_quantity"
+            ]
+          }
+        ]
+      },
+      "SupplierCost": {
+        "oneOf": [
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "status": {
+                "const": "UNKNOWN",
+                "type": "string"
+              },
+              "amount": {
+                "type": "null"
+              },
+              "currency": {
+                "type": "null"
+              }
+            },
+            "required": [
+              "status",
+              "amount",
+              "currency"
+            ]
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "status": {
+                "const": "KNOWN",
+                "type": "string"
+              },
+              "amount": {
+                "type": "string",
+                "pattern": "^(?:0|[1-9][0-9]*)(?:\\.[0-9]{1,8})?$",
+                "maxLength": 32
+              },
+              "currency": {
+                "type": "string",
+                "pattern": "^[A-Z]{3}$"
+              }
+            },
+            "required": [
+              "status",
+              "amount",
+              "currency"
+            ]
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "status": {
+                "type": "string",
+                "const": "NOT_INCURRED"
+              },
+              "amount": {
+                "type": "null"
+              },
+              "currency": {
+                "type": "null"
+              }
+            },
+            "required": [
+              "status",
+              "amount",
+              "currency"
+            ]
+          }
+        ],
+        "description": "NOT_INCURRED 仅适用于 MOCK；REAL 必须 KNOWN 或 UNKNOWN，模式组合由服务端语义校验。"
+      },
+      "ModelOrder": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "$ref": "#/components/schemas/OrderId"
+          },
+          "request_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 64
+          },
+          "tenant_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 64
+          },
+          "user_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 64
+          },
+          "model_key": {
+            "$ref": "#/components/schemas/ModelKey"
+          },
+          "provider": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 64
+          },
+          "model_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "RESERVED",
+              "SETTLED",
+              "CANCELED"
+            ]
+          },
+          "reconciliation_status": {
+            "type": "string",
+            "enum": [
+              "NONE",
+              "NEEDS_REVIEW",
+              "RESOLVED"
+            ]
+          },
+          "usage": {
+            "$ref": "#/components/schemas/Usage"
+          },
+          "supplier_cost": {
+            "$ref": "#/components/schemas/SupplierCost"
+          },
+          "charged_credits": {
+            "$ref": "#/components/schemas/Credits"
+          },
+          "reserved_credits": {
+            "$ref": "#/components/schemas/Credits"
+          },
+          "pricing_snapshot": {
+            "$ref": "#/components/schemas/PricingInput"
+          },
+          "provider_request_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 200
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "execution_mode": {
+            "type": "string",
+            "enum": [
+              "MOCK",
+              "REAL"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "request_id",
+          "tenant_id",
+          "user_id",
+          "model_key",
+          "provider",
+          "model_id",
+          "status",
+          "reconciliation_status",
+          "usage",
+          "supplier_cost",
+          "charged_credits",
+          "reserved_credits",
+          "pricing_snapshot",
+          "provider_request_id",
+          "created_at",
+          "execution_mode"
+        ]
+      },
+      "ModelPage": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Model"
+            },
+            "minItems": 0,
+            "maxItems": 100
+          },
+          "total": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "page": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "page_size": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 100
+          }
+        },
+        "required": [
+          "items",
+          "total",
+          "page",
+          "page_size"
+        ]
+      },
+      "ModelOrderPage": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ModelOrder"
+            },
+            "minItems": 0,
+            "maxItems": 100
+          },
+          "total": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "page": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "page_size": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 100
+          }
+        },
+        "required": [
+          "items",
+          "total",
+          "page",
+          "page_size"
+        ]
+      },
+      "Error": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "detail": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "code": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 64
+              },
+              "message": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 300
+              },
+              "request_id": {
+                "type": "string",
+                "maxLength": 64
+              }
+            },
+            "required": [
+              "code",
+              "message",
+              "request_id"
+            ]
+          }
+        },
+        "required": [
+          "detail"
+        ]
+      }
+    }
+  }
+}

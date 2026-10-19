@@ -1,0 +1,19 @@
+{
+  "checked_at": "2026-10-19T09:01:31.358915+00:00",
+  "status": "PASS",
+  "checks": {
+    "local_refs_resolved": 86,
+    "operations": 11,
+    "active": 7,
+    "retired": 4,
+    "examples": 6,
+    "mermaid_blocks": 6,
+    "mock_before_real_documented": true,
+    "execution_mode_in_order_contract": true
+  },
+  "limitations": [
+    "Structure and example checks only; no full OpenAPI validator installed.",
+    "No SQL, application, MOCK billing or REAL model tests executed.",
+    "Quality gate pending draft confirmation."
+  ]
+}

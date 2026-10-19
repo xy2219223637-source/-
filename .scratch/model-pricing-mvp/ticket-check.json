@@ -1,0 +1,97 @@
+{
+  "task_id": "model-pricing-mvp-20261019",
+  "checked_at": "2026-10-19T09:19:34.789329+00:00",
+  "status": "PASS",
+  "ticket_count": 9,
+  "dependency_edges": 11,
+  "acceptance_checkboxes": 61,
+  "dependency_cycle": false,
+  "frontier": [
+    "01"
+  ],
+  "real_tickets_require_all_mock_ancestors": true,
+  "acceptance_coverage": [
+    "AC01",
+    "AC02",
+    "AC03",
+    "AC04",
+    "AC05",
+    "AC06",
+    "AC07",
+    "AC08",
+    "AC09",
+    "AC10",
+    "AC11",
+    "AC12",
+    "AC13"
+  ],
+  "tickets": {
+    "1": {
+      "file": "01-model-current-pricing.md",
+      "blocked_by": [],
+      "acceptance_criteria": 7
+    },
+    "2": {
+      "file": "02-text-vision-mock-billing.md",
+      "blocked_by": [
+        1
+      ],
+      "acceptance_criteria": 8
+    },
+    "3": {
+      "file": "03-image-mock-conversion.md",
+      "blocked_by": [
+        2
+      ],
+      "acceptance_criteria": 6
+    },
+    "4": {
+      "file": "04-embedding-mock-billing.md",
+      "blocked_by": [
+        2
+      ],
+      "acceptance_criteria": 6
+    },
+    "5": {
+      "file": "05-audio-mock-conversion.md",
+      "blocked_by": [
+        3
+      ],
+      "acceptance_criteria": 6
+    },
+    "6": {
+      "file": "06-mock-completion-gate.md",
+      "blocked_by": [
+        2,
+        3,
+        4,
+        5
+      ],
+      "acceptance_criteria": 8
+    },
+    "7": {
+      "file": "07-text-vision-embedding-real.md",
+      "blocked_by": [
+        6
+      ],
+      "acceptance_criteria": 7
+    },
+    "8": {
+      "file": "08-image-real.md",
+      "blocked_by": [
+        6
+      ],
+      "acceptance_criteria": 6
+    },
+    "9": {
+      "file": "09-audio-real.md",
+      "blocked_by": [
+        6
+      ],
+      "acceptance_criteria": 7
+    }
+  },
+  "limitations": [
+    "Document and graph checks only. No application or model tests executed."
+  ]
+}
