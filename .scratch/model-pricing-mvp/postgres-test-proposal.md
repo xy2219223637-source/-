@@ -14,6 +14,7 @@
 - 恢复入口：测试前在外部run-state.json记录schema名及状态；中断后先读取该记录，再查询pg_namespace，仅允许操作记录中精确名称且匹配test_billing_+UUID的schema，不按前缀批量删除。
 - 回退：失败保留脱敏日志；先处置本轮连接，再使用SQLAlchemy DropSchema(精确本轮schema,cascade=True)清理，清理前复核目标库及归属；删除后确认pg_namespace无该精确名称。不能确认归属就停止清理并报告。
 - 自动重启/回退：不重启任何服务；连接退出回滚未提交事务；正常fixture cleanup清理本轮schema，异常清理失败保留恢复标志，不扩大范围。
-- 验证方式：定向测试无失败、必测不跳过；原schema版本仍[2]且checksum/保护不变；临时schema已清理；真实厂商/存储调用为0。此授权不包含运行schema v3迁移、真实费率/账务写入、真实模型调用或进程操作。
+- 验证方式：定向测试无失败、必测不跳过；原schema版本仍[2]且checksum/保护不变；临时schema已清理；真实厂商/存储调用为0。此授权不包含现有运行业务schema的v3迁移、真实费率/账务写入、真实模型调用或进程操作；临时合成schema中的版本升级属于本提案验证范围。
 - 首轮pg-01-20261019-1758：16项中5项历史事务检查通过、11项新模型检查在初始化失败；完整日志显示外部运行器读取原配置后缓存了旧app包，缺新模块，并非通过结果。16个独占schema已全部清理，业务schema版本前后[2]。已修正运行器包加载边界，准备新run_id重跑；原失败日志与run-state保留。
 - 重跑pg-01-20261019-1800：基于集成b6a1235，20项全部通过、无跳过，42.824秒；20个独占schema全部清理，业务schema版本前后[2]。结果包含15项当前费率与registry/API测试、4项旧账务并发/保护、1项审计故障回滚。外部证据：D:/原力2222222222/model-pricing-work/pg-01-20261019-1800/run-state.json及同名.log。没有对运行业务schema应用v3迁移；新schema初始建v3通过不替代v2→v3 PostgreSQL迁移演练。18:02只读再次核实业务schema v2/checksum/保护仍通过。
+- pg-migration-20261019-100548（UTC）：在独占临时schema中，旧代码创建合成v2数据→升级前JSON保护→DDL故障注入及事务回滚→v3迁移及22项检查→精确清理，全部通过；另有三轮外部运行器初始化失败如实保留。见[迁移报告](pg-migration-report.md)、[迁移结果](pg-migration-result.json)、[当前费率PG结果](pg-pricing-result.json)。18:07:17 +08:00使用旧代码只读核验业务v2仍通过、四轮精确schema均不存在。此结果不等同pg_dump/restore业务备份演练。

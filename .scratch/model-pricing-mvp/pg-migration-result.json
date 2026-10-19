@@ -1,0 +1,157 @@
+{
+  "task_id": "model-pricing-mvp-20261019-pg-migration",
+  "started_at": "2026-10-19T10:05:48+00:00",
+  "ownership": "model-pricing-mvp-20261019-pg-migration",
+  "schema": "test_billing_84fb39f3764a488db1198b357c3d923e",
+  "step": "finished",
+  "last_safe_state": "exact_registered_schema_confirmed_absent",
+  "authorization": "User approved isolated schema targeted verification",
+  "scope": "one exact synthetic schema only; business schema read-only",
+  "risk": "bounded DDL and synthetic writes; no business data writes",
+  "backup": "v2-synthetic-backup.json; synthetic fixture only, not business pg_dump/restore rehearsal",
+  "recovery_entry": "D:\\原力2222222222\\model-pricing-work\\pg-migration-run.py",
+  "cleanup": "DropSchema exact registered name after environment and ownership checks",
+  "automatic_recovery": "transaction rollback on error; finally exact schema cleanup; no process restart",
+  "vendor_requests": 0,
+  "storage_requests": 0,
+  "checks": [
+    {
+      "check": "old_v2_code_created_verified_fixture_with_settled_canceled_pending_orders",
+      "result": "passed",
+      "at": "2026-10-19T10:05:55+00:00"
+    },
+    {
+      "check": "post_ddl_failure_rolls_back_all_ddl_rows_checksum_and_old_protection",
+      "result": "passed",
+      "at": "2026-10-19T10:05:57+00:00"
+    },
+    {
+      "check": "all_legacy_row_values_preserved_and_new_fields_legacy_null",
+      "result": "passed",
+      "at": "2026-10-19T10:05:58+00:00"
+    },
+    {
+      "check": "v3_shape_checksum_and_triggers_verified",
+      "result": "passed",
+      "at": "2026-10-19T10:05:58+00:00"
+    },
+    {
+      "check": "repeat_migration_is_noop",
+      "result": "passed",
+      "at": "2026-10-19T10:05:59+00:00"
+    },
+    {
+      "check": "reject_no_price_source",
+      "result": "passed",
+      "at": "2026-10-19T10:05:59+00:00"
+    },
+    {
+      "check": "reject_dual_price_sources",
+      "result": "passed",
+      "at": "2026-10-19T10:05:59+00:00"
+    },
+    {
+      "check": "accept_model_only_price_source",
+      "result": "passed",
+      "at": "2026-10-19T10:05:59+00:00"
+    },
+    {
+      "check": "terminal_order_update_denied",
+      "result": "passed",
+      "at": "2026-10-19T10:05:59+00:00"
+    },
+    {
+      "check": "canceled_order_update_denied",
+      "result": "passed",
+      "at": "2026-10-19T10:05:59+00:00"
+    },
+    {
+      "check": "pending_snapshot_update_denied",
+      "result": "passed",
+      "at": "2026-10-19T10:05:59+00:00"
+    },
+    {
+      "check": "pending_execution_mode_update_denied",
+      "result": "passed",
+      "at": "2026-10-19T10:05:59+00:00"
+    },
+    {
+      "check": "order_delete_denied",
+      "result": "passed",
+      "at": "2026-10-19T10:05:59+00:00"
+    },
+    {
+      "check": "legacy_price_update_denied",
+      "result": "passed",
+      "at": "2026-10-19T10:05:59+00:00"
+    },
+    {
+      "check": "ledger_update_denied",
+      "result": "passed",
+      "at": "2026-10-19T10:05:59+00:00"
+    },
+    {
+      "check": "audit_delete_denied",
+      "result": "passed",
+      "at": "2026-10-19T10:05:59+00:00"
+    },
+    {
+      "check": "idempotency_delete_denied",
+      "result": "passed",
+      "at": "2026-10-19T10:05:59+00:00"
+    },
+    {
+      "check": "model_identity_update_denied",
+      "result": "passed",
+      "at": "2026-10-19T10:05:59+00:00"
+    },
+    {
+      "check": "model_identity_delete_denied",
+      "result": "passed",
+      "at": "2026-10-19T10:05:59+00:00"
+    },
+    {
+      "check": "checksum_tampering_detected_and_rollback_restores",
+      "result": "passed",
+      "at": "2026-10-19T10:06:00+00:00"
+    },
+    {
+      "check": "legacy_orders_readable_pending_settleable_and_accounts_balanced",
+      "result": "passed",
+      "at": "2026-10-19T10:06:01+00:00"
+    },
+    {
+      "check": "business_v2_checksum_shape_protection_unchanged",
+      "result": "passed",
+      "at": "2026-10-19T10:06:01+00:00"
+    }
+  ],
+  "updated_at": "2026-10-19T10:06:01+00:00",
+  "environment_ref": "d06030ee0880a2db13dbabbb32c24354388bfb885bdd1b6fdee9526557db9e2d",
+  "business_before": [
+    "{'version': 2, 'checksum': 'abe98f12938384f7b4a52bcdcd58fa610d00573ed87ce968dfb2d6f17f66d79e'}"
+  ],
+  "backup_sha256": "2f011b60a1165b4cd329be04c90a4bfeab802732bf014c53767c5bac1269477b",
+  "v2_counts": {
+    "billing_audit_events": 17,
+    "billing_idempotency": 1,
+    "billing_orders": 5,
+    "billing_price_rules": 2,
+    "billing_schema_versions": 1,
+    "credit_accounts": 1,
+    "credit_ledger": 3,
+    "member_quotas": 2
+  },
+  "migration_result": {
+    "status": "upgraded",
+    "version": 3,
+    "backup_path": null
+  },
+  "ok": true,
+  "schema_cleaned": true,
+  "business_after": [
+    "{'version': 2, 'checksum': 'abe98f12938384f7b4a52bcdcd58fa610d00573ed87ce968dfb2d6f17f66d79e'}"
+  ],
+  "finished_at": "2026-10-19T10:06:01+00:00",
+  "absence_postcheck_at": "2026-10-19T10:07:17+00:00"
+}
