@@ -13,7 +13,8 @@ class ModelPricingRoute(APIRoute):
         original = super().get_route_handler()
 
         async def handler(request):
-            scoped = '/platform-admin/billing/price-rules' in request.url.path or request.url.path.startswith('/api/ai/mock/')
+            scoped = ('/platform-admin/billing/price-rules' in request.url.path or '/billing/model-orders' in request.url.path
+                      or request.url.path.startswith('/api/ai/mock/'))
             if not scoped:
                 return await original(request)
             request_id = uuid.uuid4().hex

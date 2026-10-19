@@ -10,6 +10,8 @@ from typing import Any, Protocol
 
 from openai import OpenAI
 from pydantic import BaseModel
+from app.config import get_settings
+from app.services.billing.metering import reject_unmetered
 
 from app.services.video_repair.diagnosis_schema import VideoRepairDiagnosisV2
 from app.services.storage import get_storage_for_url
@@ -90,6 +92,7 @@ class OpenAICompatibleDiagnosisProvider:
 
     def diagnose(self, context: dict[str, Any], *,
                  schema_model: type[BaseModel] = VideoRepairDiagnosisV2) -> DiagnosisProviderResult:
+        reject_unmetered(get_settings())
         schema = schema_model.model_json_schema()
         guidance = (
             "你是受约束的视频审核修复诊断器。对照审核意见、原片画面、转写和商品事实，"

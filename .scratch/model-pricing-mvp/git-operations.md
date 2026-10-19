@@ -15,3 +15,10 @@
 - 自动重启/自动回退：均关闭；本Git操作不启动或重启进程。失败保留worktree、错误日志和最后安全提交，拒绝非快进时停止推送并读取远程差异，不强推。
 - 验证：检查暂存范围、git diff --check、相关测试、原checkout状态；推送后以ls-remote核对远程分支SHA等于集成HEAD。
 - 最后安全状态：仅文档提交已形成，原运行代码/环境未变；下一步恢复入口=票01最后验证与本地提交。
+
+## 02 本地提交检查点
+
+- 时间：2026-10-19T18:09:00+08:00；task_id=model-pricing-mvp-20261019-02；来源=用户本次 implement-spec 本地提交授权及主线程分派。
+- 目标/范围：仅 ticket-02 worktree 的本票应用、测试、票据和证据；不推送、不改原 checkout/.env/运行服务/真实业务 schema。
+- 预检查：integration 8b345da 已快进合入；75 项后端检查、17 项补充核心回归、15 项组件、tsc、diff-check 结果见 evidence-02.md。暂存前使用明确文件清单并复核 diff --cached --stat。
+- 备份/checkpoint：基准 8b345da；本分支提交是后续恢复点。已有风险、恢复及失败保护沿用本文件；失败保留工作树，不使用 reset --hard、强推或删除账务。回退通过新增 revert，主线程在 integration 合入前可直接检查差异。

@@ -70,3 +70,4 @@ flowchart LR
 ## Decisions-so-far
 
 - 01：每供应商＋精确模型 ID 一套当前费率，永久幂等返回首次响应；默认 registry 不猜测真实计量协议。沿用显式 schema 迁移，保留历史及不可变保护，费用页同批移除版本管理。见 [票 01](issues/01-model-current-pricing.md)、[离线证据](evidence-01.md)、[迁移恢复](migration-v3.md)。
+- 02：共享模型执行器复用现有账本；tenant＋持久业务键限定唯一意图，其他成员重放隐藏；模型身份/完整费率/规格不可变。TEXT/VISION MOCK、未知预占、恢复、四查询及现有消费页完成离线验证；未接通旧 SDK 路径 fail-closed，REAL 等 06 门禁。见 [票 02](issues/02-text-vision-mock-billing.md)、[证据](evidence-02.md)；下一 frontier 为 03、04，目标环境验证与 REAL 均未据此宣称通过。

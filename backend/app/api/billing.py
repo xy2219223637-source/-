@@ -162,3 +162,7 @@ def save_model_price(model_key: str, payload: PricingInput, response: Response,
 @router.post("/ai/mock/{kind}", status_code=410, responses=ERROR_RESPONSES, operation_id='retiredMockCall')
 def mock_call(kind: str, auth: AuthContext = Depends(require_permission("billing.mock.use")), service=Depends(enabled)):
     fail('LEGACY_ENDPOINT_RETIRED', '旧 mock 计价入口已停用；同模型离线验证由受控执行器运行', 410)
+
+
+from app.api.model_orders import router as model_orders_router
+router.include_router(model_orders_router)

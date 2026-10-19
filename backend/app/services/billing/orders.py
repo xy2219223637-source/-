@@ -2,31 +2,19 @@
 from __future__ import annotations
 
 from datetime import timedelta
-import uuid
 
 from sqlalchemy import func, select, text
 
 from app.models.billing import BillingOrder, BillingPriceRule, CreditLedger, MemberQuota
 from app.services.billing.amounts import amount, calculate, credits, fail
-from app.services.billing.service import GrantEnterpriseCreditsService, digest, key_uuid, utc_iso
+from app.services.billing.service import digest, utc_iso
 from app.services.billing.model_pricing import ModelPricingService
+from app.services.billing.metering import ModelMeteringMixin, KnownNoUsage
 
 FEATURES = {"mock_fixed": "FIXED", "mock_text": "USAGE"}
 
 
-class KnownNoUsage(Exception):
-    """Adapter positively proves no business success / billable execution."""
-
-
-class MockAI:
-    def execute(self, feature_code):
-        # No network clients, prompt logging or client-controlled token counts.
-        if feature_code == "mock_fixed":
-            return {"message": "按次测试完成"}, {}
-        return {"message": "Token 测试完成"}, {"input_tokens": 2000, "output_tokens": 1000}
-
-
-class BillingOrderService(ModelPricingService):
+class BillingOrderService(ModelMeteringMixin, ModelPricingService):
     def price_lock(self, db):
         if db.get_bind().dialect.name == "postgresql":
             db.execute(text("SELECT pg_advisory_xact_lock(724913221)"))
@@ -174,7 +162,9 @@ class BillingOrderService(ModelPricingService):
             if row.status != "RESERVED" or row.execution_status != "NOT_STARTED" or row.reconciliation_status != "NONE":
                 return False
             row.execution_status = "STARTED"
-            self.audit(db, row.tenant_id, "mock-ai", "EXECUTION_START", row.id, internal=True)
+            if row.model_price_id is not None:
+                row.metering_json = {**row.metering_json, 'execution_status': 'STARTED'}
+            self.audit(db, row.tenant_id, "billing", "EXECUTION_START", row.id, internal=True)
             return True
 
     def record_outcome(self, order_id, usage, result):
@@ -189,6 +179,12 @@ class BillingOrderService(ModelPricingService):
 
     def settle(self, order_id, usage, result):
         """Internal API: caller is a trusted adapter or recovery service, never HTTP."""
+        with self.sessions() as db:
+            row = db.get(BillingOrder, order_id)
+            if row is not None and row.model_price_id is not None:
+                if digest({'usage': usage, 'result': result}) != digest({'usage': row.usage_json, 'result': row.result_json}):
+                    fail('IDEMPOTENCY_CONFLICT', '模型结算仅能使用已持久化的原始结果与用量')
+                return self.settle_model(order_id)
         fingerprint = digest({"usage": usage, "result": result})
         overflow = False
         with self.transaction() as db:
@@ -247,35 +243,13 @@ class BillingOrderService(ModelPricingService):
                 self.audit(db, row.tenant_id, "billing", "NEEDS_REVIEW", row.id, {"code": code}, internal=True)
 
     def run_mock(self, auth, feature_code, key, text_value, adapter=None):
-        key = key_uuid(key)
-        request_id = uuid.uuid5(uuid.NAMESPACE_URL, f"billing:{auth.tenant_id}:{auth.user_id}:{feature_code}:{key}").hex
-        maximum = {} if feature_code == "mock_fixed" else {"input_tokens": 3000, "output_tokens": 2000}
-        order = self.reserve(auth, request_id, feature_code, maximum, digest({"text": text_value}))
-        if order["status"] == "CANCELED":
-            fail("ORDER_CANCELED", "请求已取消，请使用新的请求键")
-        if order["status"] == "SETTLED":
-            return order, False
-        if not self.claim(order["id"]):
-            return order, True
-        try:
-            result, usage = (adapter or MockAI()).execute(feature_code)
-        except KnownNoUsage:
-            self.cancel(order["id"], no_usage_proven=True)
-            fail("MOCK_FAILED", "业务未完成，预占已释放", 503)
-        except Exception:
-            self.mark_review(order["id"])
-            fail("EXECUTION_UNCERTAIN", "执行状态待核对，预占保留", 503)
-        try:
-            self.record_outcome(order["id"], usage, result)
-            return self.settle(order["id"], usage, result), False
-        except Exception:
-            self.mark_review(order["id"], "SETTLEMENT_PENDING")
-            raise
+        fail('LEGACY_ENDPOINT_RETIRED', '旧 mock 独立计价消费已停用，请使用模型计量执行器', 410)
 
     def own_orders(self, auth, page=1, page_size=20):
         with self.sessions() as db:
             self.authorize(db, auth)
-            query = select(BillingOrder).where(BillingOrder.tenant_id == auth.tenant_id, BillingOrder.user_id == auth.user_id)
+            query = select(BillingOrder).where(BillingOrder.tenant_id == auth.tenant_id, BillingOrder.user_id == auth.user_id,
+                                               BillingOrder.model_price_id.is_(None))
             total = db.scalar(select(func.count()).select_from(query.subquery()))
             rows = db.scalars(query.order_by(BillingOrder.created_at.desc(), BillingOrder.id).offset((page-1)*page_size).limit(page_size)).all()
             return {"items": [self.order_result(r) for r in rows], "total": total, "page": page, "page_size": page_size}

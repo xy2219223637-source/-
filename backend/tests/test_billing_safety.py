@@ -72,7 +72,12 @@ class SafetyTests(management.BillingFixture):
         for kind in ("fixed","text"):
             response=self.client.post(f"/api/ai/mock/{kind}",headers={**tokens["member"],"Idempotency-Key":str(uuid.uuid4())},json={"text":"test"})
             self.assertEqual(response.status_code,410,response.text)
-            self.service.run_mock(self.auth('member'), 'mock_' + kind, str(uuid.uuid4()), 'historical-fixture')
+            order = self.service.reserve(self.auth('member'), uuid.uuid4().hex, 'mock_' + kind,
+                {} if kind == 'fixed' else {'input_tokens': 3000, 'output_tokens': 2000}, 'historical-fixture')
+            usage = {} if kind == 'fixed' else {'input_tokens': 2000, 'output_tokens': 1000}
+            self.service.claim(order['id'])
+            self.service.record_outcome(order['id'], usage, {'historical_fixture': True})
+            self.service.settle(order['id'], usage, {'historical_fixture': True})
         result=self.client.get("/api/tenant-admin/billing/credits",headers=tokens["owner"]).json()
         self.assertEqual(result["balance_credits"],"9978.8000")
         self.assertEqual(result["reserved_credits"],"0.0000")

@@ -17,6 +17,7 @@ from openai import AsyncOpenAI
 import httpx
 
 from app.config import get_settings
+from app.services.billing.metering import reject_unmetered
 
 logger = logging.getLogger(__name__)
 
@@ -126,6 +127,7 @@ class LLMClient:
         max_tokens: int = 4096,
         response_format: Optional[dict] = None,
     ) -> str:
+        reject_unmetered(self.settings)
         kwargs: dict[str, Any] = {
             "model": model or self.settings.llm_model,
             "messages": messages,
@@ -149,6 +151,7 @@ class LLMClient:
         temperature: float = 0.5,
         max_tokens: int = 4096,
     ) -> dict[str, Any]:
+        reject_unmetered(self.settings)
         if self.settings.llm_mock_mode:
             return self._mock_json(messages)
         # Prefer native JSON mode; fall back to markdown fence extraction
@@ -185,6 +188,7 @@ class LLMClient:
         image_limit: int = 6,
         model: Optional[str] = None,
     ) -> Any:
+        reject_unmetered(self.settings)
         content: list[dict[str, Any]] = [{"type": "text", "text": text_prompt}]
         for src in image_sources[:max(1, image_limit)]:
             image_url = await self._resolve_image_url(src)
@@ -212,6 +216,7 @@ class LLMClient:
 
     async def transcribe(self, audio_path: str | Path) -> list[dict[str, Any]]:
         """Return timestamped ASR segments; callers may degrade to an empty list."""
+        reject_unmetered(self.settings)
         path = Path(audio_path)
         provider = resolve_director_asr_provider(self.settings)
         if provider in {"", "none", "disabled"} or self.settings.llm_mock_mode or not path.exists() or path.stat().st_size == 0:
@@ -375,6 +380,7 @@ class LLMClient:
         return output
 
     async def embed(self, texts: list[str]) -> list[list[float]]:
+        reject_unmetered(self.settings)
         if not texts:
             return []
         if self.settings.llm_mock_mode:

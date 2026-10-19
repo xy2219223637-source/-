@@ -1,0 +1,89 @@
+{
+  "task_id": "model-pricing-mvp-20261019-02",
+  "run_at": "2026-10-19T10:07:35.955512+00:00",
+  "environment": "temporary SQLite; synthetic identities; dotenv disabled; no external transport",
+  "samples": [
+    {
+      "capability": "TEXT",
+      "order_ref_sha256_16": "11cdd06c7107427c",
+      "ledger_ref_sha256_16": "7c578852b23f4d5f",
+      "status": "SETTLED",
+      "usage": {
+        "source": "REAL_TOKENS",
+        "input_tokens": 2000,
+        "output_tokens": 1000,
+        "converted_tokens": null,
+        "raw_metric": null,
+        "raw_quantity": null
+      },
+      "charged_credits": "5.0000",
+      "reserved_credits": "0.0000",
+      "execution_mode": "MOCK",
+      "supplier_cost": {
+        "status": "NOT_INCURRED",
+        "amount": null,
+        "currency": null
+      },
+      "pricing_snapshot": {
+        "usage_mode": "REAL_TOKENS",
+        "metrics": [
+          {
+            "metric": "input_tokens",
+            "unit_size": 1000,
+            "credits_per_unit": "1.0000"
+          },
+          {
+            "metric": "output_tokens",
+            "unit_size": 1000,
+            "credits_per_unit": "3.0000"
+          }
+        ],
+        "conversion": null
+      }
+    },
+    {
+      "capability": "VISION",
+      "order_ref_sha256_16": "401015db87e27fbb",
+      "ledger_ref_sha256_16": "8a21b29232bc9c2f",
+      "status": "SETTLED",
+      "usage": {
+        "source": "REAL_TOKENS",
+        "input_tokens": 1000,
+        "output_tokens": 500,
+        "converted_tokens": null,
+        "raw_metric": null,
+        "raw_quantity": null
+      },
+      "charged_credits": "2.5000",
+      "reserved_credits": "0.0000",
+      "execution_mode": "MOCK",
+      "supplier_cost": {
+        "status": "NOT_INCURRED",
+        "amount": null,
+        "currency": null
+      },
+      "pricing_snapshot": {
+        "usage_mode": "REAL_TOKENS",
+        "metrics": [
+          {
+            "metric": "input_tokens",
+            "unit_size": 1000,
+            "credits_per_unit": "1.0000"
+          },
+          {
+            "metric": "output_tokens",
+            "unit_size": 1000,
+            "credits_per_unit": "3.0000"
+          }
+        ],
+        "conversion": null
+      }
+    }
+  ],
+  "account_balance_before": "1000.0000",
+  "account_balance_after": "992.5000",
+  "initiator_used_delta": "7.5000",
+  "other_member_used_delta": "0.0000",
+  "ledger_equation_passed": true,
+  "limitation": "This is synthetic MOCK evidence, not a real environment or REAL gate report."
+}

@@ -69,16 +69,12 @@ describe('企业共享积分界面', () => {
     expect(await screen.findByText('月度总限额已更新，企业积分余额不变')).toBeTruthy();
   });
 
-  it('响应丢失后重试复用幂等键，浏览器从不提交用量', async () => {
-    vi.mocked(api.post).mockRejectedValueOnce({ isAxiosError: true, response: { data: { detail: { message: '响应丢失' } } } })
-      .mockResolvedValueOnce({ status: 200, data: { charged_credits: '20.0000' } });
+  it('旧独立mock消费已停用，页面保留历史消费查询且不提供测试消费按钮', async () => {
     render(<MemoryRouter><MyBilling /></MemoryRouter>);
-    fireEvent.click(await screen.findByText('按次测试'));
-    await screen.findByText('响应丢失');
-    fireEvent.click(screen.getByText('按次测试'));
-    await screen.findByText('完成，消费 20.0000 积分');
-    const calls = vi.mocked(api.post).mock.calls;
-    expect(calls[0][2]?.headers?.['Idempotency-Key']).toBe(calls[1][2]?.headers?.['Idempotency-Key']);
-    expect(calls[0][1]).toEqual({ text: '积分测试' });
+    await screen.findByText('3978.8000');
+    expect(screen.queryByRole('button', { name: '按次测试' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Token 测试' })).toBeNull();
+    expect(api.post).not.toHaveBeenCalled();
+    expect(api.get).toHaveBeenCalledWith('/me/billing/orders', { params: { page: 1 } });
   });
 });

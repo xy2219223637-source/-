@@ -12,7 +12,7 @@ from test_billing_management import BillingFixture
 from app.models.billing import BillingOrder, BillingPriceRule, CreditAccount, CreditLedger, MemberQuota
 from app.schemas.billing import PriceRequest
 from app.services.billing.amounts import calculate
-from app.services.billing.orders import BillingOrderService, KnownNoUsage, MockAI
+from app.services.billing.orders import BillingOrderService
 
 
 class OrderTests(BillingFixture):
@@ -40,10 +40,18 @@ class OrderTests(BillingFixture):
         return self.service.reserve(self.auth(user), request or uuid.uuid4().hex, feature,
                                     {} if feature=="mock_fixed" else {"input_tokens":3000,"output_tokens":2000}, "test-business")
 
+    def historical_fixture(self, feature):
+        """Build old records through retained recovery primitives, not a retired consumer."""
+        order = self.reserve(feature)
+        usage = {} if feature == 'mock_fixed' else {'input_tokens': 2000, 'output_tokens': 1000}
+        self.service.claim(order['id'])
+        self.service.record_outcome(order['id'], usage, {'historical_fixture': True})
+        return self.service.settle(order['id'], usage, {'historical_fixture': True})
+
     def test_T06_T07_T18_historical_fixed_usage_shared_pool(self):
         self.assertEqual(self.service.estimate("mock_text",{"input_tokens":2000,"output_tokens":1000})["estimated_credits"],"1.2000")
         for feature, charged in (("fixed", "20.0000"), ("text", "1.2000")):
-            result, _ = self.service.run_mock(self.auth('member'), 'mock_' + feature, str(uuid.uuid4()), 'historical-fixture')
+            result = self.historical_fixture('mock_' + feature)
             self.assertEqual(result['charged_credits'], charged)
         result = self.client.get("/api/tenant-admin/billing/credits", headers=self.headers("owner")).json()
         self.assertEqual(result["balance_credits"], "9978.8000")
@@ -52,14 +60,12 @@ class OrderTests(BillingFixture):
         self.assertEqual(self.service.own_quota(self.auth("member2"))["used_credits"], "0.0000")
         self.assertTrue(self.service.check_accounts()["ok"])
 
-    def test_T09_historical_engine_replay_executes_once_and_body_conflict(self):
-        key = str(uuid.uuid4())
-        with patch.object(MockAI, "execute", wraps=MockAI().execute) as execute:
-            first, _ = self.service.run_mock(self.auth('member'), 'mock_text', key, 'x')
-            replay, _ = self.service.run_mock(self.auth('member'), 'mock_text', key, 'x')
-            with self.assertRaises(HTTPException) as conflict:
-                self.service.run_mock(self.auth('member'), 'mock_text', key, 'y')
-            self.assertEqual(execute.call_count, 1)
+    def test_T09_historical_engine_replay_and_settlement_conflict(self):
+        key = uuid.uuid4().hex
+        first = self.reserve('mock_text', request=key)
+        replay = self.reserve('mock_text', request=key)
+        with self.assertRaises(HTTPException) as conflict:
+            self.service.reserve(self.auth('member'), key, 'mock_text', {'input_tokens': 3000, 'output_tokens': 2000}, 'different-intent')
         # SQLite's timestamp serialization can differ in tz suffix after reload; identity/result must be stable.
         self.assertEqual(first, replay)
         self.assertEqual(conflict.exception.status_code, 409)
@@ -71,13 +77,13 @@ class OrderTests(BillingFixture):
         self.assertEqual(caught.exception.detail["code"], "IDEMPOTENCY_CONFLICT")
 
     def test_T08_failure_proven_and_uncertain_have_different_outcomes(self):
-        class Failed:
-            def execute(self, feature): raise KnownNoUsage()
-        class Uncertain:
-            def execute(self, feature): raise TimeoutError()
-        for adapter, expected in ((Failed(), "CANCELED"), (Uncertain(), "RESERVED")):
-            with self.assertRaises(HTTPException):
-                self.service.run_mock(self.auth("member"), "mock_fixed", str(uuid.uuid4()), "x", adapter)
+        for expected in ('CANCELED', 'RESERVED'):
+            order = self.reserve()
+            self.service.claim(order['id'])
+            if expected == 'CANCELED':
+                self.service.cancel(order['id'], no_usage_proven=True)
+            else:
+                self.service.mark_review(order['id'])
             with self.sessions() as db:
                 row = db.scalars(select(BillingOrder).order_by(BillingOrder.created_at.desc())).first()
                 self.assertEqual(row.status, expected)
@@ -87,11 +93,10 @@ class OrderTests(BillingFixture):
 
     def test_T10_no_execution_when_no_quota_or_balance(self):
         self.quota(value="0")
-        with patch.object(MockAI, "execute") as execute:
-            with self.assertRaises(HTTPException) as caught:
-                self.service.run_mock(self.auth('member'), 'mock_fixed', str(uuid.uuid4()), 'historical-fixture')
-            self.assertEqual(caught.exception.status_code, 409)
-            execute.assert_not_called()
+        with self.assertRaises(HTTPException) as caught:
+            self.reserve()
+        self.assertEqual(caught.exception.status_code, 409)
+        self.assertEqual(self.service.own_orders(self.auth('member'))['total'], 0)
         self.quota(value="100")
         self.publish("mock_fixed", "20000", 2)
         with self.assertRaises(HTTPException) as caught:
@@ -110,7 +115,7 @@ class OrderTests(BillingFixture):
     def test_T13_T23_no_public_settle_no_usage_spoof_no_other_orders(self):
         self.assertEqual(self.client.post("/internal/billing/settle", json={}).status_code, 404)
         self.assertEqual(self.client.post("/api/ai/mock/text", headers=self.headers("member"), json={"actual_usage":{"input_tokens":1}}).status_code, 410)
-        self.service.run_mock(self.auth("member"), "mock_text", str(uuid.uuid4()), "x")
+        self.historical_fixture('mock_text')
         self.assertEqual(self.service.own_orders(self.auth("member2"))["total"], 0)
         self.assertEqual(self.service.own_orders(self.auth("other"))["total"], 0)
         self.settings.billing_mock_enabled=False
@@ -212,27 +217,13 @@ class OrderTests(BillingFixture):
             self.assertEqual(db.get(BillingOrder,order["id"]).reconciliation_status, "NEEDS_REVIEW")
         self.assertTrue(self.service.check_accounts()["ok"])
 
-    def test_concurrent_same_business_key_executes_mock_once(self):
-        started, release = threading.Event(), threading.Event()
-        class BlockingMock:
-            calls = 0
-            def execute(adapter, feature):
-                adapter.calls += 1
-                started.set()
-                if not release.wait(10): raise RuntimeError("test synchronization timeout")
-                return {"ok":True}, {}
-        adapter = BlockingMock()
-        key = str(uuid.uuid4())
+    def test_concurrent_historical_order_claim_has_single_owner(self):
+        order = self.reserve()
         with ThreadPoolExecutor(max_workers=3) as pool:
-            first = pool.submit(self.service.run_mock, self.auth("member"), "mock_fixed", key, "x", adapter)
-            try:
-                self.assertTrue(started.wait(10))
-                others = [pool.submit(self.service.run_mock, self.auth("member"), "mock_fixed", key, "x", adapter) for _ in range(2)]
-                self.assertTrue(all(f.result(timeout=10)[1] for f in others))
-            finally:
-                release.set()
-            self.assertEqual(first.result(timeout=10)[0]["status"], "SETTLED")
-        self.assertEqual(adapter.calls, 1)
+            claims = list(pool.map(lambda _: self.service.claim(order['id']), range(3)))
+        self.assertEqual(sorted(claims), [False, False, True])
+        self.service.settle(order['id'], {}, {'historical_fixture': True})
+        self.assertEqual(self.service.own_orders(self.auth('member'))['items'][0]['status'], 'SETTLED')
         self.assertTrue(self.service.check_accounts()["ok"])
 
     def test_member_quota_race_and_quota_lowering_cannot_break_reservations(self):
