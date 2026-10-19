@@ -1,16 +1,16 @@
 # 实施与恢复记录
 
 - task_id: model-pricing-mvp-20261019
-- 来源：用户 2026-10-19 调用 implement-spec，入口 map.md；中途禁止任何提交，随后于17:38 +08:00明确改为“允许本地提交并推送指定中转仓库”。本地技能集成恢复；目标GitHub仓库尚待提供，原Gitee origin不推送，不创建远程PR或发布。
+- 来源：用户2026-10-19调用implement-spec，入口map.md；中途禁提交，17:38 +08:00明确恢复本地提交并推送指定中转，随后指定https://github.com/xy2219223637-source/-且仅本次任务使用。原Gitee origin不推送，不创建PR或发布。
 - 目标：按九票依赖实现同模型当前费率与计费链路；完成定向测试和独立审核；需环境授权的验收不冒充通过。
 - 基线：Computing_Power_Management / 3deddd85350a897620aca705584f58147366b15d。
-- 当前 step：01及审核修复、02已集成46f0b2c；03图像与04嵌入在互斥worktree并行编码，02独立审核并行。集成worktree为D:/原力2222222222/model-pricing-work/integration，分支codex/model-pricing-mvp。
+- 当前step：01–05及独立审核修复均已集成0e86161；06在ticket-06独立worktree正式实施。集成路径D:/原力2222222222/model-pricing-work/integration，分支codex/model-pricing-mvp。
 - 已完成：读取 spec、API、九票、tracker、术语和现有测试/迁移代码。
-- 待完成：03/04→05→06→07/08/09；02独立审核、最终双轴审核、修复与验证。
+- 待完成：06完整当前代码MOCK/REAL门禁与计次→07/08/09真实适配及独立验收→最终双轴审核/修复→中转最终推送→实施worktree清理。
 - 测试边界：已由各票确认的计价规则、管理/订单 API、账务事务、供应商适配器和组件；按 TDD 逐条验证，默认无全量构建/E2E。
 - checkpoint：原始 HEAD 与本记录；原工作区三项既有改动不纳入提交。
 - 风险：本地提交/合并产生 Git 状态；迁移修改影响 schema checksum；运行服务仍使用旧 schema，不能提前热加载新代码。
-- 危险操作标志：worktree、临时离线测试、本地Git提交与集成；运行环境迁移、配置/费率/账务写入、依赖安装、重启、发布均未执行。一次提交因缺身份失败，禁令期间取消暂存无提交；最新授权后仅在每次git命令临时设置用户提供的账号名和邮箱，不配置或记录密码。
+- 危险操作标志：worktree、本地提交/集成/中转推送、临时离线及经明确授权的PostgreSQL独占schema合成写入/精确清理。现有运行业务schema迁移、业务费率/账务/配置写入、依赖安装、重启、发布均未执行。一次缺身份提交失败后禁令期无提交，授权恢复后每命令临时身份，不配置或记录密码。
 - 预检查：当前分支及 git status 已读取；8000/5173 有运行进程，禁止重启或切换其代码文件。
 - 执行路径：在独立集成 worktree 内落地；原 checkout 不切分支、不合并，以保护运行代码。
 - 备份位置：D:/原力2222222222/model-pricing-work/backup；保存三项原改动与规范副本，Git 基线可恢复。
@@ -23,3 +23,6 @@
 - 2026-10-19T17:52 +08:00：01代码已快进至e03d588并正常推送中转codex/model-pricing-mvp；独立复跑53项=52通过/Redis1跳过，外部完整日志ticket01-independent-tests.log。跨基线diff --check发现原规范两处Markdown行尾空格，随后移除并重新检查；不把首次失败藏作通过。远程SHA另以ls-remote核验。
 - 2026-10-19T18:12 +08:00：01审核3个registry P2已修复并集成；当前费率20项PG验证及临时合成v2→v3迁移22项验证通过，见pg-pricing-result.json/pg-migration-result.json及报告。02=46f0b2c，PG 22项全部通过、77.239秒、22个schema均清理，源码前后摘要相同，见pg-metering-result.json。上述均为独占临时schema，运行业务schema仍v2；没有厂商/存储请求。03/04正式放行，写集分别为metering+image适配/测试与独立embedding适配/测试。
 - 恢复指针：外部D:/原力2222222222/model-pricing-work中的callpoint-notes.md、pricing-interface.md、metering-interface.md、provider-protocol-details.md、ticket03-plan.md、ticket04-plan.md；子代理ticket_03/ticket_04/review_02。原checkout只保持恢复记录更新，不切分支或应用代码。
+- 2026-10-19T18:46 +08:00检查点：03 PG原18中13图像全过，1历史case初始化连接关闭，17pass/1error原报告保留，单case复测1pass且清理完成；04审核修复后新PG20/20通过并已resolved；05音频PG原24、修中2、最终3分批准确记录，半帧/亚毫秒与ASR异常均修复，21音频+旧TTS2及组件8通过、已resolved。root跨03/04组合47/47通过；详情/费用/消费组件19、图像4、嵌入4分别通过。最终06不能直接沿用这些历史报告作为完整放行。
+- REAL额外授权：用户同意仅独占测试schema使用明确合成验算费率，见real-test-authorization.md；仍需06通过、本轮每provider/model/capability最多3次最低有效规格。本轮验证厂商/真实存储请求均0。
+- 未知/需要核实：Ark .env只有TEXT/VISION共用ep与独立embedding ep，未存实际模型名/版本/上下文上限；未发现Ark IAM字段。官方GetEndpoint只AK签名，Tokenization文本计数不能直接证明完整Chat/视觉/embedding上界。用户问“.env没有吗”已直接读取非敏感字段解释，继续本地文档查找无对应ep映射；不能猜上界。外部ark-bound-evidence.md为官方依据。此未知不阻塞06 MOCK，可能阻塞07实际外呼，后续据实处理。
