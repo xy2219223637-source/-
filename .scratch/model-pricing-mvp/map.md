@@ -14,13 +14,13 @@ task_id: model-pricing-mvp-20261019
 | [02 文本/视觉 mock](issues/02-text-vision-mock-billing.md) | 01 | ready-for-agent | 模拟消费、订单、企业/成员账务及展示闭环 |
 | [03 图像 mock 折算](issues/03-image-mock-conversion.md) | 02 | resolved | 图片用量折算、扣账及展示；代码与离线验证完成，PostgreSQL 复核待独立记录 |
 | [04 嵌入 mock](issues/04-embedding-mock-billing.md) | 02 | resolved | 仅输入 Token、批量子调用与账务展示；审核修复及 PostgreSQL 20/20 通过 |
-| [05 TTS/ASR mock](issues/05-audio-mock-conversion.md) | 03 | ready-for-agent | 原始音频/字符用量、折算及账务展示 |
+| [05 TTS/ASR mock](issues/05-audio-mock-conversion.md) | 03 | resolved | 原始音频/字符用量、折算及账务展示；审核修复完成，PostgreSQL 原版24/修中2/最终3分批通过 |
 | [06 完整 mock 门禁](issues/06-mock-completion-gate.md) | 02、03、04、05 | ready-for-agent | 全场景断言、可恢复报告、拒绝未通过的 REAL |
 | [07 推理/视觉/嵌入真实验证](issues/07-text-vision-embedding-real.md) | 06 | ready-for-agent | 最低规格、有效返回、实际用量与账务核对 |
 | [08 图像真实验证](issues/08-image-real.md) | 06 | ready-for-agent | 最低有效生成、计次、用量及账务核对 |
 | [09 TTS/ASR 真实验证](issues/09-audio-real.md) | 06 | ready-for-agent | 最低有效音频、计次、原始用量及账务核对 |
 
-ready-for-agent 表示票已发布，不能跳过 Blocked by、验收或已有操作授权边界。01 的代码及离线范围已完成，下一开发入口为 02；不代表目标库迁移或真实调用获准。
+ready-for-agent 表示票已发布，不能跳过 Blocked by、验收或已有操作授权边界。当前开发与恢复入口为 06 完整 MOCK 门禁；06 尚未完成，不代表目标库迁移或真实调用获准。
 
 ```mermaid
 flowchart LR
@@ -65,7 +65,7 @@ flowchart LR
 - 已确认的真实调用预算是每供应商/模型/能力最多三次厂商最低有效规格。没有整体固定金额上限，但不授权无限次数、规格升级或备用供应商探测。
 - 迁移、配置/费率写入、账务写入和进程操作按适用授权及恢复要求执行；发布票不会替这些行为自动扩大授权。
 - 每票完成时记录实际检查、产物及残余限制，不能仅勾选；账本、审计及历史记录不通过删数据回滚。
-- 本主题后续变更追加入访谈与审计；当前恢复入口为 02，01 的实现与离线证据已落盘。
+- 本主题后续变更追加入访谈与审计；当前恢复入口为 06，05 的实现、审核修复及分批 PostgreSQL 证据已落盘；06–09 保留未完成状态。
 
 ## Decisions-so-far
 
@@ -73,3 +73,4 @@ flowchart LR
 - 02：共享模型执行器复用现有账本；tenant＋持久业务键限定唯一意图，其他成员重放隐藏；模型身份/完整费率/规格不可变。TEXT/VISION MOCK、未知预占、恢复、四查询及现有消费页完成离线验证；未接通旧 SDK 路径 fail-closed，REAL 等 06 门禁。见 [票 02](issues/02-text-vision-mock-billing.md)、[证据](evidence-02.md)；下一 frontier 为 03、04，目标环境验证与 REAL 均未据此宣称通过。
 - 03：图像 MOCK 按本地解码且规格有效的图片数量计量，FOLDED 使用精确比例并仅在最终积分向上取整；部分、空、未知产物分别处理，共用既有预占、快照和账本。旧图片入口缺可信上下文时提前拒绝，真实模型与存储调用为零。代码及离线验证完成，PostgreSQL 复核由主线程独立记录；见 [票 03](issues/03-image-mock-conversion.md)、[证据](evidence-03.md)。
 - 04：嵌入 MOCK 仅计输入 Token，稳定批次按实际传输生成子订单，失败或未知时停止后续调用；后续预占/存储中断保留已消费证据，未结算重放不报告完成。审核修复后 PostgreSQL 20/20 通过（15 嵌入＋5 历史），20 个临时 schema 已清理，真实调用为零；见 [票 04](issues/04-embedding-mock-billing.md)、[证据](evidence-04.md)、[本轮 PostgreSQL 结果](pg-embedding-result.json)。本票完成不放行 REAL。
+- 05：TTS 按原文本 Unicode code point、ASR 按完整 PCM 帧对应的精确整数毫秒折算；半帧/分数毫秒输入在预占前拒绝，畸形生成响应保留未知用量及预占。共用账本、快照和查询，模拟提交/轮询/清理均本地化。23 项后端、8 项音频组件及定向 TypeScript 通过；PostgreSQL 原版24、修中2、最终异常/半帧3项分批通过，各自源码与 schema 清理范围独立，厂商/真实存储请求均为零，不能合称最终单轮29项。见 [票 05](issues/05-audio-mock-conversion.md)、[证据](evidence-05.md)、[最终3项 PostgreSQL 结果](pg-audio-final-result.json)；下一入口为 06，REAL 继续受完整门禁约束。
