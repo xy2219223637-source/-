@@ -151,6 +151,7 @@ class ModelPricingTests(BillingFixture):
         self.settings.director_asr_provider = 'auto'
         self.settings.director_asr_api_key = 'synthetic-not-a-real-key'
         self.settings.embedding_api_key = 'synthetic-independent-slot'
+        self.settings.embedding_mode = 'multimodal'
         registry = ModelRegistry.from_settings(self.settings)
         self.assertEqual(resolve_director_asr_provider(self.settings), 'volcengine_asr')
         asr = next(item for item in registry.items.values() if 'ASR' in item.model_types)
@@ -164,6 +165,83 @@ class ModelPricingTests(BillingFixture):
         self.settings.director_asr_api_key = ''
         self.settings.llm_api_key = 'synthetic-llm-key'
         self.assertFalse(next(item for item in ModelRegistry.from_settings(self.settings).items.values() if 'ASR' in item.model_types).configured)
+
+    def test_standard_embedding_uses_llm_slot_even_with_unused_independent_configuration(self):
+        from app.services.billing.registry import ModelRegistry
+        self.settings.embedding_mode = 'standard'
+        self.settings.embedding_model = self.settings.llm_model
+        self.settings.embedding_base_url = 'https://unused-embedding.invalid/v1'
+        self.settings.embedding_api_key = 'synthetic-independent-key'
+        self.settings.llm_api_key = ''
+        registry = ModelRegistry.from_settings(self.settings)
+        embedding = next(item for item in registry.items.values() if 'EMBEDDING' in item.model_types)
+        self.assertEqual(embedding.provider, 'openai_compatible:llm')
+        self.assertIn('TEXT', embedding.model_types)
+        self.assertFalse(embedding.configured)
+        before = embedding.model_key
+        self.settings.embedding_base_url = 'https://also-unused.invalid/v1'
+        self.settings.llm_api_key = 'synthetic-effective-key'
+        embedding = next(item for item in ModelRegistry.from_settings(self.settings).items.values() if 'EMBEDDING' in item.model_types)
+        self.assertEqual(embedding.model_key, before)
+        self.assertTrue(embedding.configured)
+
+    def test_multimodal_embedding_uses_only_effective_independent_slot_and_key_fallback(self):
+        from app.services.billing.registry import ModelRegistry
+        self.settings.embedding_mode = 'multimodal'
+        self.settings.llm_api_key = 'synthetic-fallback-key'
+        for base, key, expected in (('', '', 'openai_compatible:llm'), ('https://embedding.invalid/v1', '', 'openai_compatible:embedding'), ('', 'synthetic-independent', 'openai_compatible:embedding')):
+            with self.subTest(base=bool(base), key=bool(key)):
+                self.settings.embedding_base_url, self.settings.embedding_api_key = base, key
+                embedding = next(item for item in ModelRegistry.from_settings(self.settings).items.values() if 'EMBEDDING' in item.model_types)
+                self.assertEqual(embedding.provider, expected)
+                self.assertTrue(embedding.configured)
+
+    def test_enabled_video_repair_diagnosis_registers_its_selected_vision_model(self):
+        from app.services.billing.registry import ModelRegistry
+        self.settings.video_repair_ai_enabled = True
+        self.settings.video_repair_ai_model = 'fixture-diagnosis'
+        self.settings.llm_api_key = 'synthetic-llm-key'
+        registry = ModelRegistry.from_settings(self.settings)
+        diagnosis = next((item for item in registry.items.values() if item.model_id == 'fixture-diagnosis'), None)
+        self.assertIsNotNone(diagnosis)
+        self.assertEqual(diagnosis.provider, 'openai_compatible:llm')
+        self.assertEqual(diagnosis.model_types, ('VISION',))
+        self.assertTrue(diagnosis.configured)
+        self.assertEqual(diagnosis.public()['supported_usage_modes'], [])
+        self.settings.video_repair_ai_model = ''
+        items = list(ModelRegistry.from_settings(self.settings).items.values())
+        self.assertEqual(sum(item.model_id == self.settings.llm_vision_model for item in items), 1)
+        self.settings.video_repair_ai_enabled = False
+        self.settings.video_repair_ai_model = 'fixture-diagnosis'
+        self.assertFalse(any(item.model_id == 'fixture-diagnosis' for item in ModelRegistry.from_settings(self.settings).items.values()))
+
+    def test_image_registry_uses_runtime_provider_default_normalization_and_gate(self):
+        from app.services.billing.registry import ModelRegistry
+        self.settings.image_generation_model = 'fixture-image'
+        self.settings.image_product_model = 'fixture-product'
+        self.settings.image_portrait_model = 'fixture-portrait'
+        self.settings.llm_api_key = 'synthetic-fallback-key'
+        for provider in ('', 'ark_seedream', ' ARK_SEEDREAM '):
+            with self.subTest(provider=provider):
+                self.settings.image_generation_provider = provider
+                images = [item for item in ModelRegistry.from_settings(self.settings).items.values() if 'IMAGE' in item.model_types]
+                self.assertEqual({item.model_id for item in images}, {'fixture-image', 'fixture-product', 'fixture-portrait'})
+                self.assertTrue(all(item.provider == 'ark_seedream:image' and item.configured for item in images))
+        for provider in ('apilio', ' APILIO '):
+            with self.subTest(provider=provider):
+                self.settings.image_generation_provider = provider
+                self.settings.apilio_image_model = 'fixture-apilio'
+                self.settings.apilio_image_api_key = 'synthetic-apilio-key'
+                images = [item for item in ModelRegistry.from_settings(self.settings).items.values() if 'IMAGE' in item.model_types]
+                self.assertEqual([(item.provider, item.model_id, item.configured) for item in images], [('apilio:image', 'fixture-apilio', True)])
+        # Ark's override settings cannot select a remote adapter without the
+        # base model and credential gate in get_image_provider.
+        self.settings.image_generation_provider = ''
+        self.settings.image_generation_model = ''
+        self.assertFalse(any('IMAGE' in item.model_types for item in ModelRegistry.from_settings(self.settings).items.values()))
+        self.settings.image_generation_model = 'fixture-image'
+        self.settings.llm_api_key = ''
+        self.assertFalse(any('IMAGE' in item.model_types for item in ModelRegistry.from_settings(self.settings).items.values()))
 
     def test_saved_model_identity_and_terminal_history_are_immutable_at_database_boundary(self):
         from sqlalchemy import text
