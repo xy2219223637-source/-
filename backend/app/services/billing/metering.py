@@ -68,13 +68,20 @@ def reject_unmetered(settings):
 
 def usage_quantities(snapshot, usage):
     """Missing directions are unknown, never invented zero quantities."""
-    names = {rate['metric'] for rate in snapshot['metrics']}
-    if snapshot['usage_mode'] != 'REAL_TOKENS':
-        fail('INVALID_USAGE', '折算适配器尚未接入', 422)
+    folded = snapshot['usage_mode'] == 'FOLDED_TOKENS'
+    names = ({snapshot['conversion']['source_metric']} if folded else
+             {rate['metric'] for rate in snapshot['metrics']})
     if not isinstance(usage, dict) or set(usage) != names:
         fail('INVALID_USAGE', '适用计量项缺失或未知', 422)
     if any(type(value) is not int or not 0 <= value <= 10**9 for value in usage.values()):
         fail('INVALID_USAGE', '用量必须为受限非负整数', 422)
+    if folded:
+        conversion = snapshot['conversion']
+        converted = Fraction(usage[conversion['source_metric']] * conversion['tokens_per_unit'],
+                             conversion['source_unit_size'])
+        if converted > 10**9:
+            fail('INVALID_USAGE', '折算 Token 超出计量上限', 422)
+        return {'converted_tokens': converted}
     return usage
 
 
@@ -92,6 +99,17 @@ def normalize_usage(snapshot, usage):
     if usage is None:
         return unknown_usage(), None
     charge = calculate_model_charge(snapshot, usage)
+    if snapshot['usage_mode'] == 'FOLDED_TOKENS':
+        converted = usage_quantities(snapshot, usage)['converted_tokens']
+        # Conversion scales are powers of ten, <= 1e6: serialize exactly.
+        scaled = converted * 10**6
+        if scaled.denominator != 1:
+            fail('INVALID_USAGE', '折算比例不能精确表示', 422)
+        whole, decimal = divmod(scaled.numerator, 10**6)
+        text = str(whole) if decimal == 0 else f'{whole}.{decimal:06d}'.rstrip('0')
+        metric = snapshot['conversion']['source_metric']
+        return {**unknown_usage(), 'source': 'FOLDED_TOKENS', 'converted_tokens': text,
+                'raw_metric': metric, 'raw_quantity': usage[metric]}, charge
     return {**unknown_usage(), 'source': 'REAL_TOKENS', **usage}, charge
 
 
