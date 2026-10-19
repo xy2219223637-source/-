@@ -17,4 +17,6 @@
 - 回退：原 checkout 不变；停止采用新 worktree 即恢复基线；禁止 reset/clean 原 checkout。无真实账务回退需求，因为不写入。
 - 自动重启/回退：均关闭；失败保持最后安全状态并记录恢复入口，不自动删除工作树或账本。
 - 验证结果：基线 unittest test_billing_management test_billing_orders test_billing_safety 共40项，39通过、1 skipped（不可视作完整门禁），日志 D:/原力2222222222/model-pricing-work/baseline-tests.log；真实调用0。2026-10-19T17:26 +08:00。
-- 下一步：01 实施/TDD，逐票本地集成并回归，最后独立双轴审核；最终仅推送用户指定中转仓库。gh当前未登录，账号主页不构成仓库链接。环境副作用授权缺失时只记录待验收，不标 resolved。
+- 下一步：01 实施/TDD，逐票本地集成并回归，最后独立双轴审核；最终仅推送用户指定中转仓库 https://github.com/xy2219223637-source/-.git 的 codex/model-pricing-mvp 分支。原 Gitee origin 不变；不改中转 main，不强推。
+- 2026-10-19T17:43 +08:00：中转仓库 ls-remote 读取 main=2afb757b65979304ff87b665d69fdde2fbb9e4e7；禁交互 push --dry-run 通过，使用系统既有Git凭据，不使用用户发来的密码。gh及GitHub connector未登录不影响Git已验证的推送通道。尚未实际推送。
+- 2026-10-19T17:41:03 +08:00：现有PostgreSQL只读事务核实版本[2]、旧schema完整性通过；证据为外部read-only-preflight.json，仅保存脱敏环境引用，未写库。这是文件配置对应库，不能证明运行进程已加载配置。目标迁移、费率/账务写入仍待单独授权。
