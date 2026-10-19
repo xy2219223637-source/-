@@ -28,3 +28,13 @@ git diff --check
 限制：SQLite串行化不证明PG并发竞争；PG try-lock/DDL/备份恢复代码尚未在目标环境执行。当前文件配置对应目标库只读预检查来源为主线程 `D:/原力2222222222/model-pricing-work/read-only-preflight.json`，environment_ref=`d06030ee0880a2db13dbabbb32c24354388bfb885bdd1b6fdee9526557db9e2d`，不证明运行进程配置一致。未联网、未安装依赖、未写.env、未调用厂商或真实存储、未重启、未运行E2E/全量构建。前端node_modules仅为原依赖目录junction。完整MOCK闭环和REAL验收属于后续票。
 
 下一入口：02继承 `ModelPricingService` 与 `BillingOrder` v3字段，订单读取费率先取得相同 `model_price_lock(db,model_key)` 后再获取身份/租户锁，并复制完整模型身份与configuration，结算不得重新读当前费率。新能力必须使用可追溯的server-side `UsageContract`，不能硬编码未经核实厂商价格或比例。
+
+## 01 独立审核修复
+
+来源：`D:/原力2222222222/model-pricing-work/review01.md`，对提交 e03d588 独立审核提出3个P2；本修复从集成5f80682恢复，仅改registry、对应测试及本证据，不改实际调用适配器、迁移或前端，不访问数据库/厂商。源码核实分别为 `llm.py` 的 embed/_embed_multimodal_texts、`video_repair/service.py` 的 _provider、`image_generation.py` 的 get_image_provider。
+
+修正：标准embedding沿用llm槽与凭据，独立embedding配置只有multimodal分支有效，避免错误拆分同名模型与虚报配置；启用视频修复AI诊断时登记实际选中模型为VISION，复用llm供应商槽和去重，关闭时不额外登记；图片供应商先strip/lower，空值采用实际Ark分支，并且只有满足基础模型与凭据门槛才登记远程Ark模型，避免把实际LocalDemo路径当成远程模型。供应商名仍用既有固定适配器槽，不推断厂商官方模型名或计量协议。
+
+逐轮TDD：standard embedding新增用例先红（独立槽≠实际llm槽）→修复后13项绿；诊断模型新增用例先红（未登记）→修复后14项绿；图片默认/空格大小写新增用例先红3个subtest→修复后当前费率15项及迁移2项共17项通过。新增覆盖标准embedding同名去重、无效独立配置不改变model_key、缺实际key不虚报configured、多模态独立地址/key及fallback、诊断独立模型/相同fallback/关闭、图片默认与规范化及local-demo门槛。原ASR用例明确指定multimodal，保持其原先独立embedding槽断言所对应的实际分支。
+
+实际运行 `python scripts/run_refinement_tests.py test_model_pricing.py test_model_pricing_migration.py`：17项通过，exit0；外部 `review01-repro.py`：标准embedding registry与实际llm地址一致，诊断与图片选中模型均listed=True，exit0。以上均使用合成配置及mock SDK，不构成真实协议或PostgreSQL验证。原目标环境限制仍有效。

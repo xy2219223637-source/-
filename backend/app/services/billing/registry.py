@@ -92,12 +92,21 @@ class ModelRegistry:
         # Provider slots are fixed adapter identifiers, never URL-derived names.
         add('openai_compatible:llm', settings.llm_model, ('TEXT',), settings.llm_api_key and settings.llm_api_base)
         add('openai_compatible:llm', settings.llm_vision_model, ('VISION',), settings.llm_api_key and settings.llm_api_base)
-        embedding_slot = 'embedding' if settings.embedding_base_url or settings.embedding_api_key else 'llm'
+        if settings.video_repair_ai_enabled:
+            add('openai_compatible:llm', settings.video_repair_ai_model or settings.llm_vision_model,
+                ('VISION',), settings.llm_api_key and settings.llm_api_base)
+        # Only the multimodal branch reads the independent embedding settings;
+        # standard embeddings use LLMClient.client and therefore the llm slot.
+        independent_embedding = settings.embedding_mode == 'multimodal' and bool(settings.embedding_base_url or settings.embedding_api_key)
+        embedding_slot = 'embedding' if independent_embedding else 'llm'
+        embedding_key = (settings.embedding_api_key or settings.llm_api_key) if independent_embedding else settings.llm_api_key
+        embedding_base = (settings.embedding_base_url or settings.llm_api_base) if independent_embedding else settings.llm_api_base
         add('openai_compatible:' + embedding_slot, settings.embedding_model, ('EMBEDDING',),
-            (settings.embedding_api_key or settings.llm_api_key) and (settings.embedding_base_url or settings.llm_api_base))
-        if settings.image_generation_provider == 'apilio':
+            embedding_key and embedding_base)
+        image_provider = settings.image_generation_provider.strip().lower()
+        if image_provider == 'apilio':
             add('apilio:image', settings.apilio_image_model, ('IMAGE',), settings.apilio_image_api_key and settings.apilio_image_base_url)
-        elif settings.image_generation_provider == 'ark_seedream':
+        elif image_provider in ('', 'ark_seedream') and settings.image_generation_model and (settings.image_generation_api_key or settings.llm_api_key):
             for model in (settings.image_generation_model, settings.image_product_model, settings.image_portrait_model, settings.image_edit_model, settings.image_upscale_model):
                 add('ark_seedream:image', model, ('IMAGE',), (settings.image_generation_api_key or settings.llm_api_key) and (settings.image_generation_base_url or settings.llm_api_base))
         from app.services.llm import resolve_director_asr_provider
