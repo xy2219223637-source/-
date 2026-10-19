@@ -22,3 +22,9 @@
 - 目标/范围：仅 ticket-02 worktree 的本票应用、测试、票据和证据；不推送、不改原 checkout/.env/运行服务/真实业务 schema。
 - 预检查：integration 8b345da 已快进合入；75 项后端检查、17 项补充核心回归、15 项组件、tsc、diff-check 结果见 evidence-02.md。暂存前使用明确文件清单并复核 diff --cached --stat。
 - 备份/checkpoint：基准 8b345da；本分支提交是后续恢复点。已有风险、恢复及失败保护沿用本文件；失败保留工作树，不使用 reset --hard、强推或删除账务。回退通过新增 revert，主线程在 integration 合入前可直接检查差异。
+
+## 02 独立审核修复提交检查点
+
+- task_id=model-pricing-mvp-20261019-02-review-fix；时间=2026-10-19T18:18:00+08:00；来源=主线程要求单一 fixer 修复独立审核唯一 P2。
+- 范围仅 ModelOrders.tsx、model-orders.test.tsx、本票 evidence-02.md 与本审计文件；不推送、不改共享账务或 03/04 写集。
+- checkpoint/备份=e4a9429（含本票原实现与 PG22 证据）；预检查=19/19 组件、单文件 TypeScript、独立乱序复现逆转及 diff 检查通过。失败保留工作树；必要时新增 revert 回退这个纯 UI 修复，无数据库恢复动作。

@@ -1,8 +1,9 @@
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import MyBilling from '../src/pages/MyBilling';
 import { api, authApi } from '../src/api/client';
+import ModelOrders from '../src/components/ModelOrders';
 
 vi.mock('../src/api/client', () => ({ api: { get: vi.fn(), put: vi.fn() }, authApi: { me: vi.fn() } }));
 const order = { id: 'a'.repeat(32), request_id: 'request', tenant_id: 'tenant', user_id: 'member',
@@ -58,4 +59,70 @@ it('折算来源与真实Token分开，REAL未知供应商成本不能显示为�
   expect(await screen.findByText('折算 Token 1500')).toBeTruthy();
   expect(screen.getByText('原始依据：有效图片数 1')).toBeTruthy();
   expect(screen.getByText('供应商成本未知')).toBeTruthy();
+});
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (reason: unknown) => void;
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => { resolve = resolvePromise; reject = rejectPromise; });
+  return { promise, resolve, reject };
+}
+
+function controlledDetails() {
+  const second = { ...order, id: 'c'.repeat(32), model_id: 'another-order-model' };
+  const firstResponse = deferred<{ data: typeof order }>();
+  const secondResponse = deferred<{ data: typeof order }>();
+  vi.mocked(api.get).mockImplementation(async path => {
+    if (String(path).endsWith('/' + order.id)) return firstResponse.promise as never;
+    if (String(path).endsWith('/' + second.id)) return secondResponse.promise as never;
+    return { data: { items: [order, second], total: 2, page: 1, page_size: 20 } } as never;
+  });
+  return { second, firstResponse, secondResponse };
+}
+
+it('A后B选择而B先返回时，较早A响应不能覆盖最后选择B的计算依据', async () => {
+  const { second, firstResponse, secondResponse } = controlledDetails();
+  render(<ModelOrders enterprise={false} refreshKey={0} />);
+  await screen.findByText(second.model_id);
+  const buttons = screen.getAllByRole('button', { name: '查看详情' });
+  fireEvent.click(buttons[0]); fireEvent.click(buttons[1]);
+  await act(async () => secondResponse.resolve({ data: second }));
+  expect(screen.getByText('订单：' + second.id)).toBeTruthy();
+  await act(async () => firstResponse.resolve({ data: order }));
+  expect(screen.queryByText('订单：' + order.id)).toBeNull();
+  expect(screen.getByText('订单：' + second.id)).toBeTruthy();
+});
+
+it('较早详情的失败不能覆盖较新详情或显示过期错误', async () => {
+  const { second, firstResponse, secondResponse } = controlledDetails();
+  render(<ModelOrders enterprise refreshKey={0} />);
+  await screen.findByText(second.model_id);
+  const buttons = screen.getAllByRole('button', { name: '查看详情' });
+  fireEvent.click(buttons[0]); fireEvent.click(buttons[1]);
+  await act(async () => secondResponse.resolve({ data: second }));
+  await act(async () => firstResponse.reject(new Error('stale first request')));
+  expect(screen.getByText('订单：' + second.id)).toBeTruthy();
+  expect(screen.queryByRole('alert')).toBeNull();
+});
+
+it('关闭正在加载的详情后，在途响应不能重新打开计算依据', async () => {
+  const { second, firstResponse } = controlledDetails();
+  render(<ModelOrders enterprise={false} refreshKey={0} />);
+  await screen.findByText(second.model_id);
+  fireEvent.click(screen.getAllByRole('button', { name: '查看详情' })[0]);
+  fireEvent.click(screen.getByRole('button', { name: '关闭详情' }));
+  await act(async () => firstResponse.resolve({ data: order }));
+  expect(screen.queryByText('订单计算依据')).toBeNull();
+  expect(screen.queryByRole('button', { name: '关闭详情' })).toBeNull();
+});
+
+it('刷新列表使上一列表的在途详情失效', async () => {
+  const { second, firstResponse } = controlledDetails();
+  const view = render(<ModelOrders enterprise={false} refreshKey={0} />);
+  await screen.findByText(second.model_id);
+  fireEvent.click(screen.getAllByRole('button', { name: '查看详情' })[0]);
+  view.rerender(<ModelOrders enterprise={false} refreshKey={1} />);
+  await act(async () => firstResponse.resolve({ data: order }));
+  expect(screen.queryByText('订单计算依据')).toBeNull();
+  expect(screen.queryByText('订单：' + order.id)).toBeNull();
 });

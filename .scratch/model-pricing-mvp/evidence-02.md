@@ -57,3 +57,14 @@ REAL 当前无条件 MOCK_GATE_REQUIRED，票 06 完成可验证报告与有界�
 本票只完成受控 MOCK 离线闭环，不构成 REAL gate 报告或真实接入通过。SQLite 不能证明 PostgreSQL 锁和迁移行为；本票核心场景待主线程按已授权独占临时 schema 方法执行 PostgreSQL 验证。没有测试截图、真实厂商成本、真实模型调用、对象存储或运行配置加载证明。
 
 未知预占有意保留，会占用可用额度；不自动重试厂商或删除流水回退。回滚使用安全构建关闭新增入口并新增 revert 提交，保留历史账务与快照；原 checkout、.env、服务进程、真实业务 schema 均未修改。临时 node_modules 目录联接仅复用已安装依赖，没有安装依赖；由主线程清理工作树时处理。
+
+## 独立审核 P2 修复：订单详情响应乱序
+
+- task_id：model-pricing-mvp-20261019-02-review-fix；时间：2026-10-19 18:18 +08:00。
+- 来源：独立审核 `D:/原力2222222222/model-pricing-work/review02.md` 的唯一 P2，以及主线程限定本票组件/测试/证据的修复分派。修复前已快进到 integration e4a9429；其 PostgreSQL 22/22 报告只读保留，本修复不改账务源码。
+- 问题：同页先选择 A 再选 B，响应 B→A 时，旧 A 仍通过列表 generation 判断，覆盖 B 的订单计算依据；过期失败也可能覆盖当前错误状态。
+- TDD：新增四个受控 Promise 组件场景；原代码 3 失败、4 通过，证实乱序覆盖、过期错误及加载期间不能取消。列表刷新失效场景原已通过，保留为代际回归。完整 red 日志在 `D:/原力2222222222/model-pricing-work/review02-fix-red.log`。
+- 修改：详情请求拥有独立递增序号，只允许当前列表代际及最后详情请求同时匹配时写结果、错误或加载状态。关闭详情及列表刷新/切页/模式变化/卸载均使详情序号失效；加载期间提供关闭入口，避免晚到响应重新打开详情。不取消或修改服务器账务。
+- 实际验证：`model-orders.test.tsx` 7/7、`billing.test.tsx` 7/7、`platform-model-pricing.test.tsx` 5/5，共 19/19 通过。以当前 app 编译选项对 `src/components/ModelOrders.tsx` 执行单文件 `tsc --noEmit`，退出码 0；`git diff --check` 通过。
+- 独立复现逆转：外部 `review02-ui-race-fixed.py` 沿用原审核脚本的实际组件内存编译/受控 Promise，加入最后选择断言。输出 B 先完成显示 B、较早 A 完成后仍显示 B、`B selected last but B detail present: true`，退出码 0。原审核复现脚本保留，没有改写其证据。
+- 风险与恢复：纯前端竞态修复；不涉及 03/04 文件、共享计量、数据库、SDK、凭据、进程或远程。回退本修复提交即可恢复此前 UI；无需为此重跑 PostgreSQL 账务。未运行浏览器 E2E，不据组件测试声称浏览器视觉验收通过。
