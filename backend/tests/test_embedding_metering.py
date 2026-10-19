@@ -286,3 +286,76 @@ class EmbeddingMeteringTests(BillingFixture):
         self.assertEqual(error.exception.detail['code'], 'USAGE_BOUND_UNKNOWN')
         self.assertEqual(self.service.model_orders(self.auth('member'))['total'], 0)
         self.assertEqual(self.service.balance(self.auth())['balance_credits'], '1000.0000')
+
+    def test_later_quota_reservation_failure_returns_charged_child_and_replays_without_calling_again(self):
+        from app.services.billing.embedding_adapter import EmbeddingMockAdapter, execute_embedding_batches
+        class Counting(EmbeddingMockAdapter):
+            calls = 0
+            def execute(adapter, request):
+                adapter.calls += 1
+                return super().execute(request)
+        self.quota(value='5')
+        response = {'data': [{'index': 0, 'embedding': [1, 2, 3]}], 'usage': {'prompt_tokens': 1000}}
+        adapters = [Counting(response), Counting(response)]
+        batches = [self.request(['one']), self.request(['two'])]
+        first = execute_embedding_batches(self.service, self.context(), self.model.model_key, batches, adapters=adapters)
+        replay = execute_embedding_batches(self.service, self.context(), self.model.model_key, batches, adapters=adapters)
+        for result in (first, replay):
+            self.assertFalse(result.complete)
+            self.assertIsNone(result.embeddings)
+            self.assertEqual(result.partial_embeddings, [[1., 2., 3.]])
+            self.assertEqual((result.failed_batch_index, result.error_code), (1, 'QUOTA_EXCEEDED'))
+            self.assertEqual(len(result.children), 1)
+            self.assertEqual(result.children[0].execution_status, 'SUCCEEDED')
+        self.assertEqual([child.order_id for child in first.children], [child.order_id for child in replay.children])
+        self.assertEqual([adapter.calls for adapter in adapters], [1, 0])
+        orders = self.service.model_orders(self.auth('member'))['items']
+        self.assertEqual([(order['id'], order['status'], order['charged_credits']) for order in orders],
+                         [(first.children[0].order_id, 'SETTLED', '2.0000')])
+        self.assertEqual(self.service.balance(self.auth())['balance_credits'], '998.0000')
+        self.assertEqual(self.service.balance(self.auth())['reserved_credits'], '0.0000')
+        self.assertEqual(self.service.own_quota(self.auth('member'))['used_credits'], '2.0000')
+        self.assertEqual(len([row for row in self.service.ledger(self.auth())['items'] if row['event_type'] == 'CHARGE']), 1)
+
+    def test_later_settlement_storage_failure_raises_with_prior_child_evidence_and_original_cause(self):
+        from sqlalchemy import event
+        from app.services.billing.embedding_adapter import EmbeddingMockAdapter, execute_embedding_batches, EmbeddingBatchInterrupted
+        attempts = 0
+        def fault(conn, cursor, statement, parameters, context, many):
+            nonlocal attempts
+            if statement.startswith('INSERT INTO credit_ledger'):
+                attempts += 1
+                if attempts == 2:
+                    raise RuntimeError('synthetic second ledger failure')
+        class Counting(EmbeddingMockAdapter):
+            calls = 0
+            def execute(adapter, request):
+                adapter.calls += 1
+                return super().execute(request)
+        response = {'data': [{'index': 0, 'embedding': [1, 2, 3]}], 'usage': {'prompt_tokens': 1000}}
+        batches = [self.request(['one']), self.request(['two'])]
+        adapters = [Counting(response), Counting(response)]
+        event.listen(self.engine, 'before_cursor_execute', fault)
+        try:
+            with self.assertRaises(EmbeddingBatchInterrupted) as error:
+                execute_embedding_batches(self.service, self.context(), self.model.model_key,
+                    batches, adapters=adapters)
+        finally:
+            event.remove(self.engine, 'before_cursor_execute', fault)
+        partial = error.exception.partial_result
+        self.assertIsInstance(error.exception.__cause__, RuntimeError)
+        self.assertFalse(partial.complete)
+        self.assertEqual((partial.failed_batch_index, partial.error_code), (1, 'BATCH_EXECUTION_INTERRUPTED'))
+        self.assertEqual(partial.partial_embeddings, [[1., 2., 3.]])
+        self.assertEqual(len(partial.children), 1)
+        successful = self.service.get_model_order(self.auth('member'), partial.children[0].order_id)
+        self.assertEqual((successful['status'], successful['charged_credits']), ('SETTLED', '2.0000'))
+        pending = next(row for row in self.service.model_orders(self.auth('member'))['items'] if row['id'] != successful['id'])
+        self.assertEqual((pending['status'], pending['reconciliation_status']), ('RESERVED', 'NEEDS_REVIEW'))
+        self.assertEqual(self.service.own_quota(self.auth('member'))['used_credits'], '2.0000')
+        self.assertEqual(self.service.balance(self.auth())['balance_credits'], '998.0000')
+        replay = execute_embedding_batches(self.service, self.context(), self.model.model_key, batches, adapters=adapters)
+        self.assertFalse(replay.complete)
+        self.assertEqual((replay.failed_batch_index, replay.error_code), (1, 'SETTLEMENT_PENDING'))
+        self.assertEqual([child.order_id for child in replay.children], [successful['id'], pending['id']])
+        self.assertEqual([adapter.calls for adapter in adapters], [1, 1])

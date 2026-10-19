@@ -1,6 +1,8 @@
 """Controlled embedding transport; input-only mock evidence, no vendor or storage I/O."""
 import math
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
+from fastapi import HTTPException
+from app.auth import AuthContext
 from app.services.billing.amounts import fail
 from app.services.billing.metering import AdapterOutcome, BillingContext, BoundedRequest
 from app.services.billing.registry import UsageContract
@@ -19,6 +21,17 @@ class EmbeddingBatchOutcome:
     embeddings: list | None
     children: tuple
     complete: bool
+    partial_embeddings: list = field(default_factory=list)
+    failed_batch_index: int | None = None
+    error_code: str | None = None
+
+
+class EmbeddingBatchInterrupted(RuntimeError):
+    """Unexpected storage/execution failure with confirmed earlier child evidence."""
+
+    def __init__(self, partial_result):
+        super().__init__('嵌入批次执行中断；此前已执行子订单见 partial_result')
+        self.partial_result = partial_result
 
 
 def execute_embedding_batches(service, context, model_key, batches, *, adapters):
@@ -44,13 +57,30 @@ def execute_embedding_batches(service, context, model_key, batches, *, adapters)
                     'bound_evidence': request.bound_evidence, 'specification': request.specification}
                    for request in batches])
     children, vectors = [], []
-    for key, request, adapter in zip(keys, batches, adapters):
+    for index, (key, request, adapter) in enumerate(zip(keys, batches, adapters)):
         bounded = replace(request, payload={**request.payload, '_batch_intent': plan})
-        outcome = service.execute_metered(replace(context, business_key=key), model_key, bounded, adapter=adapter)
-        children.append(outcome)
-        if (outcome.execution_status != 'SUCCEEDED' or outcome.usage['source'] == 'UNKNOWN' or
-                outcome.usage['input_tokens'] > request.maximum_usage['input_tokens']):
-            return EmbeddingBatchOutcome(None, tuple(children), False)
+        try:
+            outcome = service.execute_metered(replace(context, business_key=key), model_key, bounded, adapter=adapter)
+            children.append(outcome)
+            order = service.get_model_order(AuthContext(context.user_id, context.tenant_id, '', '', ''), outcome.order_id)
+        except HTTPException as error:
+            if not children:
+                raise
+            code = error.detail.get('code') if isinstance(error.detail, dict) else None
+            return EmbeddingBatchOutcome(None, tuple(children), False, vectors, index, code or 'BATCH_REQUEST_REJECTED')
+        except Exception as error:
+            if not children:
+                raise
+            partial = EmbeddingBatchOutcome(None, tuple(children), False, vectors, index, 'BATCH_EXECUTION_INTERRUPTED')
+            raise EmbeddingBatchInterrupted(partial) from error
+        if outcome.execution_status != 'SUCCEEDED':
+            return EmbeddingBatchOutcome(None, tuple(children), False, vectors, index, 'EXECUTION_' + outcome.execution_status)
+        if outcome.usage['source'] == 'UNKNOWN':
+            return EmbeddingBatchOutcome(None, tuple(children), False, vectors, index, 'USAGE_UNKNOWN')
+        if outcome.usage['input_tokens'] > request.maximum_usage['input_tokens']:
+            return EmbeddingBatchOutcome(None, tuple(children), False, vectors, index, 'USAGE_EXCEEDS_RESERVATION')
+        if order['status'] != 'SETTLED':
+            return EmbeddingBatchOutcome(None, tuple(children), False, vectors, index, 'SETTLEMENT_PENDING')
         vectors.extend(outcome.result['embeddings'])
     return EmbeddingBatchOutcome(vectors, tuple(children), True)
 

@@ -47,3 +47,16 @@
 - 自动重启/回退：均不触发；没有服务、配置、迁移、依赖安装或业务数据写入。目录联接只复用现有 node_modules，由主线程清理该 worktree 时移除。
 
 残余限制：这是受控 MOCK 闭环，不是 REAL gate 报告。真实嵌入、真实成本、真实 SDK 输入上界及业务 RAG 身份传播仍属于后续票；现有缺上下文入口继续拒绝，不能绕过账本。
+
+## 独立审核 P2 修复：后续预占失败保留部分消费证据
+
+- task_id：model-pricing-mvp-20261019-04-review-fix；时间：2026-10-19 18:30:48 +08:00。
+- 来源：独立报告 `D:/原力2222222222/model-pricing-work/review04.md` 的唯一 P2，复现脚本 `review04_repro.py`；主线程授权本 agent 为唯一 fixer，仅改本适配器、专属后端测试和本证据。
+- checkpoint/风险：先将 integration 14eaeca 合入本分支，产生本地合并检查点 815d598，修复收尾再次合入最新 integration 26e823c；本次仅本地提交，不推送。Git 操作范围、备份、失败保留、revert 回退及无自动重启沿用上节；不改 03/05、共享 metering、业务库、服务或配置。
+- 已核实问题：额度 5.0000，两批各预占 4.0000、实际各 2.0000，首批结算后第二批 QUOTA_EXCEEDED 直接抛出，调用方拿不到已结算首批子订单。账务没有丢失或重复；缺口是批量返回契约。新增用例先重现该异常（`review04-fix-red.log`），再修复。
+- 修改：预占/查询等业务 HTTP 异常发生在已有子结果后，返回 `complete=false`、此前确认的 `children`、`partial_embeddings`、零起始 `failed_batch_index` 和 `error_code`。没有创建订单的失败批次不会伪造订单引用；首笔消费前的原校验/错误行为保留。用量未知、超界及执行失败也明确返回失败位置和原因，后续批次不执行。
+- 意外执行/存储异常仍抛出类型化 `EmbeddingBatchInterrupted`，携带 `partial_result` 并以 `__cause__` 保留原异常，避免把未知故障吞成成功。另以第二笔 CHARGE 插入故障验证此边界。
+- 存储故障重放补充：已有向量和已知用量不能代替账务结算。批次通过公开 `get_model_order` 验证 SETTLED 才可完成；RESULT_READY 但尚未结算的重放返回 `SETTLEMENT_PENDING`，保留已执行子订单，不再次调用。对应原实现先错误 complete=true（`review04-replay-red.log`），修复后用例通过。
+- 实际检查：`test_embedding_metering.py` 15 项 + `test_model_call_guards.py` 2 项，共 17/17 通过，3.656 秒，日志 `review04-fix-green.log`；专属组件 4/4 通过，日志 `review04-components.log`；`git diff --check` 通过。此次纯 Python 修复未重跑 TypeScript 或打包。
+- 独立复现逆转：原 `review04_repro.py` 未修改，再执行两次均返回结构化部分失败；同一子订单 SETTLED/2.0000，calls=[1,0]、成员 used=2.0000，退出码 0，完整输出 `review04-repro-fixed.log`。
+- PostgreSQL：主线程已报告原 8a6e17b 版本 18/18 通过；该结果不覆盖本次新失败返回/存储回放用例。修复后的受影响 PostgreSQL 验证由主线程另行执行，暂不将最后验收勾为完成。
