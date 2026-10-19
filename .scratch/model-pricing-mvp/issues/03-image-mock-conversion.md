@@ -25,4 +25,4 @@ task_id: model-pricing-mvp-20261019-03
 
 共享执行器已支持精确 FOLDED 计量；ImageMockAdapter 仅生成或读取受控本地 PNG bytes，按解码且规格有效的数量计费。空结果、部分结果、未知用量、超预占、重放和调价快照分别验证；旧 Ark、Apilio 和 LocalDemo 无计费上下文入口在任何传输/存储前拒绝。
 
-实际检查：65/65 后端、12/12 组件及 TypeScript 定向检查通过。图像实际业务 API 尚未开放，验证入口沿内部可信 execute_metered；registry 不冒认厂商协议，真实图像调用与实际存储均为 0。PostgreSQL 独占 schema 事务复核由主线程集中执行，本票结果不替代该报告。详见 [03 证据](../evidence-03.md)。
+实际检查：65/65 后端、最新集成后16/16 组件及 TypeScript 定向检查通过。图像实际业务 API 尚未开放，验证入口沿内部可信 execute_metered；registry 不冒认厂商协议，真实图像调用与实际存储均为 0。PostgreSQL 独占 schema 事务复核由主线程集中执行，本票结果不替代该报告。详见 [03 证据](../evidence-03.md)。
