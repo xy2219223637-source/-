@@ -62,11 +62,17 @@ class SafetyTests(management.BillingFixture):
                     {"metric":"output_tokens","unit_size":1000,"credits_per_unit":"0.80"}]}]
         for payload in prices:
             response=self.client.post("/api/platform-admin/billing/price-rules",headers=tokens["platform"],json=payload)
-            self.assertEqual(response.status_code,201,response.text)
-            self.assertEqual(self.client.post(f"/api/platform-admin/billing/price-rules/{response.json()['id']}/activate",headers=tokens["platform"]).status_code,200)
+            self.assertEqual(response.status_code,410,response.text)
+            # Historical fixture uses the trusted legacy engine. The retired
+            # public route must never create a new legacy consumption intent.
+            from app.schemas.billing import PriceRequest
+            rule = self.service.create_price(self.auth(), PriceRequest(**payload))
+            self.service.activate_price(self.auth(), rule['id'])
+            self.assertEqual(self.client.post(f"/api/platform-admin/billing/price-rules/{rule['id']}/activate",headers=tokens["platform"]).status_code,410)
         for kind in ("fixed","text"):
             response=self.client.post(f"/api/ai/mock/{kind}",headers={**tokens["member"],"Idempotency-Key":str(uuid.uuid4())},json={"text":"test"})
-            self.assertEqual(response.status_code,200,response.text)
+            self.assertEqual(response.status_code,410,response.text)
+            self.service.run_mock(self.auth('member'), 'mock_' + kind, str(uuid.uuid4()), 'historical-fixture')
         result=self.client.get("/api/tenant-admin/billing/credits",headers=tokens["owner"]).json()
         self.assertEqual(result["balance_credits"],"9978.8000")
         self.assertEqual(result["reserved_credits"],"0.0000")

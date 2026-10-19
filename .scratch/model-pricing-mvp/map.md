@@ -10,7 +10,7 @@ task_id: model-pricing-mvp-20261019
 
 | 任务 | Blocked by | Status | 验收行为 |
 |---|---|---|---|
-| [01 模型当前费率](issues/01-model-current-pricing.md) | 无 | ready-for-agent | 管理员查看、保存、刷新模型费率，无版本操作 |
+| [01 模型当前费率](issues/01-model-current-pricing.md) | 无 | resolved | 管理员查看、保存、刷新模型费率，无版本操作；离线通过，目标库迁移未执行 |
 | [02 文本/视觉 mock](issues/02-text-vision-mock-billing.md) | 01 | ready-for-agent | 模拟消费、订单、企业/成员账务及展示闭环 |
 | [03 图像 mock 折算](issues/03-image-mock-conversion.md) | 02 | ready-for-agent | 图片用量折算、扣账及展示 |
 | [04 嵌入 mock](issues/04-embedding-mock-billing.md) | 02 | ready-for-agent | 仅输入 Token、批量子调用与账务展示 |
@@ -20,7 +20,7 @@ task_id: model-pricing-mvp-20261019
 | [08 图像真实验证](issues/08-image-real.md) | 06 | ready-for-agent | 最低有效生成、计次、用量及账务核对 |
 | [09 TTS/ASR 真实验证](issues/09-audio-real.md) | 06 | ready-for-agent | 最低有效音频、计次、原始用量及账务核对 |
 
-ready-for-agent 表示票已发布，不能跳过 Blocked by、验收或已有操作授权边界。当前唯一无阻塞任务是 01；发布任务不表示已开始开发。
+ready-for-agent 表示票已发布，不能跳过 Blocked by、验收或已有操作授权边界。01 的代码及离线范围已完成，下一开发入口为 02；不代表目标库迁移或真实调用获准。
 
 ```mermaid
 flowchart LR
@@ -65,4 +65,8 @@ flowchart LR
 - 已确认的真实调用预算是每供应商/模型/能力最多三次厂商最低有效规格。没有整体固定金额上限，但不授权无限次数、规格升级或备用供应商探测。
 - 迁移、配置/费率写入、账务写入和进程操作按适用授权及恢复要求执行；发布票不会替这些行为自动扩大授权。
 - 每票完成时记录实际检查、产物及残余限制，不能仅勾选；账本、审计及历史记录不通过删数据回滚。
-- 本主题后续变更追加入访谈与审计；当前恢复入口为 01，暂未执行开发。
+- 本主题后续变更追加入访谈与审计；当前恢复入口为 02，01 的实现与离线证据已落盘。
+
+## Decisions-so-far
+
+- 01：每供应商＋精确模型 ID 一套当前费率，永久幂等返回首次响应；默认 registry 不猜测真实计量协议。沿用显式 schema 迁移，保留历史及不可变保护，费用页同批移除版本管理。见 [票 01](issues/01-model-current-pricing.md)、[离线证据](evidence-01.md)、[迁移恢复](migration-v3.md)。

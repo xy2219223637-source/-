@@ -11,6 +11,9 @@ from app.schemas.billing import GrantRequest, QuotaRequest, PriceRequest, MockRe
 from app.services.billing.amounts import fail
 from app.services.billing.service import get_billing_service
 from app.services.redis_client import get_redis, redis_key
+from app.schemas.model_pricing import PricingInput, Pricing, Model, ModelPage, ERROR_RESPONSES
+from app.api.model_pricing_errors import ModelPricingRoute
+from typing import Literal
 
 
 def enabled(service=Depends(get_billing_service)):
@@ -19,7 +22,7 @@ def enabled(service=Depends(get_billing_service)):
     return service
 
 
-router = APIRouter(tags=["billing"], dependencies=[Depends(enabled)])
+router = APIRouter(tags=["billing"], route_class=ModelPricingRoute)
 
 
 class GrantRateLimiter:
@@ -119,33 +122,43 @@ def own_orders(auth: AuthContext = Depends(current_auth), service=Depends(enable
     return service.own_orders(auth, page, page_size)
 
 
-@router.post("/platform-admin/billing/price-rules", status_code=201)
-def create_price(payload: PriceRequest, auth: AuthContext = Depends(platform_admin), service=Depends(enabled)):
-    return service.create_price(auth, payload)
+@router.post("/platform-admin/billing/price-rules", status_code=410, responses=ERROR_RESPONSES, operation_id='retiredCreatePrice')
+def create_price(auth: AuthContext = Depends(platform_admin), service=Depends(enabled)):
+    fail('LEGACY_ENDPOINT_RETIRED', '版本创建入口已停用，请保存模型当前费率', 410)
 
 
-@router.get("/platform-admin/billing/price-rules")
+@router.get("/platform-admin/billing/price-rules", response_model=ModelPage, responses=ERROR_RESPONSES, operation_id='listModelPrices')
 def prices(auth: AuthContext = Depends(platform_admin), service=Depends(enabled),
-           page: int = Query(1, ge=1), page_size: int = Query(20, ge=1, le=100)):
-    return service.list_prices(auth, page, page_size)
+           page: int = Query(1, ge=1), page_size: int = Query(20, ge=1, le=100),
+           model_type: Literal['TEXT', 'VISION', 'IMAGE', 'EMBEDDING', 'TTS', 'ASR', 'VIDEO'] | None = None):
+    return service.list_model_prices(auth, page, page_size, model_type)
 
 
-@router.get("/platform-admin/billing/price-rules/summary")
+@router.get("/platform-admin/billing/price-rules/summary", status_code=410, responses=ERROR_RESPONSES, operation_id='retiredPriceSummary')
 def price_summary(auth: AuthContext = Depends(platform_admin), service=Depends(enabled)):
-    return service.price_summary(auth)
+    fail('LEGACY_ENDPOINT_RETIRED', '版本汇总入口已停用', 410)
 
 
-@router.post("/platform-admin/billing/price-rules/{price_id}/activate")
+@router.post("/platform-admin/billing/price-rules/{price_id}/activate", status_code=410, responses=ERROR_RESPONSES, operation_id='retiredActivatePrice')
 def activate_price(price_id: str, auth: AuthContext = Depends(platform_admin), service=Depends(enabled)):
-    return service.activate_price(auth, price_id)
+    fail('LEGACY_ENDPOINT_RETIRED', '版本启用入口已停用', 410)
 
 
-@router.post("/ai/mock/{kind}")
-def mock_call(kind: str, payload: MockRequest, response: Response,
-              auth: AuthContext = Depends(require_permission("billing.mock.use")), service=Depends(enabled),
-              key: str = Header(alias="Idempotency-Key", min_length=36, max_length=36)):
-    if not service.settings.billing_mock_enabled or not service.settings.billing_test_isolation or kind not in {"fixed", "text"}:
-        fail("RESOURCE_NOT_FOUND", "测试功能未开放", 404)
-    result, pending = service.run_mock(auth, "mock_"+kind, key, payload.text)
-    response.status_code = 202 if pending else 200
+@router.get('/platform-admin/billing/price-rules/{model_key}', response_model=Model, responses=ERROR_RESPONSES, operation_id='getModelPrice')
+def model_price(model_key: str, auth: AuthContext = Depends(platform_admin), service=Depends(enabled)):
+    return service.get_model_price(auth, model_key)
+
+
+@router.put('/platform-admin/billing/price-rules/{model_key}', response_model=Pricing, responses=ERROR_RESPONSES, operation_id='putModelPrice')
+def save_model_price(model_key: str, payload: PricingInput, response: Response,
+                     auth: AuthContext = Depends(platform_admin), service=Depends(enabled),
+                     key: str = Header(alias='Idempotency-Key', min_length=36, max_length=36)):
+    result, replay = service.put_model_price(auth, model_key, key, payload)
+    if replay:
+        response.headers['Idempotency-Replayed'] = 'true'
     return result
+
+
+@router.post("/ai/mock/{kind}", status_code=410, responses=ERROR_RESPONSES, operation_id='retiredMockCall')
+def mock_call(kind: str, auth: AuthContext = Depends(require_permission("billing.mock.use")), service=Depends(enabled)):
+    fail('LEGACY_ENDPOINT_RETIRED', '旧 mock 计价入口已停用；同模型离线验证由受控执行器运行', 410)

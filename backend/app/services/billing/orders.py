@@ -9,6 +9,7 @@ from sqlalchemy import func, select, text
 from app.models.billing import BillingOrder, BillingPriceRule, CreditLedger, MemberQuota
 from app.services.billing.amounts import amount, calculate, credits, fail
 from app.services.billing.service import GrantEnterpriseCreditsService, digest, key_uuid, utc_iso
+from app.services.billing.model_pricing import ModelPricingService
 
 FEATURES = {"mock_fixed": "FIXED", "mock_text": "USAGE"}
 
@@ -25,7 +26,7 @@ class MockAI:
         return {"message": "Token 测试完成"}, {"input_tokens": 2000, "output_tokens": 1000}
 
 
-class BillingOrderService(GrantEnterpriseCreditsService):
+class BillingOrderService(ModelPricingService):
     def price_lock(self, db):
         if db.get_bind().dialect.name == "postgresql":
             db.execute(text("SELECT pg_advisory_xact_lock(724913221)"))

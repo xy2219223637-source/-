@@ -76,6 +76,21 @@ class BillingPriceRule(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
 
 
+class BillingModelPrice(Base):
+    __tablename__ = "billing_model_prices"
+    __table_args__ = (
+        UniqueConstraint('provider', 'model_id', name='uq_billing_model_provider_id'),
+        CheckConstraint('length(model_key) = 32', name='ck_billing_model_key'),
+        {"info": {"explicit_migration_required": True}},
+    )
+    model_key: Mapped[str] = mapped_column(String(32), primary_key=True)
+    provider: Mapped[str] = mapped_column(String(64))
+    model_id: Mapped[str] = mapped_column(String(200))
+    current_pricing_json: Mapped[dict] = mapped_column(JSON)
+    updated_by: Mapped[str] = mapped_column(ForeignKey('users.id', ondelete='RESTRICT'))
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+
+
 class BillingOrder(Base):
     __tablename__ = "billing_orders"
     __table_args__ = (
@@ -83,6 +98,8 @@ class BillingOrder(Base):
         ForeignKeyConstraint(["tenant_id", "user_id", "period_key", "quota_id"],
                              ["member_quotas.tenant_id", "member_quotas.user_id", "member_quotas.period_key", "member_quotas.id"], ondelete="RESTRICT"),
         CheckConstraint("status IN ('RESERVED','SETTLED','CANCELED')", name="ck_billing_order_state"),
+        CheckConstraint("(pricing_rule_id IS NOT NULL AND model_price_id IS NULL) OR (pricing_rule_id IS NULL AND model_price_id IS NOT NULL)", name="ck_billing_order_price_source"),
+        CheckConstraint("execution_mode IN ('LEGACY','MOCK','REAL')", name="ck_billing_order_execution_mode"),
         CheckConstraint("reserved_microcredits >= 0 AND charged_microcredits >= 0 AND charged_microcredits <= reserved_microcredits", name="ck_billing_order_amount"),
         Index("ix_billing_order_owner", "tenant_id", "user_id", "created_at"),
         Index("ix_billing_order_expiry", "status", "expires_at"),
@@ -95,7 +112,10 @@ class BillingOrder(Base):
     quota_id: Mapped[str] = mapped_column(String(32))
     period_key: Mapped[str] = mapped_column(String(7))
     feature_code: Mapped[str] = mapped_column(String(100))
-    pricing_rule_id: Mapped[str] = mapped_column(ForeignKey("billing_price_rules.id", ondelete="RESTRICT"))
+    pricing_rule_id: Mapped[str | None] = mapped_column(ForeignKey("billing_price_rules.id", ondelete="RESTRICT"), nullable=True)
+    model_price_id: Mapped[str | None] = mapped_column(ForeignKey('billing_model_prices.model_key', ondelete='RESTRICT'), nullable=True)
+    metering_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    execution_mode: Mapped[str] = mapped_column(String(6), default='LEGACY', server_default='LEGACY')
     pricing_snapshot_json: Mapped[dict] = mapped_column(JSON)
     request_digest: Mapped[str] = mapped_column(String(64))
     settlement_digest: Mapped[str] = mapped_column(String(64), default="")
@@ -174,5 +194,5 @@ class BillingSchemaVersion(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
 
 
-BILLING_TABLES = (CreditAccount.__table__, MemberQuota.__table__, BillingPriceRule.__table__, BillingOrder.__table__,
+BILLING_TABLES = (CreditAccount.__table__, MemberQuota.__table__, BillingPriceRule.__table__, BillingModelPrice.__table__, BillingOrder.__table__,
                   CreditLedger.__table__, BillingIdempotency.__table__, BillingAuditEvent.__table__, BillingSchemaVersion.__table__)

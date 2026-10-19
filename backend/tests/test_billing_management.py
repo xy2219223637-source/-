@@ -259,7 +259,17 @@ class ManagementTests(BillingFixture):
         from app.models.billing import BillingSchemaVersion
         from app.services.billing.migration import checksum, verify
         from sqlalchemy.schema import CreateTable
-        self.grant()
+        # A v3 database relabeled v1 is not a v1 migration fixture. Use the
+        # frozen historical schema and sample history instead.
+        from test_model_pricing_migration import MigrationTests
+        legacy = MigrationTests()
+        legacy.setUp()
+        self.addCleanup(legacy.tearDown)
+        original_engine = self.engine
+        original_engine.dispose()
+        self.engine = legacy.engine
+        self.sessions = sessionmaker(bind=self.engine, expire_on_commit=False)
+        self.service = BillingService(self.sessions, self.settings)
         with self.engine.begin() as connection:
             clause = next(str(c.sqltext) for c in CreditLedger.__table__.constraints if c.name == "ck_credit_ledger_direction")
             old_clause = clause.replace("OR (event_type = 'REVOKE' AND delta_microcredits < 0 AND order_id IS NULL) ", "")
@@ -282,7 +292,7 @@ class ManagementTests(BillingFixture):
         with self.engine.connect() as connection:
             verify(connection)
         self.assertEqual(self.revoke().status_code, 201)
-        self.assertEqual(self.service.balance(self.auth())["balance_credits"], "900.0000")
+        self.assertEqual(self.service.balance(self.auth())["balance_credits"], "9880.0000")
         with self.assertRaises(Exception):
             with self.engine.begin() as connection:
                 connection.execute(text("DELETE FROM credit_ledger"))

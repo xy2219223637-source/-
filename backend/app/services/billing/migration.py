@@ -12,19 +12,37 @@ from sqlalchemy import CheckConstraint, ForeignKeyConstraint, UniqueConstraint, 
 
 from app.models.billing import BILLING_TABLES, BillingSchemaVersion
 
-VERSION = 2
+VERSION = 3
 IMMUTABLE = ("credit_ledger", "billing_audit_events", "billing_idempotency")
 PRICE_COLUMNS = ("id", "pricing_scope_key", "feature_code", "version", "billing_mode", "fixed_microcredits", "metric_rates_json", "created_by", "created_at")
 ORDER_COLUMNS = ("id", "request_id", "tenant_id", "user_id", "quota_id", "period_key", "feature_code", "pricing_rule_id", "pricing_snapshot_json", "request_digest", "reserved_microcredits", "max_usage_json", "created_at", "expires_at")
+LEGACY_ORDER_COLUMNS = ORDER_COLUMNS
+ORDER_COLUMNS += ('model_price_id', 'execution_mode')
+MODEL_IDENTITY_COLUMNS = ('model_key', 'provider', 'model_id')
+V3_ORDER_COLUMNS = {'model_price_id', 'metering_json', 'execution_mode'}
+V3_ORDER_CHECKS = {'ck_billing_order_price_source', 'ck_billing_order_execution_mode'}
+
+
+def version_tables(version):
+    return [table for table in BILLING_TABLES if version >= 3 or table.name != 'billing_model_prices']
+
+
+def version_columns(table, version):
+    return [column for column in table.columns if version >= 3 or table.name != 'billing_orders' or column.name not in V3_ORDER_COLUMNS]
+
+
+def version_constraints(table, version):
+    return [constraint for constraint in table.constraints if version >= 3 or table.name != 'billing_orders' or
+            (constraint.name not in V3_ORDER_CHECKS and not (isinstance(constraint, ForeignKeyConstraint) and any(c.name in V3_ORDER_COLUMNS for c in constraint.columns)))]
 
 
 def checksum(dialect, version=VERSION):
     # Constraint sets have no stable iteration order across Python processes.
     # A migration and a later app startup must nevertheless agree on this hash.
     structures = []
-    for table in sorted(BILLING_TABLES, key=lambda t: t.name):
+    for table in sorted(version_tables(version), key=lambda t: t.name):
         constraints = []
-        for constraint in table.constraints:
+        for constraint in version_constraints(table, version):
             if isinstance(constraint, CheckConstraint):
                 constraints.append(["check", constraint.name, str(constraint.sqltext).replace("OR (event_type = 'REVOKE' AND delta_microcredits < 0 AND order_id IS NULL) ", "") if version == 1 else str(constraint.sqltext)])
             elif isinstance(constraint, UniqueConstraint):
@@ -32,24 +50,28 @@ def checksum(dialect, version=VERSION):
             elif isinstance(constraint, ForeignKeyConstraint):
                 constraints.append(["foreign", [c.name for c in constraint.columns], [e.target_fullname for e in constraint.elements], constraint.ondelete])
         structures.append({"name": table.name,
-            "columns": [[c.name,str(c.type.compile(dialect=dialect)),c.nullable,c.primary_key] for c in table.columns],
+            "columns": [[c.name,str(c.type.compile(dialect=dialect)),False if version < 3 and table.name == 'billing_orders' and c.name == 'pricing_rule_id' else c.nullable,c.primary_key] for c in version_columns(table, version)],
             "constraints": sorted(constraints,key=lambda c:json.dumps(c)),
             "indexes": sorted([[i.name,i.unique,[c.name for c in i.columns],str(i.dialect_options[dialect.name].get("where"))] for i in table.indexes])})
-    canonical = {"tables":structures,"append_only":IMMUTABLE,"price_snapshot":PRICE_COLUMNS,"order_snapshot":ORDER_COLUMNS,"version":version}
+    canonical = {"tables":structures,"append_only":IMMUTABLE,"price_snapshot":PRICE_COLUMNS,"order_snapshot":ORDER_COLUMNS if version >= 3 else LEGACY_ORDER_COLUMNS,"version":version}
+    if version >= 3:
+        canonical['model_identity'] = MODEL_IDENTITY_COLUMNS
     return hashlib.sha256(json.dumps(canonical,sort_keys=True,separators=(",",":")).encode()).hexdigest()
 
 
 def verify(connection, version=VERSION):
     inspector = inspect(connection)
-    for table in BILLING_TABLES:
+    for table in version_tables(version):
         if not inspector.has_table(table.name):
             raise RuntimeError(f"Billing migration required: missing {table.name}")
         columns = {c["name"]: c for c in inspector.get_columns(table.name)}
-        if set(columns) != set(table.columns.keys()):
+        expected_columns = version_columns(table, version)
+        if set(columns) != {c.name for c in expected_columns}:
             raise RuntimeError(f"Incompatible billing columns: {table.name}")
-        for column in table.columns:
+        for column in expected_columns:
             actual = columns.get(column.name)
-            if actual is None or actual["nullable"] != column.nullable or actual["type"]._type_affinity != column.type._type_affinity:
+            nullable = False if version < 3 and table.name == 'billing_orders' and column.name == 'pricing_rule_id' else column.nullable
+            if actual is None or actual["nullable"] != nullable or actual["type"]._type_affinity != column.type._type_affinity:
                 raise RuntimeError(f"Incompatible billing column: {table.name}.{column.name}")
             if getattr(actual["type"], "length", None) != getattr(column.type, "length", None):
                 raise RuntimeError(f"Incompatible billing column length: {table.name}.{column.name}")
@@ -58,7 +80,7 @@ def verify(connection, version=VERSION):
         if set(inspector.get_pk_constraint(table.name)["constrained_columns"]) != {c.name for c in table.primary_key}:
             raise RuntimeError(f"Incompatible billing primary key: {table.name}")
         uniques = {tuple(c["column_names"]) for c in inspector.get_unique_constraints(table.name)}
-        for constraint in table.constraints:
+        for constraint in version_constraints(table, version):
             if isinstance(constraint, UniqueConstraint) and tuple(c.name for c in constraint.columns) not in uniques:
                 raise RuntimeError(f"Missing billing uniqueness: {table.name}")
             if isinstance(constraint, ForeignKeyConstraint):
@@ -88,8 +110,12 @@ def verify(connection, version=VERSION):
     else:
         triggers = set(connection.execute(text("SELECT name FROM sqlite_master WHERE type='trigger'")).scalars())
     required = {f"billing_immutable_{table}" for table in IMMUTABLE} | {"billing_price_snapshot", "billing_order_snapshot"}
+    if version >= 3:
+        required |= {'billing_model_identity'}
     if connection.dialect.name == "sqlite":
         required |= {f"billing_no_delete_{table}" for table in IMMUTABLE} | {"billing_price_no_delete", "billing_order_no_delete"}
+        if version >= 3:
+            required.add('billing_model_no_delete')
     if not required <= triggers:
         raise RuntimeError("Billing immutable ledger/audit/idempotency protection missing")
 
@@ -115,10 +141,12 @@ def migrate_billing(bind, *, backup_confirmed=False):
         existing = set(inspect(connection).get_table_names()) & {t.name for t in BILLING_TABLES}
         if existing:
             versions = list(connection.execute(select(BillingSchemaVersion.version)).scalars())
-            if versions == [1]:
-                verify(connection, version=1)
-                upgrade_ledger(connection)
-                connection.execute(BillingSchemaVersion.__table__.update().where(BillingSchemaVersion.version == 1).values(version=VERSION, checksum=checksum(connection.dialect)))
+            if versions in ([1], [2]):
+                verify(connection, version=versions[0])
+                if versions == [1]:
+                    upgrade_ledger(connection)
+                upgrade_model_prices(connection)
+                connection.execute(BillingSchemaVersion.__table__.update().values(version=VERSION, checksum=checksum(connection.dialect)))
                 verify(connection)
                 return {"status": "upgraded", "version": VERSION, "backup_path": backup_path}
             verify(connection)
@@ -154,6 +182,7 @@ def migrate_billing(bind, *, backup_confirmed=False):
             else:
                 connection.execute(text(f"CREATE TRIGGER billing_{label}_snapshot BEFORE UPDATE ON {table_name} WHEN {comparison}{transition} BEGIN SELECT RAISE(ABORT, 'billing snapshot is immutable'); END"))
                 connection.execute(text(f"CREATE TRIGGER billing_{label}_no_delete BEFORE DELETE ON {table_name} BEGIN SELECT RAISE(ABORT, 'billing snapshot is immutable'); END"))
+        protect_model_identity(connection)
         connection.execute(BillingSchemaVersion.__table__.insert().values(version=VERSION, checksum=checksum(connection.dialect)))
         # Only built-in roles are upgraded; never silently expand custom roles.
         from app.models import TenantRole
@@ -170,6 +199,64 @@ def migrate_billing(bind, *, backup_confirmed=False):
                     actor_id="billing-migration", action="ROLE_UPGRADE", resource_id=str(role["id"]), changes_json={"before":before,"after":after}))
         verify(connection)
     return {"status": "migrated", "version": VERSION, "backup_path": backup_path}
+
+
+def protect_model_identity(connection):
+    comparison = ' OR '.join(f'NEW.{c} IS DISTINCT FROM OLD.{c}' if connection.dialect.name == 'postgresql' else f'NEW.{c} IS NOT OLD.{c}' for c in MODEL_IDENTITY_COLUMNS)
+    if connection.dialect.name == 'postgresql':
+        connection.execute(text(f"""CREATE OR REPLACE FUNCTION billing_protect_model_identity() RETURNS trigger LANGUAGE plpgsql AS $$
+            BEGIN IF TG_OP='DELETE' THEN RAISE EXCEPTION 'billing model identity is immutable'; END IF;
+            IF {comparison} THEN RAISE EXCEPTION 'billing model identity is immutable'; END IF; RETURN NEW; END $$"""))
+        connection.execute(text('CREATE TRIGGER billing_model_identity BEFORE UPDATE OR DELETE ON billing_model_prices FOR EACH ROW EXECUTE FUNCTION billing_protect_model_identity()'))
+    else:
+        connection.execute(text(f"CREATE TRIGGER billing_model_identity BEFORE UPDATE ON billing_model_prices WHEN {comparison} BEGIN SELECT RAISE(ABORT, 'billing model identity is immutable'); END"))
+        connection.execute(text("CREATE TRIGGER billing_model_no_delete BEFORE DELETE ON billing_model_prices BEGIN SELECT RAISE(ABORT, 'billing model identity is immutable'); END"))
+
+
+def upgrade_model_prices(connection):
+    """Explicit v2→v3, preserving all legacy price/order/ledger values."""
+    from app.models.billing import BillingModelPrice, BillingOrder
+    BillingModelPrice.__table__.create(connection)
+    if connection.dialect.name == 'postgresql':
+        connection.execute(text('ALTER TABLE billing_orders ADD COLUMN model_price_id VARCHAR(32) REFERENCES billing_model_prices(model_key) ON DELETE RESTRICT'))
+        connection.execute(text('ALTER TABLE billing_orders ADD COLUMN metering_json JSON'))
+        connection.execute(text("ALTER TABLE billing_orders ADD COLUMN execution_mode VARCHAR(6) NOT NULL DEFAULT 'LEGACY'"))
+        connection.execute(text('ALTER TABLE billing_orders ALTER COLUMN pricing_rule_id DROP NOT NULL'))
+        for constraint in BillingOrder.__table__.constraints:
+            if constraint.name in V3_ORDER_CHECKS:
+                connection.execute(text(f'ALTER TABLE billing_orders ADD CONSTRAINT {constraint.name} CHECK ({constraint.sqltext})'))
+        connection.execute(text('DROP TRIGGER billing_order_snapshot ON billing_orders'))
+    else:
+        # SQLite cannot alter nullability: rebuild under its write lock. Existing
+        # referencing ledger rows are checked again before committing this DDL.
+        from sqlalchemy.schema import CreateTable
+        connection.execute(text('PRAGMA defer_foreign_keys=ON'))
+        ddl = str(CreateTable(BillingOrder.__table__).compile(dialect=connection.dialect)).replace('CREATE TABLE billing_orders', 'CREATE TABLE billing_orders_v3', 1)
+        connection.execute(text(ddl))
+        names = ', '.join(c.name for c in version_columns(BillingOrder.__table__, 2))
+        connection.execute(text(f'INSERT INTO billing_orders_v3 ({names}) SELECT {names} FROM billing_orders'))
+        connection.execute(text('DROP TABLE billing_orders'))
+        connection.execute(text('ALTER TABLE billing_orders_v3 RENAME TO billing_orders'))
+        for index in BillingOrder.__table__.indexes:
+            index.create(connection)
+        if connection.execute(text('PRAGMA foreign_key_check')).first():
+            raise RuntimeError('Model price migration foreign key validation failed')
+        # DROP/restore of the referenced table leaves SQLite's deferred counter
+        # set even after every reference is valid. The complete check above is
+        # authoritative; resume immediate enforcement before any further work.
+        connection.execute(text('PRAGMA defer_foreign_keys=OFF'))
+    comparison = ' OR '.join(f'NEW.{c} IS DISTINCT FROM OLD.{c}' if connection.dialect.name == 'postgresql' else f'NEW.{c} IS NOT OLD.{c}' for c in ORDER_COLUMNS)
+    if connection.dialect.name == 'postgresql':
+        for column in ('pricing_snapshot_json', 'max_usage_json'):
+            comparison = comparison.replace(f'NEW.{column} IS DISTINCT FROM OLD.{column}', f'NEW.{column}::jsonb IS DISTINCT FROM OLD.{column}::jsonb')
+        connection.execute(text(f"""CREATE OR REPLACE FUNCTION billing_protect_order() RETURNS trigger LANGUAGE plpgsql AS $$
+            BEGIN IF TG_OP='DELETE' THEN RAISE EXCEPTION 'billing snapshot is immutable'; END IF;
+            IF {comparison} OR OLD.status IN ('SETTLED','CANCELED') THEN RAISE EXCEPTION 'billing snapshot is immutable'; END IF; RETURN NEW; END $$"""))
+        connection.execute(text('CREATE TRIGGER billing_order_snapshot BEFORE UPDATE OR DELETE ON billing_orders FOR EACH ROW EXECUTE FUNCTION billing_protect_order()'))
+    else:
+        connection.execute(text(f"CREATE TRIGGER billing_order_snapshot BEFORE UPDATE ON billing_orders WHEN {comparison} OR OLD.status IN ('SETTLED','CANCELED') BEGIN SELECT RAISE(ABORT, 'billing snapshot is immutable'); END"))
+        connection.execute(text("CREATE TRIGGER billing_order_no_delete BEFORE DELETE ON billing_orders BEGIN SELECT RAISE(ABORT, 'billing snapshot is immutable'); END"))
+    protect_model_identity(connection)
 
 
 def upgrade_ledger(connection):

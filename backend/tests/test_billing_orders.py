@@ -40,12 +40,11 @@ class OrderTests(BillingFixture):
         return self.service.reserve(self.auth(user), request or uuid.uuid4().hex, feature,
                                     {} if feature=="mock_fixed" else {"input_tokens":3000,"output_tokens":2000}, "test-business")
 
-    def test_T06_T07_T18_end_to_end_fixed_usage_shared_pool(self):
+    def test_T06_T07_T18_historical_fixed_usage_shared_pool(self):
         self.assertEqual(self.service.estimate("mock_text",{"input_tokens":2000,"output_tokens":1000})["estimated_credits"],"1.2000")
         for feature, charged in (("fixed", "20.0000"), ("text", "1.2000")):
-            response = self.client.post(f"/api/ai/mock/{feature}", json={"text":"test"}, headers=self.headers("member"))
-            self.assertEqual(response.status_code, 200, response.text)
-            self.assertEqual(response.json()["charged_credits"], charged)
+            result, _ = self.service.run_mock(self.auth('member'), 'mock_' + feature, str(uuid.uuid4()), 'historical-fixture')
+            self.assertEqual(result['charged_credits'], charged)
         result = self.client.get("/api/tenant-admin/billing/credits", headers=self.headers("owner")).json()
         self.assertEqual(result["balance_credits"], "9978.8000")
         self.assertEqual(result["reserved_credits"], "0.0000")
@@ -53,17 +52,17 @@ class OrderTests(BillingFixture):
         self.assertEqual(self.service.own_quota(self.auth("member2"))["used_credits"], "0.0000")
         self.assertTrue(self.service.check_accounts()["ok"])
 
-    def test_T09_http_replay_executes_once_and_body_conflict(self):
+    def test_T09_historical_engine_replay_executes_once_and_body_conflict(self):
         key = str(uuid.uuid4())
         with patch.object(MockAI, "execute", wraps=MockAI().execute) as execute:
-            first = self.client.post("/api/ai/mock/text", json={"text":"x"}, headers=self.headers("member", key))
-            replay = self.client.post("/api/ai/mock/text", json={"text":"x"}, headers=self.headers("member", key))
-            conflict = self.client.post("/api/ai/mock/text", json={"text":"y"}, headers=self.headers("member", key))
+            first, _ = self.service.run_mock(self.auth('member'), 'mock_text', key, 'x')
+            replay, _ = self.service.run_mock(self.auth('member'), 'mock_text', key, 'x')
+            with self.assertRaises(HTTPException) as conflict:
+                self.service.run_mock(self.auth('member'), 'mock_text', key, 'y')
             self.assertEqual(execute.call_count, 1)
-        self.assertEqual(first.status_code, 200, first.text)
         # SQLite's timestamp serialization can differ in tz suffix after reload; identity/result must be stable.
-        self.assertEqual(first.json(), replay.json())
-        self.assertEqual(conflict.status_code, 409)
+        self.assertEqual(first, replay)
+        self.assertEqual(conflict.exception.status_code, 409)
         order = self.reserve()
         self.service.settle(order["id"], {}, {"ok":True})
         self.service.settle(order["id"], {}, {"ok":True})
@@ -89,8 +88,9 @@ class OrderTests(BillingFixture):
     def test_T10_no_execution_when_no_quota_or_balance(self):
         self.quota(value="0")
         with patch.object(MockAI, "execute") as execute:
-            response = self.client.post("/api/ai/mock/fixed", json={}, headers=self.headers("member"))
-            self.assertEqual(response.status_code, 409)
+            with self.assertRaises(HTTPException) as caught:
+                self.service.run_mock(self.auth('member'), 'mock_fixed', str(uuid.uuid4()), 'historical-fixture')
+            self.assertEqual(caught.exception.status_code, 409)
             execute.assert_not_called()
         self.quota(value="100")
         self.publish("mock_fixed", "20000", 2)
@@ -109,12 +109,12 @@ class OrderTests(BillingFixture):
 
     def test_T13_T23_no_public_settle_no_usage_spoof_no_other_orders(self):
         self.assertEqual(self.client.post("/internal/billing/settle", json={}).status_code, 404)
-        self.assertEqual(self.client.post("/api/ai/mock/text", headers=self.headers("member"), json={"actual_usage":{"input_tokens":1}}).status_code, 422)
+        self.assertEqual(self.client.post("/api/ai/mock/text", headers=self.headers("member"), json={"actual_usage":{"input_tokens":1}}).status_code, 410)
         self.service.run_mock(self.auth("member"), "mock_text", str(uuid.uuid4()), "x")
         self.assertEqual(self.service.own_orders(self.auth("member2"))["total"], 0)
         self.assertEqual(self.service.own_orders(self.auth("other"))["total"], 0)
         self.settings.billing_mock_enabled=False
-        self.assertEqual(self.client.post("/api/ai/mock/text", headers=self.headers("member"), json={}).status_code, 404)
+        self.assertEqual(self.client.post("/api/ai/mock/text", headers=self.headers("member"), json={}).status_code, 410)
 
     def test_T14_unknown_rates_metrics_and_final_rounding(self):
         self.assertEqual(calculate({"billing_mode":"USAGE","metrics":[{"metric":"input_tokens","unit_size":3,"credits_per_unit":"0.0001"},
@@ -293,7 +293,9 @@ class OrderTests(BillingFixture):
         path = "/api/platform-admin/billing/price-rules"
         for uid in ("owner", "member", "other"):
             self.assertEqual(self.client.get(path + "/summary", headers=self.headers(uid)).status_code, 403)
-        summary = self.client.get(path + "/summary", headers=self.headers()).json()["items"]
+        summary_response = self.client.get(path + "/summary", headers=self.headers())
+        self.assertEqual(summary_response.status_code, 410)
+        summary = self.service.price_summary(self.auth())["items"]
         self.assertEqual({row["feature_code"] for row in summary}, {"mock_fixed", "mock_text"})
         self.assertTrue(all(row["next_version"] == 2 for row in summary))
         self.assertEqual(next(row for row in summary if row["feature_code"] == "mock_fixed")["active"]["fixed_credits"], "20.0000")
@@ -302,19 +304,21 @@ class OrderTests(BillingFixture):
             {"metric":"input_tokens", "unit_size":1000, "credits_per_unit":"2"},
             {"metric":"output_tokens", "unit_size":1000, "credits_per_unit":"4"}]}
         response = self.client.post(path, json=payload, headers=self.headers())
-        self.assertEqual(response.status_code, 201, response.text)
-        self.assertEqual(response.json()["status"], "DRAFT")
+        self.assertEqual(response.status_code, 410, response.text)
+        price = self.service.create_price(self.auth(), PriceRequest(**payload))
+        self.assertEqual(price['status'], 'DRAFT')
         self.assertEqual(self.service.estimate("mock_text", {"input_tokens":2000,"output_tokens":1000})["estimated_credits"], "1.2000")
-        price_id = response.json()["id"]
-        self.assertEqual(self.client.post(path+f"/{price_id}/activate", headers=self.headers()).status_code, 200)
-        self.assertEqual(self.client.post(path+f"/{price_id}/activate", headers=self.headers()).status_code, 200)
+        price_id = price['id']
+        self.assertEqual(self.client.post(path+f"/{price_id}/activate", headers=self.headers()).status_code, 410)
+        self.service.activate_price(self.auth(), price_id)
         self.assertEqual(self.service.estimate("mock_text", {"input_tokens":2000,"output_tokens":1000})["estimated_credits"], "8.0000")
         self.assertEqual(self.service.settle(old["id"], {"input_tokens":2000,"output_tokens":1000}, {})["charged_credits"], "1.2000")
         payload["version"] = 99
-        self.assertEqual(self.client.post(path, json=payload, headers=self.headers()).status_code, 201)
-        summary = self.client.get(path+"/summary", headers=self.headers()).json()["items"]
+        self.assertEqual(self.client.post(path, json=payload, headers=self.headers()).status_code, 410)
+        self.service.create_price(self.auth(), PriceRequest(**payload))
+        summary = self.service.price_summary(self.auth())["items"]
         row = next(item for item in summary if item["feature_code"] == "mock_text")
         self.assertEqual(row["next_version"], 100)
         self.assertEqual(row["active"]["pricing_version"], 2)
-        self.assertEqual(self.client.post(path, json=payload, headers=self.headers()).status_code, 409)
+        self.assertEqual(self.client.post(path, json=payload, headers=self.headers()).status_code, 410)
         self.assertTrue(self.service.check_accounts()["ok"])
