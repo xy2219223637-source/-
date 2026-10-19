@@ -1,0 +1,34 @@
+{
+  "task_id": "model-pricing-mvp-20261019-pg-isolated",
+  "started_at": "2026-10-19T10:24:43.283643+00:00",
+  "authorization": "User explicitly approved isolated-schema targeted verification, 2026-10-19",
+  "scope": "synthetic task-owned schemas only; no existing business schema writes",
+  "schemas": [
+    {
+      "name": "test_billing_ba13631c0ef04d68ae34a6aa682374e3",
+      "test": "__main__.PostgresHistoricalOrderTests.test_T11_T20_concurrent_members_cannot_overspend_last_pool",
+      "state": "cleaned",
+      "at": "2026-10-19T10:24:50.350006+00:00"
+    }
+  ],
+  "tests": [
+    {
+      "id": "__main__.PostgresHistoricalOrderTests.test_T11_T20_concurrent_members_cannot_overspend_last_pool",
+      "result": "passed"
+    }
+  ],
+  "vendor_requests": 0,
+  "real_storage_requests": 0,
+  "selected_method": "test_T11_T20_concurrent_members_cannot_overspend_last_pool",
+  "source_digest_before": "75218db1ac821c9534d4cdab7fed388cdad134d4d9f998b56611ad8a1aa81f41",
+  "environment_ref": "d06030ee0880a2db13dbabbb32c24354388bfb885bdd1b6fdee9526557db9e2d",
+  "business_schema_version_before": [
+    2
+  ],
+  "business_schema_version_after": [
+    2
+  ],
+  "source_digest_after": "75218db1ac821c9534d4cdab7fed388cdad134d4d9f998b56611ad8a1aa81f41",
+  "ok": true,
+  "finished_at": "2026-10-19T10:24:54.769842+00:00"
+}
