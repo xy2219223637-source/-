@@ -1,0 +1,204 @@
+{
+  "task_id": "model-pricing-mvp-20261019-pg-isolated",
+  "started_at": "2026-10-19T10:22:17.149053+00:00",
+  "authorization": "User explicitly approved isolated-schema targeted verification, 2026-10-19",
+  "scope": "synthetic task-owned schemas only; no existing business schema writes",
+  "schemas": [
+    {
+      "name": "test_billing_6095ff04646a44eb8e94b8b4b704fec2",
+      "test": "__main__.PostgresImageMeteringTests.test_confirmed_empty_result_and_unknown_count_have_different_accounting",
+      "state": "cleaned",
+      "at": "2026-10-19T10:22:18.512603+00:00"
+    },
+    {
+      "name": "test_billing_fe78297c91e14d6589c479b009ca17b0",
+      "test": "__main__.PostgresImageMeteringTests.test_converted_token_upper_bound_is_checked_before_generation",
+      "state": "cleaned",
+      "at": "2026-10-19T10:22:22.329536+00:00"
+    },
+    {
+      "name": "test_billing_64a9c5e0674d44cb95dc3ca3946e5186",
+      "test": "__main__.PostgresImageMeteringTests.test_effective_images_use_exact_fraction_and_only_final_credit_rounding",
+      "state": "cleaned",
+      "at": "2026-10-19T10:22:24.781722+00:00"
+    },
+    {
+      "name": "test_billing_3535851509864434b3b657a5848cdb12",
+      "test": "__main__.PostgresImageMeteringTests.test_image_price_roundtrip_rejects_wrong_source_and_token_mode",
+      "state": "cleaned",
+      "at": "2026-10-19T10:22:27.317234+00:00"
+    },
+    {
+      "name": "test_billing_5f76a80f97f44686b9c92b6f16f2c379",
+      "test": "__main__.PostgresImageMeteringTests.test_insufficient_quota_does_not_generate_or_reserve_images",
+      "state": "cleaned",
+      "at": "2026-10-19T10:22:29.382521+00:00"
+    },
+    {
+      "name": "test_billing_9aa8215fe2be4e01bcb6609e36ef4283",
+      "test": "__main__.PostgresImageMeteringTests.test_local_mock_images_decode_and_never_touch_vendor_or_object_storage",
+      "state": "cleaned",
+      "at": "2026-10-19T10:22:31.243907+00:00"
+    },
+    {
+      "name": "test_billing_4ad59176ca6447cd9c61b0160df2b8a3",
+      "test": "__main__.PostgresImageMeteringTests.test_over_bound_valid_images_keep_reservation_instead_of_overcharging",
+      "state": "cleaned",
+      "at": "2026-10-19T10:22:37.919239+00:00"
+    },
+    {
+      "name": "test_billing_1fffb9e58ed34908a9e343b602246f03",
+      "test": "__main__.PostgresImageMeteringTests.test_partial_result_bills_only_decoded_images_not_requested_count",
+      "state": "cleaned",
+      "at": "2026-10-19T10:22:40.959623+00:00"
+    },
+    {
+      "name": "test_billing_73fc049d923948f79d2e82263645de56",
+      "test": "__main__.PostgresImageMeteringTests.test_proved_no_usage_cancels_but_indeterminate_failure_keeps_reservation",
+      "state": "cleaned",
+      "at": "2026-10-19T10:22:42.670535+00:00"
+    },
+    {
+      "name": "test_billing_fc84b86828ab4dde838c25b410087b4b",
+      "test": "__main__.PostgresImageMeteringTests.test_real_image_providers_and_local_demo_cannot_bypass_context",
+      "state": "cleaned",
+      "at": "2026-10-19T10:22:44.747607+00:00"
+    },
+    {
+      "name": "test_billing_e2657667c9f24cfe96f2d569804263e4",
+      "test": "__main__.PostgresImageMeteringTests.test_replay_price_snapshot_and_accounting_remain_consistent",
+      "state": "cleaned",
+      "at": "2026-10-19T10:22:46.827556+00:00"
+    },
+    {
+      "name": "test_billing_97f09f8cd473474890ad94a18bf9ff0e",
+      "test": "__main__.PostgresImageMeteringTests.test_six_digit_conversion_zero_unknown_and_invalid_quantities_are_distinct",
+      "state": "cleaned",
+      "at": "2026-10-19T10:22:49.849229+00:00"
+    },
+    {
+      "name": "test_billing_21810aab4d5048c89b962f47f629fae9",
+      "test": "__main__.PostgresImageMeteringTests.test_unpriced_image_specifications_are_rejected_before_reservation_or_generation",
+      "state": "cleaned",
+      "at": "2026-10-19T10:22:54.214885+00:00"
+    },
+    {
+      "name": "test_billing_934b2cfd8c63416cadb5899be2c7efe9",
+      "test": "__main__.PostgresHistoricalOrderTests.test_T11_T20_concurrent_members_cannot_overspend_last_pool",
+      "state": "cleaned",
+      "at": "2026-10-19T10:22:56.554070+00:00"
+    },
+    {
+      "name": "test_billing_0a1648398a3e4936ba982cd4519dc5af",
+      "test": "__main__.PostgresHistoricalOrderTests.test_cancel_settle_race_and_usage_over_reservation",
+      "state": "cleaned",
+      "at": "2026-10-19T10:23:03.405541+00:00"
+    },
+    {
+      "name": "test_billing_55ada9523ddc406299833189b0f6ccde",
+      "test": "__main__.PostgresHistoricalOrderTests.test_member_quota_race_and_quota_lowering_cannot_break_reservations",
+      "state": "cleaned",
+      "at": "2026-10-19T10:23:07.162724+00:00"
+    },
+    {
+      "name": "test_billing_a32ff7bb72224c10884c1aa2565c60be",
+      "test": "__main__.PostgresHistoricalOrderTests.test_T12_old_snapshot_and_price_immutability",
+      "state": "cleaned",
+      "at": "2026-10-19T10:23:09.511904+00:00"
+    },
+    {
+      "name": "test_billing_004bd3c67a574d7687189d8992eaeff8",
+      "test": "__main__.PostgresManagementTests.test_T30_audit_failure_rolls_back_balance_ledger_and_key",
+      "state": "cleaned",
+      "at": "2026-10-19T10:23:13.034156+00:00"
+    }
+  ],
+  "tests": [
+    {
+      "id": "__main__.PostgresImageMeteringTests.test_confirmed_empty_result_and_unknown_count_have_different_accounting",
+      "result": "passed"
+    },
+    {
+      "id": "__main__.PostgresImageMeteringTests.test_converted_token_upper_bound_is_checked_before_generation",
+      "result": "passed"
+    },
+    {
+      "id": "__main__.PostgresImageMeteringTests.test_effective_images_use_exact_fraction_and_only_final_credit_rounding",
+      "result": "passed"
+    },
+    {
+      "id": "__main__.PostgresImageMeteringTests.test_image_price_roundtrip_rejects_wrong_source_and_token_mode",
+      "result": "passed"
+    },
+    {
+      "id": "__main__.PostgresImageMeteringTests.test_insufficient_quota_does_not_generate_or_reserve_images",
+      "result": "passed"
+    },
+    {
+      "id": "__main__.PostgresImageMeteringTests.test_local_mock_images_decode_and_never_touch_vendor_or_object_storage",
+      "result": "passed"
+    },
+    {
+      "id": "__main__.PostgresImageMeteringTests.test_over_bound_valid_images_keep_reservation_instead_of_overcharging",
+      "result": "passed"
+    },
+    {
+      "id": "__main__.PostgresImageMeteringTests.test_partial_result_bills_only_decoded_images_not_requested_count",
+      "result": "passed"
+    },
+    {
+      "id": "__main__.PostgresImageMeteringTests.test_proved_no_usage_cancels_but_indeterminate_failure_keeps_reservation",
+      "result": "passed"
+    },
+    {
+      "id": "__main__.PostgresImageMeteringTests.test_real_image_providers_and_local_demo_cannot_bypass_context",
+      "result": "passed"
+    },
+    {
+      "id": "__main__.PostgresImageMeteringTests.test_replay_price_snapshot_and_accounting_remain_consistent",
+      "result": "passed"
+    },
+    {
+      "id": "__main__.PostgresImageMeteringTests.test_six_digit_conversion_zero_unknown_and_invalid_quantities_are_distinct",
+      "result": "passed"
+    },
+    {
+      "id": "__main__.PostgresImageMeteringTests.test_unpriced_image_specifications_are_rejected_before_reservation_or_generation",
+      "result": "passed"
+    },
+    {
+      "id": "__main__.PostgresHistoricalOrderTests.test_T11_T20_concurrent_members_cannot_overspend_last_pool",
+      "result": "error",
+      "error_type": "OperationalError"
+    },
+    {
+      "id": "__main__.PostgresHistoricalOrderTests.test_cancel_settle_race_and_usage_over_reservation",
+      "result": "passed"
+    },
+    {
+      "id": "__main__.PostgresHistoricalOrderTests.test_member_quota_race_and_quota_lowering_cannot_break_reservations",
+      "result": "passed"
+    },
+    {
+      "id": "__main__.PostgresHistoricalOrderTests.test_T12_old_snapshot_and_price_immutability",
+      "result": "passed"
+    },
+    {
+      "id": "__main__.PostgresManagementTests.test_T30_audit_failure_rolls_back_balance_ledger_and_key",
+      "result": "passed"
+    }
+  ],
+  "vendor_requests": 0,
+  "real_storage_requests": 0,
+  "source_digest_before": "75218db1ac821c9534d4cdab7fed388cdad134d4d9f998b56611ad8a1aa81f41",
+  "environment_ref": "d06030ee0880a2db13dbabbb32c24354388bfb885bdd1b6fdee9526557db9e2d",
+  "business_schema_version_before": [
+    2
+  ],
+  "business_schema_version_after": [
+    2
+  ],
+  "source_digest_after": "75218db1ac821c9534d4cdab7fed388cdad134d4d9f998b56611ad8a1aa81f41",
+  "ok": false,
+  "finished_at": "2026-10-19T10:23:15.411556+00:00"
+}
