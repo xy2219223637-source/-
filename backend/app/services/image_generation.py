@@ -14,6 +14,7 @@ import httpx
 from PIL import Image, ImageDraw, ImageEnhance, ImageFont, ImageOps
 
 from app.config import get_settings
+from app.services.billing.metering import reject_unmetered
 from app.services.storage import get_storage
 
 FONT_PATH = next((path for path in ("/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc", "/System/Library/Fonts/STHeiti Medium.ttc") if Path(path).exists()), "/System/Library/Fonts/STHeiti Medium.ttc")
@@ -73,6 +74,7 @@ class ArkSeedreamImageProvider:
         height: int,
         project_id: int,
     ) -> list[str]:
+        reject_unmetered(get_settings())
         # An explicit empty list means "generate a background plate without
         # reference images". Only fall back to source_url when the caller did
         # not provide source_urls at all.
@@ -146,6 +148,7 @@ class ApilioImageProvider:
         height: int,
         project_id: int,
     ) -> list[str]:
+        reject_unmetered(get_settings())
         input_urls = [source_url] if source_urls is None else source_urls
         image_inputs = [_image_input(url) for url in input_urls[:10] if url]
         urls: list[str] = []
@@ -201,6 +204,7 @@ class LocalDemoImageProvider:
         height: int,
         project_id: int,
     ) -> list[str]:
+        reject_unmetered(get_settings())
         input_urls = [source_url] if source_urls is None else source_urls
         source_paths = [path for url in input_urls if (path := _local_path(url))]
         sources = [Image.open(path).convert("RGB") for path in source_paths]
