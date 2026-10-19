@@ -16,8 +16,8 @@ Status: needs-triage
 
 最新执行顺序（用户明确修正，优先于此前表述）：**先用 mock 跑通完整的数据与计费流程，通过后再做真实模型测试。** mock 是同模型、同计费链路的供应商替身，不能以“优化旧 mock 功能”为由跳过此阶段。旧 mock_fixed/mock_text 两种功能价升级与该 mock 阶段不矛盾：前者是被替换的旧计价对象，后者是继续保留并先执行的验证方式。
 
-task_id：model-pricing-mvp-20261019  
-更新时间：2026-10-19（Asia/Singapore）  
+task_id：model-pricing-mvp-20261019
+更新时间：2026-10-19（Asia/Singapore）
 来源：本次用户 Q1–Q12 答复，详见 [访谈记录](interview.md)。
 
 ## 结论与交付范围

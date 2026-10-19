@@ -4,9 +4,9 @@
 - 来源：用户 2026-10-19 调用 implement-spec，入口 map.md；中途禁止任何提交，随后于17:38 +08:00明确改为“允许本地提交并推送指定中转仓库”。本地技能集成恢复；目标GitHub仓库尚待提供，原Gitee origin不推送，不创建远程PR或发布。
 - 目标：按九票依赖实现同模型当前费率与计费链路；完成定向测试和独立审核；需环境授权的验收不冒充通过。
 - 基线：Computing_Power_Management / 3deddd85350a897620aca705584f58147366b15d。
-- 当前 step：01，在 codex/model-pricing-01 独立 worktree 实施；集成 worktree 为 D:/原力2222222222/model-pricing-work/integration，分支 codex/model-pricing-mvp。用户最新授权允许本地集成提交。
+- 当前 step：01已集成e03d588并推送本次中转分支；02在独立worktree实施，01独立审核和厂商协议只读核查并行。集成worktree为D:/原力2222222222/model-pricing-work/integration，分支codex/model-pricing-mvp。
 - 已完成：读取 spec、API、九票、tracker、术语和现有测试/迁移代码。
-- 待完成：01→02→03/04→05→06→07/08/09；独立双轴审核、修复与验证。
+- 待完成：02→03/04→05→06→07/08/09；独立双轴审核、修复与验证。
 - 测试边界：已由各票确认的计价规则、管理/订单 API、账务事务、供应商适配器和组件；按 TDD 逐条验证，默认无全量构建/E2E。
 - checkpoint：原始 HEAD 与本记录；原工作区三项既有改动不纳入提交。
 - 风险：本地提交/合并产生 Git 状态；迁移修改影响 schema checksum；运行服务仍使用旧 schema，不能提前热加载新代码。
@@ -20,3 +20,4 @@
 - 下一步：01 实施/TDD，逐票本地集成并回归，最后独立双轴审核；最终仅推送用户指定中转仓库 https://github.com/xy2219223637-source/-.git 的 codex/model-pricing-mvp 分支。原 Gitee origin 不变；不改中转 main，不强推。
 - 2026-10-19T17:43 +08:00：中转仓库 ls-remote 读取 main=2afb757b65979304ff87b665d69fdde2fbb9e4e7；禁交互 push --dry-run 通过，使用系统既有Git凭据，不使用用户发来的密码。gh及GitHub connector未登录不影响Git已验证的推送通道。尚未实际推送。
 - 2026-10-19T17:41:03 +08:00：现有PostgreSQL只读事务核实版本[2]、旧schema完整性通过；证据为外部read-only-preflight.json，仅保存脱敏环境引用，未写库。这是文件配置对应库，不能证明运行进程已加载配置。目标迁移、费率/账务写入仍待单独授权。
+- 2026-10-19T17:52 +08:00：01代码已快进至e03d588并正常推送中转codex/model-pricing-mvp；独立复跑53项=52通过/Redis1跳过，外部完整日志ticket01-independent-tests.log。跨基线diff --check发现原规范两处Markdown行尾空格，随后移除并重新检查；不把首次失败藏作通过。远程SHA另以ls-remote核验。
