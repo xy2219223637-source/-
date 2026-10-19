@@ -1,0 +1,243 @@
+{
+  "task_id": "model-pricing-mvp-20261019-pg-isolated",
+  "started_at": "2026-10-19T10:10:35.824659+00:00",
+  "authorization": "User explicitly approved isolated-schema targeted verification, 2026-10-19",
+  "scope": "synthetic task-owned schemas only; no existing business schema writes",
+  "schemas": [
+    {
+      "name": "test_billing_4693bb99a61d46c199b803b9a20573fc",
+      "test": "__main__.PostgresModelMeteringTests.test_adapter_specification_validation_precedes_reservation_and_is_immutable",
+      "state": "cleaned",
+      "at": "2026-10-19T10:10:41.494855+00:00"
+    },
+    {
+      "name": "test_billing_d7f6a42993bc43549e24098fba2ba528",
+      "test": "__main__.PostgresModelMeteringTests.test_concurrent_replay_calls_transport_once_and_returns_same_order",
+      "state": "cleaned",
+      "at": "2026-10-19T10:10:44.430415+00:00"
+    },
+    {
+      "name": "test_billing_69b4d2090a2b4970829024eead24acb4",
+      "test": "__main__.PostgresModelMeteringTests.test_exported_query_contract_and_scoped_errors_and_pagination_order",
+      "state": "cleaned",
+      "at": "2026-10-19T10:10:46.770651+00:00"
+    },
+    {
+      "name": "test_billing_5fa9911261944c72a915110de1e99751",
+      "test": "__main__.PostgresModelMeteringTests.test_four_order_queries_enforce_self_tenant_and_domain_permissions",
+      "state": "cleaned",
+      "at": "2026-10-19T10:10:51.077931+00:00"
+    },
+    {
+      "name": "test_billing_7b34d2868e1047b5b495f6bd8c9188fc",
+      "test": "__main__.PostgresModelMeteringTests.test_internal_old_mock_entrypoint_is_retired_without_consumption",
+      "state": "cleaned",
+      "at": "2026-10-19T10:10:54.702333+00:00"
+    },
+    {
+      "name": "test_billing_5f635756d0884e32a5e49f698fc0c751",
+      "test": "__main__.PostgresModelMeteringTests.test_ledger_storage_fault_rolls_back_then_recovery_uses_persisted_result",
+      "state": "cleaned",
+      "at": "2026-10-19T10:10:56.672043+00:00"
+    },
+    {
+      "name": "test_billing_d3fb7cfbd1514032a5b25d5776484f4b",
+      "test": "__main__.PostgresModelMeteringTests.test_missing_context_permissions_price_bound_and_credits_never_call_transport",
+      "state": "cleaned",
+      "at": "2026-10-19T10:10:59.626641+00:00"
+    },
+    {
+      "name": "test_billing_1b71810cf9a3459baf06621f5e4e8659",
+      "test": "__main__.PostgresModelMeteringTests.test_mock_transport_and_queries_work_with_network_and_storage_forbidden",
+      "state": "cleaned",
+      "at": "2026-10-19T10:11:07.179392+00:00"
+    },
+    {
+      "name": "test_billing_4a605e38d7804e1aab9729dd333bac87",
+      "test": "__main__.PostgresModelMeteringTests.test_one_persisted_business_intent_cannot_be_charged_again_by_another_member",
+      "state": "cleaned",
+      "at": "2026-10-19T10:11:10.085721+00:00"
+    },
+    {
+      "name": "test_billing_3681fadea6f9438eb06a52127afe0d1e",
+      "test": "__main__.PostgresModelMeteringTests.test_proven_no_consumption_cancels_zero_is_distinct_from_unknown",
+      "state": "cleaned",
+      "at": "2026-10-19T10:11:12.495973+00:00"
+    },
+    {
+      "name": "test_billing_5b56b135170449ea8da0527ecb45250e",
+      "test": "__main__.PostgresModelMeteringTests.test_reservation_snapshot_survives_price_change_during_transport",
+      "state": "cleaned",
+      "at": "2026-10-19T10:11:15.465125+00:00"
+    },
+    {
+      "name": "test_billing_1bb601f7d985436c92e2f43f8281d379",
+      "test": "__main__.PostgresModelMeteringTests.test_saved_price_cannot_override_missing_current_adapter_usage_contract",
+      "state": "cleaned",
+      "at": "2026-10-19T10:11:18.941311+00:00"
+    },
+    {
+      "name": "test_billing_d4e4c453788940a9b5e98928a52f0dd9",
+      "test": "__main__.PostgresModelMeteringTests.test_tenant_namespace_and_live_permission_recheck",
+      "state": "cleaned",
+      "at": "2026-10-19T10:11:21.632337+00:00"
+    },
+    {
+      "name": "test_billing_79ee48e8a63c42fd84c6d12d63e9ea5f",
+      "test": "__main__.PostgresModelMeteringTests.test_text_and_vision_each_cover_rollback_unknown_replay_price_and_denial",
+      "state": "cleaned",
+      "at": "2026-10-19T10:11:25.539250+00:00"
+    },
+    {
+      "name": "test_billing_d2ee9964b2e94a98ba6d5525da0eb9ac",
+      "test": "__main__.PostgresModelMeteringTests.test_text_success_uses_shared_account_member_and_unique_ledger",
+      "state": "cleaned",
+      "at": "2026-10-19T10:11:32.024171+00:00"
+    },
+    {
+      "name": "test_billing_5eca6b15dee0454891e35cc1e735bbdb",
+      "test": "__main__.PostgresModelMeteringTests.test_unknown_timeout_and_over_bound_retain_reservation_no_charge",
+      "state": "cleaned",
+      "at": "2026-10-19T10:11:34.694623+00:00"
+    },
+    {
+      "name": "test_billing_c58cd7a3df9248719be1578f2a133845",
+      "test": "__main__.PostgresModelMeteringTests.test_vision_and_replay_share_model_price_but_never_reinvoke",
+      "state": "cleaned",
+      "at": "2026-10-19T10:11:39.682546+00:00"
+    },
+    {
+      "name": "test_billing_e0aa6128015b4ecd8ffcf5239886c856",
+      "test": "__main__.PostgresHistoricalOrderTests.test_T11_T20_concurrent_members_cannot_overspend_last_pool",
+      "state": "cleaned",
+      "at": "2026-10-19T10:11:41.964033+00:00"
+    },
+    {
+      "name": "test_billing_02dc79c2a1fe4fa19db735d5b0560269",
+      "test": "__main__.PostgresHistoricalOrderTests.test_cancel_settle_race_and_usage_over_reservation",
+      "state": "cleaned",
+      "at": "2026-10-19T10:11:44.674165+00:00"
+    },
+    {
+      "name": "test_billing_83b6be593ab942f88dda6fa67fa7868f",
+      "test": "__main__.PostgresHistoricalOrderTests.test_member_quota_race_and_quota_lowering_cannot_break_reservations",
+      "state": "cleaned",
+      "at": "2026-10-19T10:11:47.980278+00:00"
+    },
+    {
+      "name": "test_billing_a59ccb657846423b9df75d670ec41831",
+      "test": "__main__.PostgresHistoricalOrderTests.test_T12_old_snapshot_and_price_immutability",
+      "state": "cleaned",
+      "at": "2026-10-19T10:11:50.410936+00:00"
+    },
+    {
+      "name": "test_billing_b0e9c821334b4e579042d0e11de2c1e5",
+      "test": "__main__.PostgresManagementTests.test_T30_audit_failure_rolls_back_balance_ledger_and_key",
+      "state": "cleaned",
+      "at": "2026-10-19T10:11:57.474488+00:00"
+    }
+  ],
+  "tests": [
+    {
+      "id": "__main__.PostgresModelMeteringTests.test_adapter_specification_validation_precedes_reservation_and_is_immutable",
+      "result": "passed"
+    },
+    {
+      "id": "__main__.PostgresModelMeteringTests.test_concurrent_replay_calls_transport_once_and_returns_same_order",
+      "result": "passed"
+    },
+    {
+      "id": "__main__.PostgresModelMeteringTests.test_exported_query_contract_and_scoped_errors_and_pagination_order",
+      "result": "passed"
+    },
+    {
+      "id": "__main__.PostgresModelMeteringTests.test_four_order_queries_enforce_self_tenant_and_domain_permissions",
+      "result": "passed"
+    },
+    {
+      "id": "__main__.PostgresModelMeteringTests.test_internal_old_mock_entrypoint_is_retired_without_consumption",
+      "result": "passed"
+    },
+    {
+      "id": "__main__.PostgresModelMeteringTests.test_ledger_storage_fault_rolls_back_then_recovery_uses_persisted_result",
+      "result": "passed"
+    },
+    {
+      "id": "__main__.PostgresModelMeteringTests.test_missing_context_permissions_price_bound_and_credits_never_call_transport",
+      "result": "passed"
+    },
+    {
+      "id": "__main__.PostgresModelMeteringTests.test_mock_transport_and_queries_work_with_network_and_storage_forbidden",
+      "result": "passed"
+    },
+    {
+      "id": "__main__.PostgresModelMeteringTests.test_one_persisted_business_intent_cannot_be_charged_again_by_another_member",
+      "result": "passed"
+    },
+    {
+      "id": "__main__.PostgresModelMeteringTests.test_proven_no_consumption_cancels_zero_is_distinct_from_unknown",
+      "result": "passed"
+    },
+    {
+      "id": "__main__.PostgresModelMeteringTests.test_reservation_snapshot_survives_price_change_during_transport",
+      "result": "passed"
+    },
+    {
+      "id": "__main__.PostgresModelMeteringTests.test_saved_price_cannot_override_missing_current_adapter_usage_contract",
+      "result": "passed"
+    },
+    {
+      "id": "__main__.PostgresModelMeteringTests.test_tenant_namespace_and_live_permission_recheck",
+      "result": "passed"
+    },
+    {
+      "id": "__main__.PostgresModelMeteringTests.test_text_and_vision_each_cover_rollback_unknown_replay_price_and_denial",
+      "result": "passed"
+    },
+    {
+      "id": "__main__.PostgresModelMeteringTests.test_text_success_uses_shared_account_member_and_unique_ledger",
+      "result": "passed"
+    },
+    {
+      "id": "__main__.PostgresModelMeteringTests.test_unknown_timeout_and_over_bound_retain_reservation_no_charge",
+      "result": "passed"
+    },
+    {
+      "id": "__main__.PostgresModelMeteringTests.test_vision_and_replay_share_model_price_but_never_reinvoke",
+      "result": "passed"
+    },
+    {
+      "id": "__main__.PostgresHistoricalOrderTests.test_T11_T20_concurrent_members_cannot_overspend_last_pool",
+      "result": "passed"
+    },
+    {
+      "id": "__main__.PostgresHistoricalOrderTests.test_cancel_settle_race_and_usage_over_reservation",
+      "result": "passed"
+    },
+    {
+      "id": "__main__.PostgresHistoricalOrderTests.test_member_quota_race_and_quota_lowering_cannot_break_reservations",
+      "result": "passed"
+    },
+    {
+      "id": "__main__.PostgresHistoricalOrderTests.test_T12_old_snapshot_and_price_immutability",
+      "result": "passed"
+    },
+    {
+      "id": "__main__.PostgresManagementTests.test_T30_audit_failure_rolls_back_balance_ledger_and_key",
+      "result": "passed"
+    }
+  ],
+  "vendor_requests": 0,
+  "real_storage_requests": 0,
+  "source_digest_before": "217a6203f533c1202faa8158ef71bb75d1e2a0611f06fabbfe8b51b3787e6503",
+  "environment_ref": "d06030ee0880a2db13dbabbb32c24354388bfb885bdd1b6fdee9526557db9e2d",
+  "business_schema_version_before": [
+    2
+  ],
+  "business_schema_version_after": [
+    2
+  ],
+  "source_digest_after": "217a6203f533c1202faa8158ef71bb75d1e2a0611f06fabbfe8b51b3787e6503",
+  "ok": true,
+  "finished_at": "2026-10-19T10:11:58.804723+00:00"
+}
