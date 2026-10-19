@@ -1,0 +1,224 @@
+{
+  "task_id": "model-pricing-mvp-20261019-pg-isolated",
+  "started_at": "2026-10-19T10:33:19.782930+00:00",
+  "authorization": "User explicitly approved isolated-schema targeted verification, 2026-10-19",
+  "scope": "synthetic task-owned schemas only; no existing business schema writes",
+  "schemas": [
+    {
+      "name": "test_billing_12f27be28a2e44848ec41c1d3180461d",
+      "test": "__main__.PostgresEmbeddingMeteringTests.test_all_batches_must_have_proven_bounds_before_first_consumption",
+      "state": "cleaned",
+      "at": "2026-10-19T10:33:21.107123+00:00"
+    },
+    {
+      "name": "test_billing_5188200a8b5c47569a5a4e604aff6511",
+      "test": "__main__.PostgresEmbeddingMeteringTests.test_batch_with_confirmed_usage_over_bound_does_not_report_complete_or_continue",
+      "state": "cleaned",
+      "at": "2026-10-19T10:33:23.143320+00:00"
+    },
+    {
+      "name": "test_billing_7c20dbcbe7e244bfb3d7a8f3b04fd04a",
+      "test": "__main__.PostgresEmbeddingMeteringTests.test_batches_charge_per_transport_not_per_vector_and_replay_all_child_orders",
+      "state": "cleaned",
+      "at": "2026-10-19T10:33:26.041273+00:00"
+    },
+    {
+      "name": "test_billing_d02e7f6d4b784842a1fea1bb390f5096",
+      "test": "__main__.PostgresEmbeddingMeteringTests.test_embedding_price_and_order_api_keep_independent_identity_input_only_and_mock_cost",
+      "state": "cleaned",
+      "at": "2026-10-19T10:33:29.319374+00:00"
+    },
+    {
+      "name": "test_billing_ee6c6047bb1743ce8905e02dfe316de5",
+      "test": "__main__.PostgresEmbeddingMeteringTests.test_invalid_embedding_requests_are_rejected_before_reservation_or_transport",
+      "state": "cleaned",
+      "at": "2026-10-19T10:33:32.021476+00:00"
+    },
+    {
+      "name": "test_billing_b63321fcf7e547f38ee4a2c740ffa3b1",
+      "test": "__main__.PostgresEmbeddingMeteringTests.test_later_quota_reservation_failure_returns_charged_child_and_replays_without_calling_again",
+      "state": "cleaned",
+      "at": "2026-10-19T10:33:34.071597+00:00"
+    },
+    {
+      "name": "test_billing_b3894c64f66c4b339b28e3e4e90a9d3b",
+      "test": "__main__.PostgresEmbeddingMeteringTests.test_later_settlement_storage_failure_raises_with_prior_child_evidence_and_original_cause",
+      "state": "cleaned",
+      "at": "2026-10-19T10:33:36.611491+00:00"
+    },
+    {
+      "name": "test_billing_d774c1ec22dd4387a54cfab89d451796",
+      "test": "__main__.PostgresEmbeddingMeteringTests.test_malformed_vectors_fail_execution_but_preserve_known_input_consumption",
+      "state": "cleaned",
+      "at": "2026-10-19T10:33:45.116212+00:00"
+    },
+    {
+      "name": "test_billing_1113f54493a2423b87ca7930e855584f",
+      "test": "__main__.PostgresEmbeddingMeteringTests.test_missing_invalid_input_usage_stays_unknown_and_confirmed_zero_is_distinct",
+      "state": "cleaned",
+      "at": "2026-10-19T10:33:51.347527+00:00"
+    },
+    {
+      "name": "test_billing_a04a31aa651a4647801b3e4595d4cc19",
+      "test": "__main__.PostgresEmbeddingMeteringTests.test_mock_transport_and_batch_replay_never_use_network_or_object_storage",
+      "state": "cleaned",
+      "at": "2026-10-19T10:33:55.107414+00:00"
+    },
+    {
+      "name": "test_billing_f81ce089c9434952b579f986677abafe",
+      "test": "__main__.PostgresEmbeddingMeteringTests.test_partial_batches_return_success_and_failed_child_orders_without_retry_or_later_calls",
+      "state": "cleaned",
+      "at": "2026-10-19T10:33:58.161198+00:00"
+    },
+    {
+      "name": "test_billing_48dfaac8a61944f8a54f968a16a2b991",
+      "test": "__main__.PostgresEmbeddingMeteringTests.test_single_input_only_embedding_uses_same_account_quota_and_unique_charge",
+      "state": "cleaned",
+      "at": "2026-10-19T10:34:01.458607+00:00"
+    },
+    {
+      "name": "test_billing_84db36f7e41d4cf7bfe66b0acda39da8",
+      "test": "__main__.PostgresEmbeddingMeteringTests.test_snapshot_repricing_and_insufficient_allowance_preserve_call_boundaries",
+      "state": "cleaned",
+      "at": "2026-10-19T10:34:03.365751+00:00"
+    },
+    {
+      "name": "test_billing_d7b28758eada46f8821227525a9e2a91",
+      "test": "__main__.PostgresEmbeddingMeteringTests.test_two_vector_duplicate_or_missing_index_is_not_a_successful_batch",
+      "state": "cleaned",
+      "at": "2026-10-19T10:34:11.897366+00:00"
+    },
+    {
+      "name": "test_billing_fb5aad213ff044e0809a404f5a883e21",
+      "test": "__main__.PostgresEmbeddingMeteringTests.test_unknown_partial_batch_keeps_first_charge_and_second_reservation",
+      "state": "cleaned",
+      "at": "2026-10-19T10:34:14.681316+00:00"
+    },
+    {
+      "name": "test_billing_dc2e3e8d5c3f4cb583a83fe2055c86a1",
+      "test": "__main__.PostgresHistoricalOrderTests.test_T11_T20_concurrent_members_cannot_overspend_last_pool",
+      "state": "cleaned",
+      "at": "2026-10-19T10:34:17.214574+00:00"
+    },
+    {
+      "name": "test_billing_fb0fe02f178341b6aa1b8f6c95b9e555",
+      "test": "__main__.PostgresHistoricalOrderTests.test_cancel_settle_race_and_usage_over_reservation",
+      "state": "cleaned",
+      "at": "2026-10-19T10:34:20.514478+00:00"
+    },
+    {
+      "name": "test_billing_8f5ee32de9884ae3999cc83942a3975e",
+      "test": "__main__.PostgresHistoricalOrderTests.test_member_quota_race_and_quota_lowering_cannot_break_reservations",
+      "state": "cleaned",
+      "at": "2026-10-19T10:34:22.763178+00:00"
+    },
+    {
+      "name": "test_billing_a28904ce9c56445e9009611255f57988",
+      "test": "__main__.PostgresHistoricalOrderTests.test_T12_old_snapshot_and_price_immutability",
+      "state": "cleaned",
+      "at": "2026-10-19T10:34:24.973569+00:00"
+    },
+    {
+      "name": "test_billing_e2b769ef4a7d47c08293b31f765b0f23",
+      "test": "__main__.PostgresManagementTests.test_T30_audit_failure_rolls_back_balance_ledger_and_key",
+      "state": "cleaned",
+      "at": "2026-10-19T10:34:27.397588+00:00"
+    }
+  ],
+  "tests": [
+    {
+      "id": "__main__.PostgresEmbeddingMeteringTests.test_all_batches_must_have_proven_bounds_before_first_consumption",
+      "result": "passed"
+    },
+    {
+      "id": "__main__.PostgresEmbeddingMeteringTests.test_batch_with_confirmed_usage_over_bound_does_not_report_complete_or_continue",
+      "result": "passed"
+    },
+    {
+      "id": "__main__.PostgresEmbeddingMeteringTests.test_batches_charge_per_transport_not_per_vector_and_replay_all_child_orders",
+      "result": "passed"
+    },
+    {
+      "id": "__main__.PostgresEmbeddingMeteringTests.test_embedding_price_and_order_api_keep_independent_identity_input_only_and_mock_cost",
+      "result": "passed"
+    },
+    {
+      "id": "__main__.PostgresEmbeddingMeteringTests.test_invalid_embedding_requests_are_rejected_before_reservation_or_transport",
+      "result": "passed"
+    },
+    {
+      "id": "__main__.PostgresEmbeddingMeteringTests.test_later_quota_reservation_failure_returns_charged_child_and_replays_without_calling_again",
+      "result": "passed"
+    },
+    {
+      "id": "__main__.PostgresEmbeddingMeteringTests.test_later_settlement_storage_failure_raises_with_prior_child_evidence_and_original_cause",
+      "result": "passed"
+    },
+    {
+      "id": "__main__.PostgresEmbeddingMeteringTests.test_malformed_vectors_fail_execution_but_preserve_known_input_consumption",
+      "result": "passed"
+    },
+    {
+      "id": "__main__.PostgresEmbeddingMeteringTests.test_missing_invalid_input_usage_stays_unknown_and_confirmed_zero_is_distinct",
+      "result": "passed"
+    },
+    {
+      "id": "__main__.PostgresEmbeddingMeteringTests.test_mock_transport_and_batch_replay_never_use_network_or_object_storage",
+      "result": "passed"
+    },
+    {
+      "id": "__main__.PostgresEmbeddingMeteringTests.test_partial_batches_return_success_and_failed_child_orders_without_retry_or_later_calls",
+      "result": "passed"
+    },
+    {
+      "id": "__main__.PostgresEmbeddingMeteringTests.test_single_input_only_embedding_uses_same_account_quota_and_unique_charge",
+      "result": "passed"
+    },
+    {
+      "id": "__main__.PostgresEmbeddingMeteringTests.test_snapshot_repricing_and_insufficient_allowance_preserve_call_boundaries",
+      "result": "passed"
+    },
+    {
+      "id": "__main__.PostgresEmbeddingMeteringTests.test_two_vector_duplicate_or_missing_index_is_not_a_successful_batch",
+      "result": "passed"
+    },
+    {
+      "id": "__main__.PostgresEmbeddingMeteringTests.test_unknown_partial_batch_keeps_first_charge_and_second_reservation",
+      "result": "passed"
+    },
+    {
+      "id": "__main__.PostgresHistoricalOrderTests.test_T11_T20_concurrent_members_cannot_overspend_last_pool",
+      "result": "passed"
+    },
+    {
+      "id": "__main__.PostgresHistoricalOrderTests.test_cancel_settle_race_and_usage_over_reservation",
+      "result": "passed"
+    },
+    {
+      "id": "__main__.PostgresHistoricalOrderTests.test_member_quota_race_and_quota_lowering_cannot_break_reservations",
+      "result": "passed"
+    },
+    {
+      "id": "__main__.PostgresHistoricalOrderTests.test_T12_old_snapshot_and_price_immutability",
+      "result": "passed"
+    },
+    {
+      "id": "__main__.PostgresManagementTests.test_T30_audit_failure_rolls_back_balance_ledger_and_key",
+      "result": "passed"
+    }
+  ],
+  "vendor_requests": 0,
+  "real_storage_requests": 0,
+  "selected_method": null,
+  "source_digest_before": "2806fee8fbb8460c0a92d1da14bc592683f68bdc552830d378c61507d03951e5",
+  "environment_ref": "d06030ee0880a2db13dbabbb32c24354388bfb885bdd1b6fdee9526557db9e2d",
+  "business_schema_version_before": [
+    2
+  ],
+  "business_schema_version_after": [
+    2
+  ],
+  "source_digest_after": "2806fee8fbb8460c0a92d1da14bc592683f68bdc552830d378c61507d03951e5",
+  "ok": true,
+  "finished_at": "2026-10-19T10:34:29.494984+00:00"
+}
