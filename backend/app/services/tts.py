@@ -15,6 +15,9 @@ TTS_ENDPOINT = "https://openspeech.bytedance.com/api/v3/tts/unidirectional"
 
 def synthesize_speech(text: str, output: Path, speaker: Optional[str] = None, *, timing_output: Optional[dict] = None, parameters: Optional[dict] = None) -> Path:
     settings = get_settings()
+    if getattr(settings, 'billing_enabled', False):
+        from app.services.billing.metering import reject_unmetered
+        reject_unmetered(settings)
 
     if not settings.doubao_tts_api_key:
         raise RuntimeError("豆包 TTS API Key 未配置")

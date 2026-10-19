@@ -1,0 +1,48 @@
+{
+  "task_id": "model-pricing-mvp-20261019-pg-isolated",
+  "started_at": "2026-10-19T10:39:10.252088+00:00",
+  "authorization": "User explicitly approved isolated-schema targeted verification, 2026-10-19",
+  "scope": "synthetic task-owned schemas only; no existing business schema writes",
+  "schemas": [
+    {
+      "name": "test_billing_377a80b0a923459ab837b4fcd8fac013",
+      "test": "__main__.PostgresAudioMeteringTests.test_odd_pcm_data_chunk_rejects_asr_before_reservation_and_submit",
+      "state": "cleaned",
+      "at": "2026-10-19T10:39:11.540394+00:00"
+    },
+    {
+      "name": "test_billing_b0a88b0f313b487d91047340281e355a",
+      "test": "__main__.PostgresAudioMeteringTests.test_odd_pcm_tts_response_is_failed_with_unknown_usage_and_retained_reservation",
+      "state": "cleaned",
+      "at": "2026-10-19T10:39:13.915240+00:00"
+    }
+  ],
+  "tests": [
+    {
+      "id": "__main__.PostgresAudioMeteringTests.test_odd_pcm_data_chunk_rejects_asr_before_reservation_and_submit",
+      "result": "passed"
+    },
+    {
+      "id": "__main__.PostgresAudioMeteringTests.test_odd_pcm_tts_response_is_failed_with_unknown_usage_and_retained_reservation",
+      "result": "passed"
+    }
+  ],
+  "vendor_requests": 0,
+  "real_storage_requests": 0,
+  "selected_method": null,
+  "selected_methods": [
+    "test_odd_pcm_data_chunk_rejects_asr_before_reservation_and_submit",
+    "test_odd_pcm_tts_response_is_failed_with_unknown_usage_and_retained_reservation"
+  ],
+  "source_digest_before": "6e6957f42c329e2755eb980f35669662aa199d681e8913f81893606ac6fd18db",
+  "environment_ref": "d06030ee0880a2db13dbabbb32c24354388bfb885bdd1b6fdee9526557db9e2d",
+  "business_schema_version_before": [
+    2
+  ],
+  "business_schema_version_after": [
+    2
+  ],
+  "source_digest_after": "6e6957f42c329e2755eb980f35669662aa199d681e8913f81893606ac6fd18db",
+  "ok": true,
+  "finished_at": "2026-10-19T10:39:16.916990+00:00"
+}

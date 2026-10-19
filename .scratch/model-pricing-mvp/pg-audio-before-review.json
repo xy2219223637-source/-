@@ -1,0 +1,264 @@
+{
+  "task_id": "model-pricing-mvp-20261019-pg-isolated",
+  "started_at": "2026-10-19T10:35:08.628809+00:00",
+  "authorization": "User explicitly approved isolated-schema targeted verification, 2026-10-19",
+  "scope": "synthetic task-owned schemas only; no existing business schema writes",
+  "schemas": [
+    {
+      "name": "test_billing_6697b21ab885495489f3599b05957edd",
+      "test": "__main__.PostgresAudioMeteringTests.test_asr_uses_input_wave_frames_not_transcript_length_and_local_lifecycle",
+      "state": "cleaned",
+      "at": "2026-10-19T10:35:10.105812+00:00"
+    },
+    {
+      "name": "test_billing_8b53e94e83c54b8984cbb34ad1dcf3b0",
+      "test": "__main__.PostgresAudioMeteringTests.test_audio_ledger_failure_rolls_back_then_recovers_without_resubmission",
+      "state": "cleaned",
+      "at": "2026-10-19T10:35:13.614779+00:00"
+    },
+    {
+      "name": "test_billing_d182754662724ae4b2b70110937db908",
+      "test": "__main__.PostgresAudioMeteringTests.test_audio_price_snapshot_replay_and_member_enterprise_queries_are_consistent",
+      "state": "cleaned",
+      "at": "2026-10-19T10:35:17.245273+00:00"
+    },
+    {
+      "name": "test_billing_387070dea8a344539cff0b2c35bed4d4",
+      "test": "__main__.PostgresAudioMeteringTests.test_audio_quota_and_business_permission_denials_do_not_submit",
+      "state": "cleaned",
+      "at": "2026-10-19T10:35:24.129598+00:00"
+    },
+    {
+      "name": "test_billing_1d7d5b0934964555bfe5d70ea414fcdf",
+      "test": "__main__.PostgresAudioMeteringTests.test_bounded_poll_timeout_is_unknown_and_replay_does_not_resubmit",
+      "state": "cleaned",
+      "at": "2026-10-19T10:35:29.971103+00:00"
+    },
+    {
+      "name": "test_billing_b11f48ec35284d16b79e192cc9f593c2",
+      "test": "__main__.PostgresAudioMeteringTests.test_cleanup_failure_is_observable_recoverable_and_does_not_repeat_model_or_charge",
+      "state": "cleaned",
+      "at": "2026-10-19T10:35:33.396948+00:00"
+    },
+    {
+      "name": "test_billing_5560c792f1d049e9978c4f3020e43115",
+      "test": "__main__.PostgresAudioMeteringTests.test_empty_asr_transcript_does_not_erase_verified_input_duration",
+      "state": "cleaned",
+      "at": "2026-10-19T10:35:35.946812+00:00"
+    },
+    {
+      "name": "test_billing_421f104e4dde4ce2a999bb2b02dac9df",
+      "test": "__main__.PostgresAudioMeteringTests.test_empty_audio_output_is_not_evidence_of_zero_tts_consumption",
+      "state": "cleaned",
+      "at": "2026-10-19T10:35:38.218169+00:00"
+    },
+    {
+      "name": "test_billing_003b7e13e58e45fc984bfd213e3facd7",
+      "test": "__main__.PostgresAudioMeteringTests.test_empty_input_or_no_audio_track_is_proven_before_submission",
+      "state": "cleaned",
+      "at": "2026-10-19T10:35:40.674172+00:00"
+    },
+    {
+      "name": "test_billing_3718945f1a494261b30863bf631fa35f",
+      "test": "__main__.PostgresAudioMeteringTests.test_fractional_millisecond_audio_is_rejected_before_charge_even_at_high_price",
+      "state": "cleaned",
+      "at": "2026-10-19T10:35:44.069885+00:00"
+    },
+    {
+      "name": "test_billing_d54f3367588a4d9ba65e064908d12b78",
+      "test": "__main__.PostgresAudioMeteringTests.test_integral_one_millisecond_audio_uses_eight_verified_frames",
+      "state": "cleaned",
+      "at": "2026-10-19T10:35:46.735589+00:00"
+    },
+    {
+      "name": "test_billing_d3473f6387734f93bfdb20e84cbdc29e",
+      "test": "__main__.PostgresAudioMeteringTests.test_invalid_generated_audio_retains_reservation_instead_of_claiming_zero",
+      "state": "cleaned",
+      "at": "2026-10-19T10:35:53.397482+00:00"
+    },
+    {
+      "name": "test_billing_38685ed8bbb144e09d556ae77d0de9af",
+      "test": "__main__.PostgresAudioMeteringTests.test_invalid_specification_audio_and_bounds_fail_before_submit_or_reservation",
+      "state": "cleaned",
+      "at": "2026-10-19T10:35:55.710829+00:00"
+    },
+    {
+      "name": "test_billing_8dcca1dbb65346f9ae406c288d3f7ab5",
+      "test": "__main__.PostgresAudioMeteringTests.test_legacy_tts_rejects_before_network_and_output_write",
+      "state": "cleaned",
+      "at": "2026-10-19T10:35:58.394142+00:00"
+    },
+    {
+      "name": "test_billing_49215a8693a644609f856c955098e81e",
+      "test": "__main__.PostgresAudioMeteringTests.test_missing_usage_retains_reservation_for_each_audio_capability",
+      "state": "cleaned",
+      "at": "2026-10-19T10:36:00.769289+00:00"
+    },
+    {
+      "name": "test_billing_3c55a93439c0469fa30e26eb00ff5359",
+      "test": "__main__.PostgresAudioMeteringTests.test_partial_audio_and_transcripts_keep_confirmed_consumption_separate_from_success",
+      "state": "cleaned",
+      "at": "2026-10-19T10:36:03.815511+00:00"
+    },
+    {
+      "name": "test_billing_d47aafbe9130479eb6fbcefee4b8dc28",
+      "test": "__main__.PostgresAudioMeteringTests.test_price_roundtrip_and_wrong_source_are_checked_for_each_capability",
+      "state": "cleaned",
+      "at": "2026-10-19T10:36:07.401602+00:00"
+    },
+    {
+      "name": "test_billing_69d2e062ac024efd8fbcf7c4a63df139",
+      "test": "__main__.PostgresAudioMeteringTests.test_proved_no_usage_cancels_for_tts_and_asr_without_submission",
+      "state": "cleaned",
+      "at": "2026-10-19T10:36:10.626190+00:00"
+    },
+    {
+      "name": "test_billing_9950be78055748adba7d571fb5802c45",
+      "test": "__main__.PostgresAudioMeteringTests.test_tts_counts_original_unicode_code_points_and_returns_decodable_audio",
+      "state": "cleaned",
+      "at": "2026-10-19T10:36:13.233148+00:00"
+    },
+    {
+      "name": "test_billing_5aafe4d9db684afc86408483dbd8e9aa",
+      "test": "__main__.PostgresHistoricalOrderTests.test_T11_T20_concurrent_members_cannot_overspend_last_pool",
+      "state": "cleaned",
+      "at": "2026-10-19T10:36:20.847908+00:00"
+    },
+    {
+      "name": "test_billing_9a9e453816554cc1a4d38bdc38024039",
+      "test": "__main__.PostgresHistoricalOrderTests.test_cancel_settle_race_and_usage_over_reservation",
+      "state": "cleaned",
+      "at": "2026-10-19T10:36:23.712681+00:00"
+    },
+    {
+      "name": "test_billing_1972f639fe374c62b6aad3b639a709b1",
+      "test": "__main__.PostgresHistoricalOrderTests.test_member_quota_race_and_quota_lowering_cannot_break_reservations",
+      "state": "cleaned",
+      "at": "2026-10-19T10:36:26.295015+00:00"
+    },
+    {
+      "name": "test_billing_a3b58158e1f54364b55da8cfdf07e29d",
+      "test": "__main__.PostgresHistoricalOrderTests.test_T12_old_snapshot_and_price_immutability",
+      "state": "cleaned",
+      "at": "2026-10-19T10:36:28.810255+00:00"
+    },
+    {
+      "name": "test_billing_8c16082deb8f4e9fa815e339b1a697eb",
+      "test": "__main__.PostgresManagementTests.test_T30_audit_failure_rolls_back_balance_ledger_and_key",
+      "state": "cleaned",
+      "at": "2026-10-19T10:36:31.289365+00:00"
+    }
+  ],
+  "tests": [
+    {
+      "id": "__main__.PostgresAudioMeteringTests.test_asr_uses_input_wave_frames_not_transcript_length_and_local_lifecycle",
+      "result": "passed"
+    },
+    {
+      "id": "__main__.PostgresAudioMeteringTests.test_audio_ledger_failure_rolls_back_then_recovers_without_resubmission",
+      "result": "passed"
+    },
+    {
+      "id": "__main__.PostgresAudioMeteringTests.test_audio_price_snapshot_replay_and_member_enterprise_queries_are_consistent",
+      "result": "passed"
+    },
+    {
+      "id": "__main__.PostgresAudioMeteringTests.test_audio_quota_and_business_permission_denials_do_not_submit",
+      "result": "passed"
+    },
+    {
+      "id": "__main__.PostgresAudioMeteringTests.test_bounded_poll_timeout_is_unknown_and_replay_does_not_resubmit",
+      "result": "passed"
+    },
+    {
+      "id": "__main__.PostgresAudioMeteringTests.test_cleanup_failure_is_observable_recoverable_and_does_not_repeat_model_or_charge",
+      "result": "passed"
+    },
+    {
+      "id": "__main__.PostgresAudioMeteringTests.test_empty_asr_transcript_does_not_erase_verified_input_duration",
+      "result": "passed"
+    },
+    {
+      "id": "__main__.PostgresAudioMeteringTests.test_empty_audio_output_is_not_evidence_of_zero_tts_consumption",
+      "result": "passed"
+    },
+    {
+      "id": "__main__.PostgresAudioMeteringTests.test_empty_input_or_no_audio_track_is_proven_before_submission",
+      "result": "passed"
+    },
+    {
+      "id": "__main__.PostgresAudioMeteringTests.test_fractional_millisecond_audio_is_rejected_before_charge_even_at_high_price",
+      "result": "passed"
+    },
+    {
+      "id": "__main__.PostgresAudioMeteringTests.test_integral_one_millisecond_audio_uses_eight_verified_frames",
+      "result": "passed"
+    },
+    {
+      "id": "__main__.PostgresAudioMeteringTests.test_invalid_generated_audio_retains_reservation_instead_of_claiming_zero",
+      "result": "passed"
+    },
+    {
+      "id": "__main__.PostgresAudioMeteringTests.test_invalid_specification_audio_and_bounds_fail_before_submit_or_reservation",
+      "result": "passed"
+    },
+    {
+      "id": "__main__.PostgresAudioMeteringTests.test_legacy_tts_rejects_before_network_and_output_write",
+      "result": "passed"
+    },
+    {
+      "id": "__main__.PostgresAudioMeteringTests.test_missing_usage_retains_reservation_for_each_audio_capability",
+      "result": "passed"
+    },
+    {
+      "id": "__main__.PostgresAudioMeteringTests.test_partial_audio_and_transcripts_keep_confirmed_consumption_separate_from_success",
+      "result": "passed"
+    },
+    {
+      "id": "__main__.PostgresAudioMeteringTests.test_price_roundtrip_and_wrong_source_are_checked_for_each_capability",
+      "result": "passed"
+    },
+    {
+      "id": "__main__.PostgresAudioMeteringTests.test_proved_no_usage_cancels_for_tts_and_asr_without_submission",
+      "result": "passed"
+    },
+    {
+      "id": "__main__.PostgresAudioMeteringTests.test_tts_counts_original_unicode_code_points_and_returns_decodable_audio",
+      "result": "passed"
+    },
+    {
+      "id": "__main__.PostgresHistoricalOrderTests.test_T11_T20_concurrent_members_cannot_overspend_last_pool",
+      "result": "passed"
+    },
+    {
+      "id": "__main__.PostgresHistoricalOrderTests.test_cancel_settle_race_and_usage_over_reservation",
+      "result": "passed"
+    },
+    {
+      "id": "__main__.PostgresHistoricalOrderTests.test_member_quota_race_and_quota_lowering_cannot_break_reservations",
+      "result": "passed"
+    },
+    {
+      "id": "__main__.PostgresHistoricalOrderTests.test_T12_old_snapshot_and_price_immutability",
+      "result": "passed"
+    },
+    {
+      "id": "__main__.PostgresManagementTests.test_T30_audit_failure_rolls_back_balance_ledger_and_key",
+      "result": "passed"
+    }
+  ],
+  "vendor_requests": 0,
+  "real_storage_requests": 0,
+  "selected_method": null,
+  "source_digest_before": "8fe76810c8f9931e3f285cfd000198cff525cbf35957b2d4c36ee001bb89eb10",
+  "environment_ref": "d06030ee0880a2db13dbabbb32c24354388bfb885bdd1b6fdee9526557db9e2d",
+  "business_schema_version_before": [
+    2
+  ],
+  "business_schema_version_after": [
+    2
+  ],
+  "source_digest_after": "8fe76810c8f9931e3f285cfd000198cff525cbf35957b2d4c36ee001bb89eb10",
+  "ok": true,
+  "finished_at": "2026-10-19T10:36:33.400348+00:00"
+}
