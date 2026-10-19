@@ -13,7 +13,7 @@ task_id: model-pricing-mvp-20261019
 | [01 模型当前费率](issues/01-model-current-pricing.md) | 无 | resolved | 管理员查看、保存、刷新模型费率，无版本操作；离线通过，目标库迁移未执行 |
 | [02 文本/视觉 mock](issues/02-text-vision-mock-billing.md) | 01 | ready-for-agent | 模拟消费、订单、企业/成员账务及展示闭环 |
 | [03 图像 mock 折算](issues/03-image-mock-conversion.md) | 02 | resolved | 图片用量折算、扣账及展示；代码与离线验证完成，PostgreSQL 复核待独立记录 |
-| [04 嵌入 mock](issues/04-embedding-mock-billing.md) | 02 | ready-for-agent | 仅输入 Token、批量子调用与账务展示 |
+| [04 嵌入 mock](issues/04-embedding-mock-billing.md) | 02 | resolved | 仅输入 Token、批量子调用与账务展示；审核修复及 PostgreSQL 20/20 通过 |
 | [05 TTS/ASR mock](issues/05-audio-mock-conversion.md) | 03 | ready-for-agent | 原始音频/字符用量、折算及账务展示 |
 | [06 完整 mock 门禁](issues/06-mock-completion-gate.md) | 02、03、04、05 | ready-for-agent | 全场景断言、可恢复报告、拒绝未通过的 REAL |
 | [07 推理/视觉/嵌入真实验证](issues/07-text-vision-embedding-real.md) | 06 | ready-for-agent | 最低规格、有效返回、实际用量与账务核对 |
@@ -72,3 +72,4 @@ flowchart LR
 - 01：每供应商＋精确模型 ID 一套当前费率，永久幂等返回首次响应；默认 registry 不猜测真实计量协议。沿用显式 schema 迁移，保留历史及不可变保护，费用页同批移除版本管理。见 [票 01](issues/01-model-current-pricing.md)、[离线证据](evidence-01.md)、[迁移恢复](migration-v3.md)。
 - 02：共享模型执行器复用现有账本；tenant＋持久业务键限定唯一意图，其他成员重放隐藏；模型身份/完整费率/规格不可变。TEXT/VISION MOCK、未知预占、恢复、四查询及现有消费页完成离线验证；未接通旧 SDK 路径 fail-closed，REAL 等 06 门禁。见 [票 02](issues/02-text-vision-mock-billing.md)、[证据](evidence-02.md)；下一 frontier 为 03、04，目标环境验证与 REAL 均未据此宣称通过。
 - 03：图像 MOCK 按本地解码且规格有效的图片数量计量，FOLDED 使用精确比例并仅在最终积分向上取整；部分、空、未知产物分别处理，共用既有预占、快照和账本。旧图片入口缺可信上下文时提前拒绝，真实模型与存储调用为零。代码及离线验证完成，PostgreSQL 复核由主线程独立记录；见 [票 03](issues/03-image-mock-conversion.md)、[证据](evidence-03.md)。
+- 04：嵌入 MOCK 仅计输入 Token，稳定批次按实际传输生成子订单，失败或未知时停止后续调用；后续预占/存储中断保留已消费证据，未结算重放不报告完成。审核修复后 PostgreSQL 20/20 通过（15 嵌入＋5 历史），20 个临时 schema 已清理，真实调用为零；见 [票 04](issues/04-embedding-mock-billing.md)、[证据](evidence-04.md)、[本轮 PostgreSQL 结果](pg-embedding-result.json)。本票完成不放行 REAL。

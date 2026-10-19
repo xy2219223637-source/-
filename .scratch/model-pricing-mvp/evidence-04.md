@@ -3,7 +3,7 @@
 - task_id：model-pricing-mvp-20261019-04。
 - 时间：2026-10-19 18:20:52 +08:00；来源：04 票、spec AC03/AC06–AC08/AC13、api-spec §§4–6，以及主线程的独立写集分派。
 - 基准：从 02 集成点 46f0b2c 开始；收尾快进并入最新 integration ca1f017。分支 `codex/model-pricing-04`，独立 worktree `D:/原力2222222222/model-pricing-work/ticket-04`。
-- 当前 step：独立适配器、13 项嵌入测试、2 项旧 SDK 拒绝测试、4 项组件测试及类型检查通过；主线程集中 PostgreSQL 验证和独立审核仍待最终登记。
+- 首次交付 step：独立适配器、13 项嵌入测试、2 项旧 SDK 拒绝测试、4 项组件测试及类型检查通过；当时主线程集中 PostgreSQL 验证和独立审核仍待最终登记。后续修复及 PostgreSQL 结果按下文轮次追加。
 - 恢复入口：本文件、04 票；准备计划在 `D:/原力2222222222/model-pricing-work/ticket04-plan.md`，共享接口在同目录 `metering-interface.md`。
 
 ## 实现与公开边界
@@ -60,3 +60,11 @@
 - 实际检查：`test_embedding_metering.py` 15 项 + `test_model_call_guards.py` 2 项，共 17/17 通过，3.656 秒，日志 `review04-fix-green.log`；专属组件 4/4 通过，日志 `review04-components.log`；`git diff --check` 通过。此次纯 Python 修复未重跑 TypeScript 或打包。
 - 独立复现逆转：原 `review04_repro.py` 未修改，再执行两次均返回结构化部分失败；同一子订单 SETTLED/2.0000，calls=[1,0]、成员 used=2.0000，退出码 0，完整输出 `review04-repro-fixed.log`。
 - PostgreSQL：主线程已报告原 8a6e17b 版本 18/18 通过；该结果不覆盖本次新失败返回/存储回放用例。修复后的受影响 PostgreSQL 验证由主线程另行执行，暂不将最后验收勾为完成。
+
+## 修复版 PostgreSQL 实际结果与本地集成检查点
+
+- task_id：model-pricing-mvp-20261019-04；来源：主线程本次集成分派、修复提交 `5b97757` 及 [本轮 PostgreSQL 结果](pg-embedding-result.json)。此结果在独立审核修复后追加，不追溯改写此前待验证结论；旧 [18 项结果](pg-embedding-before-review.json) 仅作修复前历史证据。
+- 实际执行方为主线程，执行时间为 2026-10-19 18:33:19.782930–18:34:29.494984 +08:00。本 merger 只读取结果并集成代码/文档，没有连接或写入数据库。20/20 全部通过，无跳过：15 项嵌入检查覆盖后续额度预占失败、存储异常及待结算重放等新增场景，另有 5 项历史事务回归。
+- 20 个本轮独占临时 schema 均记录 `cleaned`；厂商请求与真实存储请求均为 0；既有业务 schema 版本前后均为 [2]。源码摘要前后均为 `2806fee8fbb8460c0a92d1da14bc592683f68bdc552830d378c61507d03951e5`，未在验证期间改变被测源码。环境脱敏引用沿用报告，不记录连接值或凭据。
+- 验收结论：本票六项验收已有定向后端、API、事务、组件及 PostgreSQL 证据，04 状态关闭为 `resolved`。这不构成 REAL gate 报告、真实协议/成本核验、运行业务 schema 迁移或正式服务验收。
+- 本地 Git 范围与风险：合并仅增加嵌入适配器、专属测试与 04 票/证据，随后仅更新 04 票、map 的 04 行及决策摘要和本证据。来源为本次明确本地集成授权；预检查为两侧干净、写集无重叠及报告核对。合并检查点 `19c6a85` 保留原集成 `09bfda7` 和票 `5b97757` 两个父提交；失败保留工作树，回退采用新增 revert，禁止 reset/强推。未推送，不操作 03 核心、05 文件、环境、服务或凭据；无自动重启或自动回退。
